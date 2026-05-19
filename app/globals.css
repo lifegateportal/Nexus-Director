@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    min-height: 100dvh;
+    overscroll-behavior-y: contain;
+  }
+
+  /* Narrow dark scrollbar — visible in overflow containers */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.15);
+    border-radius: 999px;
+  }
+}
+
+@layer utilities {
+  .safe-area-frame {
+    padding-top: env(safe-area-inset-top);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+  }
+
+  /* Subtle dot-grid ambient background */
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  /* Colored radial glows for depth */
+  .bg-radial-glow {
+    background:
+      radial-gradient(ellipse 70% 50% at 20% 10%, rgba(0, 184, 217, 0.07) 0%, transparent 60%),
+      radial-gradient(ellipse 50% 60% at 82% 82%, rgba(100, 50, 200, 0.05) 0%, transparent 60%);
+  }
+
+  /* Glass-morphism panel */
+  .glass {
+    background: rgba(18, 29, 51, 0.72);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  /* Lighter glass for secondary surfaces */
+  .glass-light {
+    background: rgba(29, 42, 69, 0.60);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  /* Monospace text style for terminal log entries */
+  .text-mono {
+    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+    font-size: 0.8125rem;
+    line-height: 1.65;
+  }
+
+  /* Keyboard-safe visual focus ring */
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-1 focus-visible:ring-offset-shell-950;
+  }
+}

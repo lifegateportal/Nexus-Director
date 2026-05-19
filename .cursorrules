@@ -1,0 +1,34 @@
+{
+  "name": "Nexus-Director-Budget-Guardrails",
+  "description": "Strict token-budgeting and clean architecture constraints for cost-effective iPadOS development.",
+  "settings": {
+    "prefer_model": "deepseek-v4-pro",
+    "temperature": 0.1
+  },
+  "rules": [
+    {
+      "id": "cost_routing_ethic",
+      "rule": "Default to DeepSeek for 90% of development work. All heavy backend logic, database schemas, utility functions, routes, and JSON parsing algorithms must be written using the most token-efficient code paths. Do not use premium models (like Claude or OpenAI) for basic boilerplate, math, or logical transformations."
+    },
+    {
+      "id": "premium_token_reservation",
+      "rule": "Reserve Claude tokens strictly for complex frontend visual layouts where visual intuition is mandatory. Reserve Gemini tokens exclusively for multi-modal parsing (raw video/audio streams) inside server endpoints. Never call these models for generic logic."
+    },
+    {
+      "id": "prevent_functional_regressions",
+      "rule": "Maintain strict architectural boundaries. All AI orchestration, prompt strings, and API drivers must live strictly inside the server-side directories (`/app/api/*`). Frontend TSX components must remain pure presentation layers that read state from endpoints. Never pollute the UI files with backend or model logic—this prevents visual regressions and wasted debugging tokens."
+    },
+    {
+      "id": "ipados_safeguards",
+      "rule": "All generated UI must adhere to iPad mobile Safari ergonomics to avoid wasting tokens rewriting broken layouts: 1. Always use dynamic viewports (`h-dvh`, `max-h-dvh`) instead of legacy `h-screen`. 2. Interactive text fields must have a minimum font size of `text-base` (16px) to block iOS auto-zooming. 3. Tap targets must be at least 48x48px with clear pointer-coarse hit areas. 4. Never hide critical actions behind hover-only (`hover:`) states."
+    },
+    {
+      "id": "fail_fast_and_validate",
+      "rule": "Enforce deterministic outputs. Always validate incoming AI payloads using Zod schemas and `generateObject`. Write comprehensive, defensive error handling and circuit breakers on the backend so API failures do not cause infinite loops, hung requests, or wasted tokens."
+    },
+    {
+      "id": "code_generation_discipline",
+      "rule": "Do not rewrite entire files for minor changes. Only output the specific modified functions or lines needed. When responding, skip verbose conversational filler and output clean, directly applicable code blocks to save prompt and completion token counts."
+    }
+  ]
+}
