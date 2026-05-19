@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef } from "react";
 import type { LogEntry, PipelineStage } from "@/lib/types";
 import { IngestResultSchema, type IngestResult } from "@/lib/schemas/blueprint";
-import { storeVideoBlob } from "@/lib/video-store";
+import { storeVideoBlob, setVideoUrl, setYoutubeId } from "@/lib/video-store";
 
 type UploadedFile = { name: string; size: number; type: string; content: string; raw?: File };
 
@@ -78,6 +78,9 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [youtubeLoading, setYoutubeLoading] = useState(false);
+  const [uploadToCloud, setUploadToCloud] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const addFiles = useCallback(async (raw: FileList | File[]) => {
@@ -107,6 +110,40 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
   const removeFile = useCallback((name: string) => {
     setFiles((prev) => prev.filter((f) => f.name !== name));
   }, []);
+
+  const fetchYoutubeTranscript = useCallback(async () => {
+    const url = youtubeUrl.trim();
+    if (!url || youtubeLoading) return;
+    setYoutubeLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/fetch-youtube-transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const json = await res.json() as { transcript?: string; videoId?: string; error?: string };
+      if (!res.ok || json.error) throw new Error(json.error ?? "Failed to fetch transcript");
+      setYoutubeId(json.videoId!);
+      const virtualFile: UploadedFile = {
+        name: `youtube-${json.videoId}.txt`,
+        size: json.transcript!.length,
+        type: "text/plain",
+        content: `[YouTube transcript: ${url}]\n\n${json.transcript}`,
+      };
+      setFiles((prev) =>
+        prev.some((f) => f.name === virtualFile.name) ? prev : [...prev, virtualFile]
+      );
+      onLog({ level: "success", message: `YouTube transcript ready — ${json.transcript!.length.toLocaleString()} chars` });
+      setYoutubeUrl("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed";
+      setError(msg);
+      onLog({ level: "error", message: `YouTube transcript failed: ${msg}` });
+    } finally {
+      setYoutubeLoading(false);
+    }
+  }, [youtubeUrl, youtubeLoading, onLog]);
 
   const runIngest = useCallback(async () => {
     if (!files.length) return;
@@ -170,6 +207,39 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
       });
     }
 
+    // Upload video to Cloudflare R2 if enabled
+    if (uploadToCloud) {
+      const videoFile = mediaFiles.find((f) => f.raw?.type.startsWith("video/"));
+      if (videoFile?.raw) {
+        try {
+          onLog({ level: "info", message: `Requesting cloud upload slot for "${videoFile.raw.name}"…` });
+          const signRes = await fetch("/api/r2-presign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename: videoFile.raw.name, contentType: videoFile.raw.type }),
+          });
+          const signJson = await signRes.json() as { presignedUrl?: string; publicUrl?: string; error?: string };
+          if (!signRes.ok || !signJson.presignedUrl) throw new Error(signJson.error ?? "Presign failed");
+          onLog({ level: "info", message: `Uploading to R2 — this may take a moment for large files…` });
+          const uploadRes = await fetch(signJson.presignedUrl, {
+            method: "PUT",
+            headers: { "Content-Type": videoFile.raw.type },
+            body: videoFile.raw,
+          });
+          if (!uploadRes.ok) throw new Error(`R2 upload failed: HTTP ${uploadRes.status}`);
+          if (signJson.publicUrl) {
+            setVideoUrl(signJson.publicUrl);
+            onLog({ level: "success", message: `Video stored at: ${signJson.publicUrl}` });
+          } else {
+            onLog({ level: "warn", message: `Uploaded to R2 but no public URL — set R2_PUBLIC_URL in env to enable playback` });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Upload failed";
+          onLog({ level: "warn", message: `Cloud upload skipped: ${msg}` });
+        }
+      }
+    }
+
     onLog({ level: "info", message: `Sending ${files.length} file(s) to DeepSeek ingest pipeline…`, model: "deepseek" });
 
     try {
@@ -218,6 +288,33 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-4">
+        {/* YouTube URL input */}
+        <div className="flex gap-2">
+          <input
+            type="url"
+            value={youtubeUrl}
+            onChange={(e) => setYoutubeUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && fetchYoutubeTranscript()}
+            placeholder="Paste YouTube URL to auto-fetch transcript…"
+            className="min-h-12 flex-1 rounded-xl border border-slate-600 bg-slate-800/60 px-4 text-base text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={fetchYoutubeTranscript}
+            disabled={!youtubeUrl.trim() || youtubeLoading}
+            className="flex min-h-12 min-w-12 items-center justify-center rounded-xl border border-slate-600 bg-slate-800/60 text-slate-400 transition hover:border-red-500/60 hover:text-red-400 disabled:opacity-40"
+            aria-label="Fetch YouTube transcript"
+          >
+            {youtubeLoading ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-500/30 border-t-slate-300" />
+            ) : (
+              <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
+                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+              </svg>
+            )}
+          </button>
+        </div>
+
         {/* Drop zone */}
         <div
           role="button"
@@ -278,6 +375,28 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
 
       {/* Run button — fixed at bottom */}
       <div className="flex-shrink-0 border-t border-slate-700/50 p-4">
+        {/* Cloud upload toggle — only shown when a video file is queued */}
+        {files.some((f) => f.raw?.type.startsWith("video/")) && (
+          <label className="mb-3 flex cursor-pointer items-center gap-3 rounded-xl border border-slate-700/50 bg-slate-800/30 px-4 py-2.5">
+            <div
+              role="checkbox"
+              aria-checked={uploadToCloud}
+              tabIndex={0}
+              onClick={() => setUploadToCloud((v) => !v)}
+              onKeyDown={(e) => e.key === " " && setUploadToCloud((v) => !v)}
+              className={[
+                "flex h-6 w-10 flex-shrink-0 items-center rounded-full transition-colors",
+                uploadToCloud ? "bg-cyan-500" : "bg-slate-600"
+              ].join(" ")}
+            >
+              <span className={`h-4 w-4 rounded-full bg-white shadow transition-transform mx-1 ${uploadToCloud ? "translate-x-4" : "translate-x-0"}`} />
+            </div>
+            <span className="text-sm text-slate-300">
+              Upload video to Cloudflare R2
+              <span className="ml-1 text-xs text-slate-500">(requires R2 env vars)</span>
+            </span>
+          </label>
+        )}
         <button
           type="button"
           disabled={!files.length || isLoading}

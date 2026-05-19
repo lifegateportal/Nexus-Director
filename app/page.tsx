@@ -9,6 +9,7 @@ import { ProjectCard } from "@/app/components/ProjectCard";
 import { PipelineResults } from "@/app/components/PipelineResults";
 import { PromptBar } from "@/app/components/PromptBar";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
+import { ProjectsPanel } from "@/app/components/ProjectsPanel";
 import { LogicTransformResultSchema } from "@/lib/schemas/blueprint";
 import { UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
@@ -19,6 +20,13 @@ import type { IngestResult } from "@/lib/schemas/blueprint";
 import type { LogEntry, ModelState, ModelHandle, PipelineStage } from "@/lib/types";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { SiteConfig } from "@/lib/schemas/site-config";
+import {
+  listProjects,
+  saveProject,
+  deleteProject,
+  generateProjectId,
+} from "@/lib/project-store";
+import type { ProjectSnapshot, ChatMessage } from "@/lib/project-store";
 
 const INITIAL_MODELS: ModelState[] = [
   { name: "Gemini",   handle: "gemini",   role: "Analyst",           status: "standby" },
@@ -51,6 +59,15 @@ export default function HomePage() {
   const [stage,       setStage]       = useState<PipelineStage>("idle");
   const [models,      setModels]      = useState<ModelState[]>(INITIAL_MODELS);
   const [activeNav,   setActiveNav]   = useState("overview");
+
+  // Project persistence
+  const [projects,        setProjects]        = useState<ProjectSnapshot[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string>("");
+  const [chatHistory,     setChatHistory]     = useState<ChatMessage[]>([]);
+  const [panelLoadKey,    setPanelLoadKey]    = useState<string>("");
+
+  // Load saved projects from localStorage on mount
+  useEffect(() => { setProjects(listProjects()); }, []);
 
   // Populate boot logs client-side only to avoid server/client timestamp mismatch.
   useEffect(() => {
@@ -94,6 +111,54 @@ export default function HomePage() {
     localStorage.setItem("nexus_site_config", JSON.stringify(config));
     addLog({ level: "success", message: `Director: ${summary}`, model: "curator" });
   }, [addLog]);
+
+  const handleSaveProject = useCallback((name: string) => {
+    const id = currentProjectId || generateProjectId();
+    const snapshot: ProjectSnapshot = {
+      id,
+      name,
+      createdAt: currentProjectId ? (projects.find((p) => p.id === id)?.createdAt ?? new Date().toISOString()) : new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      academy: academyResult,
+      siteConfig,
+      deliveryInstructions,
+      chatHistory,
+      blueprint: blueprint ?? null,
+      logicResult: logicResult ?? null,
+      uiResult: uiResult ?? null,
+    };
+    saveProject(snapshot);
+    setCurrentProjectId(id);
+    setProjects(listProjects());
+    addLog({ level: "success", message: `Project "${name}" saved.` });
+  }, [currentProjectId, projects, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, addLog]);
+
+  const handleLoadProject = useCallback((id: string) => {
+    const p = projects.find((proj) => proj.id === id);
+    if (!p) return;
+    setBlueprint(p.blueprint);
+    setLogicResult(p.logicResult);
+    setUiResult(p.uiResult);
+    setAcademyResult(p.academy);
+    setSiteConfig(p.siteConfig);
+    setDeliveryInstructions(p.deliveryInstructions);
+    setChatHistory(p.chatHistory);
+    setPanelLoadKey(p.id);
+    setCurrentProjectId(p.id);
+    if (p.blueprint) setStage("done");
+    setActiveNav("overview");
+    // Update the shared localStorage keys so preview pages also see the loaded data
+    if (p.academy) localStorage.setItem("nexus_academy_preview", JSON.stringify(p.academy));
+    localStorage.setItem("nexus_site_config", JSON.stringify(p.siteConfig));
+    localStorage.setItem("nexus_delivery_instructions", p.deliveryInstructions);
+    addLog({ level: "success", message: `Project "${p.name}" loaded.` });
+  }, [projects, addLog]);
+
+  const handleDeleteProject = useCallback((id: string) => {
+    deleteProject(id);
+    setProjects(listProjects());
+    if (currentProjectId === id) setCurrentProjectId("");
+  }, [currentProjectId]);
 
   const handleStageChange = useCallback((s: PipelineStage) => {
     setStage(s);
@@ -234,6 +299,7 @@ export default function HomePage() {
     design:    "ui",
     produce:   "academy",
     deploy:    null,
+    projects:  null,
   };
   const focusedTab = NAV_TAB[activeNav] ?? undefined;
   const isFocused = activeNav !== "overview";
@@ -263,10 +329,18 @@ export default function HomePage() {
                 />
               </div>
 
-              {/* Right panel: deploy view OR pipeline results */}
+              {/* Right panel: deploy view OR projects view OR pipeline results */}
               <div className="min-h-0 lg:col-span-3">
-                {activeNav === "deploy" ? (
-                  <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-slate-700/60 glass p-5">
+                {activeNav === "projects" ? (
+                  <ProjectsPanel
+                    projects={projects}
+                    suggestedName={blueprint?.title ?? ""}
+                    canSave={!!blueprint}
+                    onSave={handleSaveProject}
+                    onLoad={handleLoadProject}
+                    onDelete={handleDeleteProject}
+                  />
+                ) : activeNav === "deploy" ? (                  <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-slate-700/60 glass p-5">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Deploy</p>
                     <h2 className="text-lg font-bold text-slate-100">
                       {blueprint?.title ?? "No project yet"}
@@ -378,6 +452,9 @@ export default function HomePage() {
         onUpdate={handleAssistantUpdate}
         siteConfig={siteConfig}
         onSiteUpdate={handleSiteUpdate}
+        loadedHistory={chatHistory}
+        loadKey={panelLoadKey}
+        onChatChange={setChatHistory}
       />
     </div>
   );

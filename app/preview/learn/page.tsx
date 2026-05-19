@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import type { AcademyPackage } from "@/lib/schemas/academy";
-import { getVideoObjectUrl, getVideoMeta } from "@/lib/video-store";
+import { getVideoObjectUrl, getVideoMeta, getYoutubeId, getVideoUrl } from "@/lib/video-store";
 
 type Lesson = AcademyPackage["curriculum"][number]["lessons"][number];
 
@@ -125,6 +125,8 @@ export default function LearnPage() {
   const [activeModule, setActiveModule] = useState(0);
   const [activeLesson, setActiveLesson] = useState<Lesson | null>(null);
   const [videoUrl, setVideoUrl]           = useState<string | null>(null);
+  const [youtubeId, setYoutubeIdState]    = useState<string | null>(null);
+  const [cloudVideoUrl, setCloudVideoUrl] = useState<string | null>(null);
   const [totalDuration, setTotalDuration] = useState(0);
   const [lessonEndTime, setLessonEndTime] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<number[]>([]);
@@ -163,6 +165,14 @@ export default function LearnPage() {
     getVideoObjectUrl().then((url) => {
       if (url) setVideoUrl(url);
     });
+
+    // YouTube embed takes priority over local blob
+    const ytId = getYoutubeId();
+    if (ytId) setYoutubeIdState(ytId);
+
+    // R2 / cloud URL
+    const cloudUrl = getVideoUrl();
+    if (cloudUrl) setCloudVideoUrl(cloudUrl);
 
     const meta = getVideoMeta();
     if (meta?.durationSecs) setTotalDuration(meta.durationSecs);
@@ -481,10 +491,21 @@ export default function LearnPage() {
               {/* Video player */}
               {activeLesson.type === "video" && (
                 <div className="mb-6 w-full overflow-hidden rounded-xl border border-slate-700/50 bg-black">
-                  {videoUrl ? (
+                  {youtubeId ? (
+                    /* YouTube nocookie embed — no ad tracking */
+                    <div className="relative aspect-video w-full">
+                      <iframe
+                        src={`https://www.youtube-nocookie.com/embed/${youtubeId}?rel=0&modestbranding=1&color=white`}
+                        title={activeLesson.title}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                        className="absolute inset-0 h-full w-full"
+                      />
+                    </div>
+                  ) : (cloudVideoUrl || videoUrl) ? (
                     <video
                       ref={videoRef}
-                      src={videoUrl}
+                      src={cloudVideoUrl ?? videoUrl ?? undefined}
                       controls
                       playsInline
                       className="w-full"
@@ -496,8 +517,8 @@ export default function LearnPage() {
                       }}
                     />
                   ) : (
-                    <div className="flex aspect-video items-center justify-center">
-                      <p className="text-sm text-slate-500">Video not found — re-upload the file and run the pipeline again.</p>
+                    <div className="flex aspect-video items-center justify-center text-center px-4">
+                      <p className="text-sm text-slate-500">No video source — paste a YouTube URL in the pipeline or enable R2 upload.</p>
                     </div>
                   )}
                 </div>

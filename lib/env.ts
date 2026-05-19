@@ -8,7 +8,13 @@ const EnvironmentSchema = z.object({
   DEEPGRAM_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
   DEEPSEEK_MODEL: z.string().default("deepseek-chat"),
-  CLAUDE_MODEL: z.string().default("claude-haiku-4-5")
+  CLAUDE_MODEL: z.string().default("claude-haiku-4-5"),
+  // Cloudflare R2 — optional, enables cloud video storage
+  R2_ACCOUNT_ID:       z.string().optional(),
+  R2_ACCESS_KEY_ID:    z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET_NAME:      z.string().optional(),
+  R2_PUBLIC_URL:       z.string().optional(), // e.g. https://pub-xxxx.r2.dev
 });
 
 const parsed = EnvironmentSchema.safeParse(process.env);

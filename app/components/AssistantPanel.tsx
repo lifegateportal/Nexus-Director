@@ -5,8 +5,9 @@ import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import type { SiteConfig } from "@/lib/schemas/site-config";
+import type { ChatMessage } from "@/lib/project-store";
 
-type Message = { role: "user" | "assistant" | "system"; content: string };
+type Message = ChatMessage;
 
 type AssistantPanelProps = {
   isOpen: boolean;
@@ -15,11 +16,15 @@ type AssistantPanelProps = {
   onUpdate: (academy: AcademyPackage, summary: string) => void;
   siteConfig: SiteConfig;
   onSiteUpdate: (config: SiteConfig, summary: string) => void;
+  /** When a project is loaded, pass its saved messages + a new loadKey to restore chat */
+  loadedHistory?: Message[];
+  loadKey?: string;
+  onChatChange?: (msgs: Message[]) => void;
 };
 
 const IDLE_HINT = "No academy loaded yet. Run the pipeline first, then I can help you make changes.";
 
-export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate }: AssistantPanelProps) {
+export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     { role: "system", content: IDLE_HINT },
   ]);
@@ -28,8 +33,17 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Update greeting when academy first loads
+  // Restore chat history when a project is loaded
   useEffect(() => {
+    if (loadKey && loadedHistory && loadedHistory.length > 0) {
+      setMessages(loadedHistory);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadKey]);
+
+  // Update greeting when academy first loads (only if no project history was restored)
+  useEffect(() => {
+    if (loadKey) return; // project load handles its own history
     if (academy) {
       const lessonCount = academy.curriculum.flatMap((m) => m.lessons).length;
       setMessages([{
@@ -41,6 +55,12 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!academy]);
+
+  // Notify parent whenever messages change so it can persist them
+  useEffect(() => {
+    onChatChange?.(messages);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
 
   // Auto-scroll to latest message
   useEffect(() => {
