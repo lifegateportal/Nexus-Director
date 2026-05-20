@@ -21,7 +21,7 @@ type RootLayoutProps = {
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="min-h-dvh bg-shell-950 text-slate-100 antialiased">
+      <body className="min-h-dvh bg-[#02040d] text-slate-100 antialiased">
         {children}
       </body>
     </html>

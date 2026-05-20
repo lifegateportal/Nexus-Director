@@ -340,9 +340,9 @@ export default function HomePage() {
                     onLoad={handleLoadProject}
                     onDelete={handleDeleteProject}
                   />
-                ) : activeNav === "deploy" ? (                  <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-slate-700/60 glass p-5">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Deploy</p>
-                    <h2 className="text-lg font-bold text-slate-100">
+                ) : activeNav === "deploy" ? (                  <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Deploy</p>
+                    <h2 className="text-lg font-bold text-white">
                       {blueprint?.title ?? "No project yet"}
                     </h2>
                     {blueprint ? (
@@ -351,7 +351,7 @@ export default function HomePage() {
                           href="/preview"
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-accent-500 px-5 text-sm font-semibold text-white shadow-glow transition hover:opacity-90"
+                          className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 text-sm font-semibold text-slate-950 shadow-glow transition hover:bg-cyan-400"
                         >
                           Launch Landing Page Preview
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" strokeLinecap="round" strokeLinejoin="round" /><path d="M15 3h6v6" strokeLinecap="round" strokeLinejoin="round" /><path d="M10 14 21 3" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -360,20 +360,20 @@ export default function HomePage() {
                           href="/preview/learn"
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-slate-600 px-5 text-sm font-semibold text-slate-300 transition hover:border-slate-400 hover:text-white"
+                          className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-5 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/20 hover:border-cyan-400/50"
                         >
                           Open Course Player
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" strokeLinecap="round" strokeLinejoin="round" /><path d="M15 3h6v6" strokeLinecap="round" strokeLinejoin="round" /><path d="M10 14 21 3" strokeLinecap="round" strokeLinejoin="round" /></svg>
                         </a>
-                        <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4 text-sm">
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500">Pipeline Status</p>
+                        <div className="rounded-xl border border-slate-700/60 bg-slate-900/60 p-4 text-sm">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">Pipeline Status</p>
                           <p className={stage === "done" ? "text-emerald-400" : stage === "error" ? "text-red-400" : "text-slate-400"}>
                             {stage === "done" ? "Build complete — ready to deploy" : stage === "error" ? "Pipeline error" : stage === "idle" ? "Standing by" : "Pipeline running…"}
                           </p>
                         </div>
                       </div>
                     ) : (
-                      <p className="text-sm text-slate-500">Run the pipeline first to generate a deployable academy.</p>
+                      <p className="text-sm text-slate-400">Run the pipeline first to generate a deployable academy.</p>
                     )}
                   </div>
                 ) : blueprint ? (
@@ -385,8 +385,8 @@ export default function HomePage() {
                     externalTab={focusedTab}
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center rounded-2xl border border-slate-700/60 glass">
-                    <p className="text-sm text-slate-500">Run the pipeline to see {activeNav} results</p>
+                  <div className="flex h-full items-center justify-center rounded-2xl border border-cyan-500/15 glass">
+                    <p className="text-sm text-slate-400">Run the pipeline to see {activeNav} results</p>
                   </div>
                 )}
               </div>
