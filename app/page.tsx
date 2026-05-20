@@ -43,19 +43,9 @@ export default function HomePage() {
   const [uiResult,    setUiResult]    = useState<UiManifestResult | null>(null);
   const [academyResult, setAcademyResult] = useState<AcademyPackage | null>(null);
   const [rawTranscript, setRawTranscript] = useState<string>("");
-  const [deliveryInstructions, setDeliveryInstructions] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("nexus_delivery_instructions") ?? "";
-  });
+  const [deliveryInstructions, setDeliveryInstructions] = useState<string>("");
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [siteConfig, setSiteConfig] = useState<SiteConfig>(() => {
-    if (typeof window === "undefined") return SiteConfigSchema.parse({});
-    try {
-      const raw = localStorage.getItem("nexus_site_config");
-      if (raw) return SiteConfigSchema.parse(JSON.parse(raw) as unknown);
-    } catch { /* ignore */ }
-    return SiteConfigSchema.parse({});
-  });
+  const [siteConfig, setSiteConfig] = useState<SiteConfig>(() => SiteConfigSchema.parse({}));
   const [stage,       setStage]       = useState<PipelineStage>("idle");
   const [models,      setModels]      = useState<ModelState[]>(INITIAL_MODELS);
   const [activeNav,   setActiveNav]   = useState("overview");
@@ -66,8 +56,15 @@ export default function HomePage() {
   const [chatHistory,     setChatHistory]     = useState<ChatMessage[]>([]);
   const [panelLoadKey,    setPanelLoadKey]    = useState<string>("");
 
-  // Load saved projects from IndexedDB on mount
-  useEffect(() => { listProjects().then(setProjects); }, []);
+  // Load persisted state client-side only (avoids SSR hydration mismatch)
+  useEffect(() => {
+    listProjects().then(setProjects);
+    setDeliveryInstructions(localStorage.getItem("nexus_delivery_instructions") ?? "");
+    try {
+      const raw = localStorage.getItem("nexus_site_config");
+      if (raw) setSiteConfig(SiteConfigSchema.parse(JSON.parse(raw) as unknown));
+    } catch { /* ignore */ }
+  }, []);
 
   // Populate boot logs client-side only to avoid server/client timestamp mismatch.
   useEffect(() => {
