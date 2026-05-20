@@ -3,8 +3,6 @@ import { z } from "zod";
 export const ProduceInputSchema = z.object({
   title: z.string(),
   summary: z.string(),
-  rawTranscript: z.string().default(""),
-  deliveryInstructions: z.string().default(""),
   assets: z.array(
     z.object({
       id: z.string(),
@@ -43,10 +41,6 @@ export const AcademyPackageSchema = z.object({
   academyName: z.string(),
   tagline: z.string(),
   targetAudience: z.string(),
-  // C: Course-level metadata
-  difficultyLevel: z.enum(["beginner", "intermediate", "advanced"]).default("beginner"),
-  totalEstimatedHours: z.number().default(0),
-  certificateTitle: z.string().default(""),
   landingPage: z.object({
     headline: z.string(),
     subheadline: z.string(),
@@ -71,15 +65,6 @@ export const AcademyPackageSchema = z.object({
     z.object({
       moduleTitle: z.string(),
       moduleDescription: z.string(),
-      // B: Module-level metadata
-      learningObjectives: z.array(z.string()).default([]),
-      estimatedMinutes: z.number().default(0),
-      keyTerms: z.array(
-        z.object({
-          term: z.string(),
-          definition: z.string(),
-        })
-      ).default([]),
       lessons: z.array(
         z.object({
           title: z.string(),
@@ -87,10 +72,6 @@ export const AcademyPackageSchema = z.object({
           durationMinutes: z.number(),
           description: z.string(),
           notes: z.string().default(""),
-          // A: Lesson-level enrichment
-          keyTakeaways: z.array(z.string()).default([]),
-          actionItems: z.array(z.string()).default([]),
-          transcriptSegment: z.string().default(""),
           quiz: z.array(
             z.object({
               q: z.string(),
