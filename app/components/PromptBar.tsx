@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { IngestResultSchema } from "@/lib/schemas/blueprint";
 import type { IngestResult } from "@/lib/schemas/blueprint";
 import type { LogEntry, PipelineStage } from "@/lib/types";
@@ -17,11 +17,15 @@ export function PromptBar({ stage, onLog, onBlueprint, onStageChange, onDelivery
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
   const [showDelivery, setShowDelivery] = useState(false);
-  const [deliveryText, setDeliveryText] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("nexus_delivery_instructions") ?? "";
-  });
+  const [deliveryText, setDeliveryText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Load persisted delivery instructions client-side only (avoids SSR hydration mismatch)
+  useEffect(() => {
+    const saved = localStorage.getItem("nexus_delivery_instructions");
+    if (saved) { setDeliveryText(saved); onDeliveryChange?.(saved); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isIdle = stage === "idle" || stage === "done" || stage === "error";
   const canSubmit = isIdle && !running && prompt.trim().length > 0;
