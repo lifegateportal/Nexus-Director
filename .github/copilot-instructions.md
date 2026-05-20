@@ -12,11 +12,15 @@ You must strictly adhere to these instructions to optimize token spending, minim
 * **Pure Presentation Components:** Keep frontend UI files (`.tsx`) strictly focused on layout and data display. Never allow database queries, state machines, or direct backend utility functions to blend into visual component code.
 
 ## 3. iPadOS Mobile Safari Ergonomics
-Every time you generate or refactor a user interface component, you must enforce tablet-safe layouts:
+Every time you generate or refactor a user interface component, you must enforce tablet-safe layouts AND mobile-first responsive design:
+* **Always Mobile + Desktop:** Every UI change must include both mobile (default) and desktop (`lg:` prefix) responsive variants. Never design for desktop only.
+* **Mobile navigation pattern:** The main nav is a fixed bottom bar on mobile (`lg:hidden`) and a left sidebar on desktop (`hidden lg:flex`). Preserve this pattern.
+* **Main layout scroll:** On mobile, the main content area is `overflow-y-auto` (panels stack and scroll). On desktop (`lg:`), it is `overflow-hidden` with a grid layout (panels fill height and scroll internally).
 * **Dynamic Viewports:** Use dynamic viewport utilities (`h-dvh`, `max-h-dvh`) instead of legacy screen-height classes (`h-screen`, `100vh`) to prevent Safari navigation bars from breaking layout boundaries.
 * **Anti-Zoom Safeguards:** All interactive text fields, search boxes, and textareas must be set to a minimum font size of `text-base` (16px) to block iOS from auto-zooming the window.
 * **Touch-Target Sizing:** Every button, tap region, or link menu must maintain a minimum hit boundary of 48x48px. 
 * **Zero Hover Reliance:** Never hide functional details or actions behind hover-only states (`hover:`). All interactive metrics or indicators must be displayed statically or triggered by explicit tap/click elements.
+* **Bottom nav clearance:** Any fixed-bottom or sticky-bottom UI elements must account for the mobile bottom nav bar height (`pb-20 lg:pb-0` or `pb-[max(env(safe-area-inset-bottom),_3rem)]`).
 
 ## 4. Deterministic Type & Error Handling
 * Always validate incoming payloads or state maps using strict Zod schemas.

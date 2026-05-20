@@ -46,9 +46,9 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab }: 
   ];
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-700/60 glass shadow-panel">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
       {/* Tab bar */}
-      <div className="flex flex-shrink-0 items-center gap-0.5 border-b border-slate-700/50 px-3 pt-2">
+      <div className="flex flex-shrink-0 items-center gap-0.5 border-b border-cyan-500/10 px-3 pt-2">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -57,9 +57,9 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab }: 
             disabled={!tab.ready}
             className={`flex min-h-8 items-center gap-1.5 rounded-t px-3 pb-2 pt-1 text-xs font-semibold transition-colors ${
               activeTab === tab.id
-                ? "border-b-2 border-accent-400 text-accent-300"
+                ? "border-b-2 border-cyan-400 text-cyan-300"
                 : tab.ready
-                ? "text-slate-400 hover:text-slate-200"
+                ? "text-slate-400 hover:text-slate-100"
                 : "cursor-not-allowed text-slate-700"
             }`}
           >

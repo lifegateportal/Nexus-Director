@@ -177,11 +177,12 @@ async function fetchTranscript(videoId: string): Promise<string> {
 }
 
 export async function POST(req: NextRequest) {
+  let videoId: string | null = null;
   try {
     const body = (await req.json()) as unknown;
     const { url } = RequestSchema.parse(body);
 
-    const videoId = extractVideoId(url.trim());
+    videoId = extractVideoId(url.trim());
     if (!videoId) {
       return NextResponse.json(
         { error: "Could not read the video ID. Paste the full YouTube URL — e.g. https://youtu.be/abc123xyz or https://youtube.com/watch?v=abc123xyz" },
@@ -193,6 +194,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ transcript, videoId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to fetch transcript";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message, ...(videoId ? { videoId } : {}) }, { status: 500 });
   }
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import { getVideoObjectUrl, getVideoMeta, getYoutubeId, getVideoUrl } from "@/lib/video-store";
+import { getTheme } from "@/lib/theme";
 
 type Lesson = AcademyPackage["curriculum"][number]["lessons"][number];
 
@@ -310,6 +311,7 @@ export default function LearnPage() {
   const progressPct = totalLessons > 0 ? Math.round((completedCount / totalLessons) * 100) : 0;
   const allDone = completedCount === totalLessons && totalLessons > 0;
   const timestamps = buildTimestamps(academy, totalDuration);
+  const t = getTheme(academy.themeVariant);
 
   function selectLesson(lesson: Lesson) {
     setActiveLesson(lesson);
@@ -327,24 +329,24 @@ export default function LearnPage() {
 
   return (
     <>
-    <div className="flex min-h-dvh flex-col bg-slate-950 text-slate-100 antialiased">
+    <div className={`flex min-h-dvh flex-col ${t.pageBg} ${t.heading} antialiased`}>
 
       {/* ── Top nav ── */}
-      <nav className="sticky top-0 z-50 border-b border-slate-800/60 bg-slate-950/80 backdrop-blur-xl">
+      <nav className={`sticky top-0 z-50 border-b ${t.border} ${t.nav} backdrop-blur-xl`}>
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
             <Link
               href="/preview"
-              className="flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-700 px-3 text-sm text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
+              className={`flex min-h-10 items-center gap-1.5 rounded-lg border ${t.cardBorder} px-3 text-sm ${t.muted} transition`}
             >
               ← Home
             </Link>
-            <span className="hidden text-base font-bold sm:block">{academy.academyName}</span>
+            <span className={`hidden text-base font-bold sm:block ${t.heading}`}>{academy.academyName}</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-500">{completedCount}/{totalLessons} complete</span>
-            <div className="hidden h-1.5 w-24 overflow-hidden rounded-full bg-slate-800 sm:block">
-              <div className="h-full rounded-full bg-cyan-500 transition-all" style={{ width: `${progressPct}%` }} />
+            <span className={`text-xs ${t.label}`}>{completedCount}/{totalLessons} complete</span>
+            <div className={`hidden h-1.5 w-24 overflow-hidden rounded-full ${t.sectionAlt} sm:block`}>
+              <div className={`h-full rounded-full ${t.accentBg} transition-all`} style={{ width: `${progressPct}%` }} />
             </div>
           </div>
         </div>
@@ -352,16 +354,16 @@ export default function LearnPage() {
 
       {/* E: Certificate banner — shown when all lessons are complete */}
       {allDone && (
-        <div className="border-b border-emerald-500/30 bg-gradient-to-r from-cyan-500/10 via-emerald-500/10 to-cyan-500/10 px-5 py-6 text-center">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-emerald-400">Course Complete</p>
-          <h2 className="mb-1 text-xl font-extrabold text-slate-100">
+        <div className={`border-b ${t.accentBorder} bg-gradient-to-r ${t.certGradient} px-5 py-6 text-center`}>
+          <p className={`mb-2 text-[11px] font-semibold uppercase tracking-widest ${t.accentText}`}>Course Complete</p>
+          <h2 className={`mb-1 text-xl font-extrabold ${t.heading}`}>
             {academy.certificateTitle || academy.academyName}
           </h2>
-          <p className="text-sm text-slate-400">You have completed all {totalLessons} lessons. Congratulations.</p>
+          <p className={`text-sm ${t.muted}`}>You have completed all {totalLessons} lessons. Congratulations.</p>
           <button
             type="button"
             onClick={() => { setCompletedLessons(new Set()); localStorage.removeItem("nexus_completed_lessons"); }}
-            className="mt-4 text-xs text-slate-500 underline hover:text-slate-400"
+            className={`mt-4 text-xs ${t.label} underline hover:${t.muted}`}
           >
             Reset progress
           </button>
@@ -372,7 +374,7 @@ export default function LearnPage() {
 
         {/* ── Module sidebar ── */}
         <aside className="hidden w-64 flex-shrink-0 sm:block">
-          <p className="mb-3 px-2 text-[11px] font-semibold uppercase tracking-widest text-slate-500">Modules</p>
+          <p className={`mb-3 px-2 text-[11px] font-semibold uppercase tracking-widest ${t.label}`}>Modules</p>
           <nav className="space-y-1">
             {academy.curriculum.map((m, mi) => (
               <button
@@ -381,17 +383,17 @@ export default function LearnPage() {
                 onClick={() => { setActiveModule(mi); selectLesson(m.lessons[0] ?? activeLesson!); }}
                 className={`flex w-full min-h-12 items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${
                   activeModule === mi
-                    ? "bg-cyan-500/15 text-cyan-300"
-                    : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+                    ? t.sidebarActive
+                    : `${t.muted} hover:${t.card}`
                 }`}
               >
                 <span className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
-                  activeModule === mi ? "bg-cyan-500/30 text-cyan-300" : "bg-slate-800 text-slate-500"
+                  activeModule === mi ? t.sidebarActiveBadge : `${t.sectionAlt} ${t.label}`
                 }`}>
                   {mi + 1}
                 </span>
                 <span className="flex-1 leading-tight">{m.moduleTitle}</span>
-                <span className="text-[11px] text-slate-600">
+                <span className={`text-[11px] ${t.label}`}>
                   {m.lessons.filter((l) => completedLessons.has(l.title)).length}/{m.lessons.length}
                 </span>
               </button>
@@ -411,8 +413,8 @@ export default function LearnPage() {
               onClick={() => { setActiveModule(mi); setActiveLesson(m.lessons[0] ?? null); setMobileView("list"); }}
               className={`flex-shrink-0 rounded-xl border px-4 py-2 text-sm font-medium transition ${
                 activeModule === mi
-                  ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
-                  : "border-slate-700 text-slate-400"
+                  ? `${t.accentBorder} ${t.accentBgMuted} ${t.accentText}`
+                  : `${t.cardBorder} ${t.muted}`
               }`}
             >
               {mi + 1}. {m.moduleTitle}
@@ -423,17 +425,17 @@ export default function LearnPage() {
         {/* ── Lesson list + viewer ── */}
         <div className="flex min-w-0 flex-1 flex-col gap-4 px-4 sm:flex-row sm:px-0">
           <div className={`w-full sm:block sm:w-72 flex-shrink-0 ${mobileView === "content" ? "hidden" : "block"}`}>
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+            <p className={`mb-3 text-[11px] font-semibold uppercase tracking-widest ${t.label}`}>
               {mod.moduleTitle}
             </p>
-            <p className="mb-4 text-xs text-slate-400">{mod.moduleDescription}</p>
+            <p className={`mb-4 text-xs ${t.muted}`}>{mod.moduleDescription}</p>
             {mod.learningObjectives && mod.learningObjectives.length > 0 && (
-              <div className="mb-4 rounded-lg border border-slate-700/50 bg-slate-800/40 p-3">
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-slate-500">Learning Objectives</p>
+              <div className={`mb-4 rounded-lg border ${t.cardBorder} ${t.sectionAlt} p-3`}>
+                <p className={`mb-2 text-[11px] font-semibold uppercase tracking-widest ${t.label}`}>Learning Objectives</p>
                 <ul className="space-y-1">
                   {mod.learningObjectives.map((obj, i) => (
-                    <li key={i} className="flex items-start gap-1.5 text-xs text-slate-400">
-                      <span className="mt-0.5 flex-shrink-0 text-cyan-500">•</span>{obj}
+                    <li key={i} className={`flex items-start gap-1.5 text-xs ${t.muted}`}>
+                      <span className={`mt-0.5 flex-shrink-0 ${t.accentText}`}>•</span>{obj}
                     </li>
                   ))}
                 </ul>
@@ -448,19 +450,17 @@ export default function LearnPage() {
                       type="button"
                       onClick={() => selectLesson(lesson)}
                       className={`flex w-full min-h-12 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ${
-                        isActive
-                          ? "bg-slate-800 ring-1 ring-slate-600"
-                          : "hover:bg-slate-800/50"
+                        isActive ? t.lessonActive : `hover:${t.sectionAlt}`
                       }`}
                     >
-                      <span className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold transition ${completedLessons.has(lesson.title) ? "bg-emerald-500/20 text-emerald-400" : ""}`}>
+                      <span className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold transition ${completedLessons.has(lesson.title) ? `${t.completeBg} ${t.completeText}` : ""}`}>
                         {completedLessons.has(lesson.title) ? "✓" : (TYPE_ICONS[lesson.type] ?? "📄")}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <p className={`truncate font-medium ${isActive ? "text-slate-100" : "text-slate-300"}`}>
+                        <p className={`truncate font-medium ${isActive ? t.heading : t.body}`}>
                           {lesson.title}
                         </p>
-                        <p className="text-[11px] text-slate-500">{lesson.durationMinutes}m</p>
+                        <p className={`text-[11px] ${t.label}`}>{lesson.durationMinutes}m</p>
                       </div>
                     </button>
                   </li>
@@ -471,12 +471,12 @@ export default function LearnPage() {
 
           {/* Lesson viewer */}
           {activeLesson && (
-            <div className={`flex-1 rounded-2xl border border-slate-700/50 bg-slate-900 p-5 sm:block sm:p-6 ${mobileView === "list" ? "hidden" : "block"}`}>
+            <div className={`flex-1 rounded-2xl border ${t.cardBorder} ${t.card} p-5 sm:block sm:p-6 ${mobileView === "list" ? "hidden" : "block"}`}>
               {/* Mobile back-to-lessons button */}
               <button
                 type="button"
                 onClick={() => setMobileView("list")}
-                className="mb-4 flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-700 px-3 text-sm text-slate-400 transition hover:border-slate-500 hover:text-slate-200 sm:hidden"
+                className={`mb-4 flex min-h-10 items-center gap-1.5 rounded-lg border ${t.cardBorder} px-3 text-sm ${t.muted} transition sm:hidden`}
               >
                 ← Lessons
               </button>
@@ -486,19 +486,19 @@ export default function LearnPage() {
               </span>
 
               <div className="mb-2 flex items-start justify-between gap-3">
-                <h1 className="text-xl font-bold text-slate-100 sm:text-2xl">
+                <h1 className={`text-xl font-bold sm:text-2xl ${t.heading}`}>
                   {activeLesson.title}
                 </h1>
                 <button
                   type="button"
                   onClick={openEdit}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-400 transition hover:border-cyan-500/50 hover:text-cyan-300"
+                  className={`flex-shrink-0 rounded-lg border ${t.cardBorder} px-2.5 py-1 text-xs font-medium ${t.muted} transition hover:${t.accentBorder} hover:${t.accentText}`}
                 >
                   Edit
                 </button>
               </div>
 
-              <p className="mb-6 text-sm text-slate-400">{activeLesson.durationMinutes} min</p>
+              <p className={`mb-6 text-sm ${t.muted} leading-relaxed`}>{activeLesson.durationMinutes} min</p>
 
               {/* Video player */}
               {activeLesson.type === "video" && (
@@ -555,21 +555,21 @@ export default function LearnPage() {
 
               {/* F: Key takeaways + action items */}
               {activeLesson.keyTakeaways && activeLesson.keyTakeaways.length > 0 && (
-                <div className="mb-6 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-                  <h2 className="mb-3 text-sm font-semibold text-cyan-300">Key Takeaways</h2>
+                <div className={`mb-6 rounded-xl border ${t.accentBorder} ${t.accentBgMuted} p-4`}>
+                  <h2 className={`mb-3 text-sm font-semibold ${t.accentText}`}>Key Takeaways</h2>
                   <ul className="space-y-2">
                     {activeLesson.keyTakeaways.map((point, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
-                        <span className="mt-0.5 flex-shrink-0 text-cyan-400">→</span>{point}
+                      <li key={i} className={`flex items-start gap-2 text-sm ${t.body}`}>
+                        <span className={`mt-0.5 flex-shrink-0 ${t.accentText}`}>→</span>{point}
                       </li>
                     ))}
                   </ul>
                   {activeLesson.actionItems && activeLesson.actionItems.length > 0 && (
-                    <div className="mt-4 border-t border-cyan-500/20 pt-4">
-                      <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-cyan-500/70">Action Items</p>
+                    <div className={`mt-4 border-t ${t.accentBorder} pt-4`}>
+                      <p className={`mb-2 text-xs font-semibold uppercase tracking-widest ${t.accentText} opacity-70`}>Action Items</p>
                       <ul className="space-y-1.5">
                         {activeLesson.actionItems.map((item, i) => (
-                          <li key={i} className="flex items-start gap-2 text-sm text-slate-400">
+                          <li key={i} className={`flex items-start gap-2 text-sm ${t.muted}`}>
                             <span className="mt-0.5 flex-shrink-0 text-amber-400">◆</span>{item}
                           </li>
                         ))}
@@ -582,7 +582,7 @@ export default function LearnPage() {
               {/* Course notes */}
               {activeLesson.notes && (
                 <div className="mb-8">
-                  <h2 className="mb-4 text-base font-semibold text-slate-200">Course Notes</h2>
+                  <h2 className={`mb-4 text-base font-semibold ${t.body}`}>Course Notes</h2>
                   <MarkdownNotes text={activeLesson.notes} />
                 </div>
               )}
@@ -590,21 +590,21 @@ export default function LearnPage() {
               {/* Quiz */}
               {activeLesson.quiz && activeLesson.quiz.length > 0 && (
                 <div className="mb-8">
-                  <h2 className="mb-4 text-base font-semibold text-slate-200">Knowledge Check</h2>
+                  <h2 className={`mb-4 text-base font-semibold ${t.body}`}>Knowledge Check</h2>
                   <ol className="space-y-6">
                     {activeLesson.quiz.map((item, qi) => {
                       const picked = selectedAnswers[qi] ?? -1;
                       const revealed = picked !== -1;
                       return (
-                        <li key={qi} className="rounded-xl border border-slate-700/60 bg-slate-800/40 p-5">
-                          <p className="mb-4 text-sm font-medium text-slate-200">
-                            <span className="mr-2 text-slate-500">{qi + 1}.</span>{item.q}
+                        <li key={qi} className={`rounded-xl border ${t.cardBorder} ${t.sectionAlt} p-5`}>
+                          <p className={`mb-4 text-sm font-medium ${t.heading}`}>
+                            <span className={`mr-2 ${t.label}`}>{qi + 1}.</span>{item.q}
                           </p>
                           <ol className="space-y-2">
                             {item.options.map((opt, oi) => {
                               const isCorrect = oi === item.correct;
                               const isSelected = oi === picked;
-                              let cls = "border-slate-700 bg-slate-800/60 text-slate-300";
+                              let cls = `${t.cardBorder} ${t.sectionAlt} ${t.body}`;
                               if (revealed && isCorrect) cls = "border-emerald-500/60 bg-emerald-500/10 text-emerald-300";
                               else if (revealed && isSelected && !isCorrect) cls = "border-red-500/60 bg-red-500/10 text-red-300";
                               return (
@@ -635,14 +635,14 @@ export default function LearnPage() {
                     })}
                   </ol>
                   {selectedAnswers.filter((a) => a !== undefined).length === activeLesson.quiz.length && (
-                    <div className="mt-4 rounded-xl border border-slate-700 bg-slate-800/40 p-4 text-center">
-                      <p className="text-sm font-semibold text-slate-200">
+                    <div className={`mt-4 rounded-xl border ${t.cardBorder} ${t.sectionAlt} p-4 text-center`}>
+                      <p className={`text-sm font-semibold ${t.heading}`}>
                         Score: {activeLesson.quiz.filter((item, qi) => selectedAnswers[qi] === item.correct).length} / {activeLesson.quiz.length}
                       </p>
                       <button
                         type="button"
                         onClick={() => setSelectedAnswers([])}
-                        className="mt-2 text-xs text-cyan-400 underline"
+                        className={`mt-2 text-xs ${t.accentText} underline`}
                       >
                         Retry
                       </button>
@@ -654,12 +654,12 @@ export default function LearnPage() {
               {/* Key terms glossary for this module */}
               {mod.keyTerms && mod.keyTerms.length > 0 && (
                 <div className="mb-6">
-                  <h2 className="mb-3 text-base font-semibold text-slate-200">Glossary</h2>
+                  <h2 className={`mb-3 text-base font-semibold ${t.body}`}>Glossary</h2>
                   <dl className="space-y-2">
                     {mod.keyTerms.map((kt, i) => (
-                      <div key={i} className="rounded-lg border border-slate-700/50 bg-slate-800/40 px-4 py-2.5">
-                        <dt className="text-sm font-semibold text-slate-200">{kt.term}</dt>
-                        <dd className="mt-0.5 text-xs text-slate-400">{kt.definition}</dd>
+                      <div key={i} className={`rounded-lg border ${t.cardBorder} ${t.sectionAlt} px-4 py-2.5`}>
+                        <dt className={`text-sm font-semibold ${t.heading}`}>{kt.term}</dt>
+                        <dd className={`mt-0.5 text-xs ${t.muted}`}>{kt.definition}</dd>
                       </div>
                     ))}
                   </dl>
@@ -673,8 +673,8 @@ export default function LearnPage() {
                   onClick={() => toggleComplete(activeLesson.title)}
                   className={`flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition ${
                     completedLessons.has(activeLesson.title)
-                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                      : "border-slate-600 bg-slate-800/60 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-300"
+                      ? `${t.completeText} ${t.completeBg} border-current/40`
+                      : `border ${t.cardBorder} ${t.sectionAlt} ${t.body} hover:${t.accentBorder} hover:${t.accentText}`
                   }`}
                 >
                   {completedLessons.has(activeLesson.title) ? "✓ Completed" : "Mark as complete"}
@@ -688,9 +688,9 @@ export default function LearnPage() {
                     <button
                       type="button"
                       onClick={() => selectLesson(next)}
-                      className="flex min-h-12 w-full items-center justify-between rounded-xl border border-slate-700 px-4 text-sm text-slate-300 transition hover:border-slate-500 hover:bg-slate-800/50"
+                      className={`flex min-h-12 w-full items-center justify-between rounded-xl border ${t.cardBorder} px-4 text-sm ${t.body} transition hover:border-opacity-80 hover:${t.sectionAlt}`}
                     >
-                      <span className="text-slate-500">Next lesson</span>
+                      <span className={t.label}>Next lesson</span>
                       <span className="font-medium">{next.title} →</span>
                     </button>
                   );
@@ -706,24 +706,24 @@ export default function LearnPage() {
     {/* ── Edit lesson modal ── */}
     {isEditing && draft && (
       <div
-        className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/90 p-4"
+        className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto ${t.pageBg}/90 p-4`}
         onClick={(e) => { if (e.target === e.currentTarget) cancelEdit(); }}
       >
-        <div className="my-8 w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6">
+        <div className={`my-8 w-full max-w-2xl rounded-2xl border ${t.cardBorder} ${t.card} p-6`}>
           <div className="mb-5 flex items-center justify-between">
-            <h2 className="text-base font-bold text-slate-100">Edit Lesson</h2>
+            <h2 className={`text-base font-bold ${t.heading}`}>Edit Lesson</h2>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={cancelEdit}
-                className="flex min-h-10 items-center rounded-xl border border-slate-700 px-4 text-sm text-slate-400 transition hover:border-slate-500"
+                className={`flex min-h-10 items-center rounded-xl border ${t.cardBorder} px-4 text-sm ${t.muted} transition`}
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={saveEdit}
-                className="flex min-h-10 items-center rounded-xl bg-cyan-500 px-4 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+                className={`flex min-h-10 items-center rounded-xl ${t.accentBg} px-4 text-sm font-semibold text-slate-950 transition ${t.accentBgHover}`}
               >
                 Save changes
               </button>
@@ -732,54 +732,54 @@ export default function LearnPage() {
 
           <div className="space-y-5">
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-widest text-slate-500">Lesson title</label>
+              <label className={`mb-1.5 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Lesson title</label>
               <input
                 type="text"
                 value={draft.title}
                 onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-                className="w-full rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-2.5 text-base text-slate-100 focus:border-cyan-500/60 focus:outline-none"
+                className={`w-full rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-widest text-slate-500">Description</label>
+              <label className={`mb-1.5 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Description</label>
               <textarea
                 value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                 rows={2}
-                className="w-full resize-none rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-2.5 text-base text-slate-100 focus:border-cyan-500/60 focus:outline-none"
+                className={`w-full resize-none rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-widest text-slate-500">Notes</label>
+              <label className={`mb-1.5 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Notes</label>
               <textarea
                 value={draft.notes}
                 onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
                 rows={10}
-                className="w-full resize-y rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-2.5 text-base text-slate-100 focus:border-cyan-500/60 focus:outline-none"
+                className={`w-full resize-y rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
               />
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">Key takeaways</label>
-              <p className="mb-1.5 text-[11px] text-slate-600">One item per line</p>
+              <label className={`mb-1 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Key takeaways</label>
+              <p className={`mb-1.5 text-[11px] ${t.label}`}>One item per line</p>
               <textarea
                 value={draft.keyTakeaways}
                 onChange={(e) => setDraft({ ...draft, keyTakeaways: e.target.value })}
                 rows={4}
-                className="w-full resize-none rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-2.5 text-base text-slate-100 focus:border-cyan-500/60 focus:outline-none"
+                className={`w-full resize-none rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
               />
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">Action items</label>
-              <p className="mb-1.5 text-[11px] text-slate-600">One item per line</p>
+              <label className={`mb-1 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Action items</label>
+              <p className={`mb-1.5 text-[11px] ${t.label}`}>One item per line</p>
               <textarea
                 value={draft.actionItems}
                 onChange={(e) => setDraft({ ...draft, actionItems: e.target.value })}
                 rows={3}
-                className="w-full resize-none rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-2.5 text-base text-slate-100 focus:border-cyan-500/60 focus:outline-none"
+                className={`w-full resize-none rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
               />
             </div>
           </div>

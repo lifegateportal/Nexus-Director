@@ -28,24 +28,24 @@ export function TerminalLog({ entries, isStreaming = false }: TerminalLogProps) 
   }, [entries]);
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-700/60 glass shadow-panel">
-      <header className="flex flex-shrink-0 items-center justify-between border-b border-slate-700/50 px-4 py-3">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
+      <header className="flex flex-shrink-0 items-center justify-between border-b border-cyan-500/10 px-4 py-3">
         <div className="flex items-center gap-2">
           <span
-            className={`h-2 w-2 rounded-full ${
+            className={`h-2.5 w-2.5 rounded-full ${
               isStreaming ? "animate-pulse bg-cyan-400" : "bg-emerald-400"
             }`}
             style={{
               boxShadow: isStreaming
-                ? "0 0 8px rgba(0,184,217,0.8)"
-                : "0 0 8px rgba(52,211,153,0.65)"
+                ? "0 0 10px rgba(6,182,212,0.95)"
+                : "0 0 10px rgba(52,211,153,0.80)"
             }}
           />
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-300">
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-200">
             Agent Activity
           </h2>
         </div>
-        <span className="rounded-full bg-slate-700/50 px-2.5 py-1 text-xs tabular-nums text-slate-400">
+        <span className="rounded-full border border-slate-600/60 bg-slate-800/60 px-2.5 py-1 text-xs tabular-nums text-slate-300">
           {entries.length} events
         </span>
       </header>
@@ -61,7 +61,7 @@ export function TerminalLog({ entries, isStreaming = false }: TerminalLogProps) 
             return (
               <li
                 key={entry.id}
-                className="animate-fade-up flex items-start gap-2.5 rounded-xl border border-slate-700/40 bg-shell-800/50 px-3 py-2.5"
+                className="animate-fade-up flex items-start gap-2.5 rounded-xl border border-slate-700/50 bg-slate-900/70 px-3 py-2.5"
               >
                 <span
                   className={`mt-px inline-flex flex-shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold tracking-widest ${cfg.tagCls}`}

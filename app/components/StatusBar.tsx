@@ -23,9 +23,9 @@ const STAGE_COLORS: Record<PipelineStage, string> = {
 type DotStyle = { bg: string; glow?: string };
 
 const MODEL_DOT: Record<string, DotStyle> = {
-  active: { bg: "bg-cyan-400", glow: "0 0 8px rgba(0,184,217,0.85)" },
-  standby: { bg: "bg-slate-600" },
-  error: { bg: "bg-red-500", glow: "0 0 8px rgba(239,68,68,0.85)" }
+  active: { bg: "bg-cyan-400", glow: "0 0 10px rgba(6,182,212,0.95)" },
+  standby: { bg: "bg-slate-700" },
+  error: { bg: "bg-red-500", glow: "0 0 10px rgba(239,68,68,0.90)" }
 };
 
 type StatusBarProps = {
@@ -37,23 +37,26 @@ type StatusBarProps = {
 
 export function StatusBar({ stage, models, onAssistant, assistantActive }: StatusBarProps) {
   return (
-    <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-slate-700/50 px-4 glass-light">
+    <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-cyan-500/15 px-4 glass-light">
       {/* Brand */}
-      <span className="hidden text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400 sm:block">
+      <span className="hidden text-[10px] font-bold uppercase tracking-[0.22em] text-gradient sm:block">
         Nexus Director
       </span>
 
-      {/* Agent routing pills */}
-      <div className="flex items-center gap-2 sm:gap-3">
+      {/* Agent routing pills — hidden on mobile, visible sm+ */}
+      <div className="hidden items-center gap-2 sm:flex sm:gap-3">
         {models.map((m) => {
           const dot = MODEL_DOT[m.status] ?? MODEL_DOT.standby;
+          const isActive = m.status === "active";
           return (
-            <div key={m.handle} className="flex items-center gap-1">
+            <div key={m.handle} className="flex items-center gap-1.5">
               <span
-                className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${dot.bg}`}
+                className={`h-2 w-2 flex-shrink-0 rounded-full transition-all ${dot.bg}`}
                 style={dot.glow ? { boxShadow: dot.glow } : undefined}
               />
-              <span className="text-[10px] font-medium text-slate-400 sm:text-[11px]">{m.name}</span>
+              <span className={`text-[10px] font-medium sm:text-[11px] ${isActive ? "text-cyan-300" : "text-slate-500"}`}>
+                {m.name}
+              </span>
             </div>
           );
         })}
@@ -71,9 +74,10 @@ export function StatusBar({ stage, models, onAssistant, assistantActive }: Statu
             aria-label="Director AI assistant"
             className={`flex min-h-8 min-w-8 items-center justify-center rounded-lg border transition ${
               assistantActive
-                ? "border-cyan-500/60 bg-cyan-500/15 text-cyan-400"
-                : "border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300"
+                ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-300"
+                : "border-slate-600 text-slate-400 hover:border-cyan-500/40 hover:text-cyan-300"
             }`}
+            style={assistantActive ? { boxShadow: "0 0 10px rgba(6,182,212,0.25)" } : undefined}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
               <path d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" strokeLinecap="round" strokeLinejoin="round" />

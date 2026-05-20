@@ -43,6 +43,11 @@ export const AcademyPackageSchema = z.object({
   academyName: z.string(),
   tagline: z.string(),
   targetAudience: z.string(),
+  difficultyLevel: z.enum(["beginner", "intermediate", "advanced"]).default("intermediate"),
+  totalEstimatedHours: z.number().default(0),
+  certificateTitle: z.string().default(""),
+  themeVariant: z.enum(["midnight", "amber", "emerald", "rose", "violet", "solar"]).default("midnight"),
+  layoutVariant: z.enum(["centered", "split", "minimal"]).default("centered"),
   landingPage: z.object({
     headline: z.string(),
     subheadline: z.string(),
@@ -67,6 +72,13 @@ export const AcademyPackageSchema = z.object({
     z.object({
       moduleTitle: z.string(),
       moduleDescription: z.string(),
+      learningObjectives: z.array(z.string()).default([]),
+      keyTerms: z.array(
+        z.object({
+          term: z.string(),
+          definition: z.string(),
+        })
+      ).default([]),
       lessons: z.array(
         z.object({
           title: z.string(),
@@ -74,6 +86,8 @@ export const AcademyPackageSchema = z.object({
           durationMinutes: z.number(),
           description: z.string(),
           notes: z.string().default(""),
+          keyTakeaways: z.array(z.string()).default([]),
+          actionItems: z.array(z.string()).default([]),
           quiz: z.array(
             z.object({
               q: z.string(),

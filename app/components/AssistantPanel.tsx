@@ -143,9 +143,9 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         />
       )}
 
-      {/* Drawer */}
+      {/* Drawer — full-width on mobile, max-w-sm on tablet/desktop */}
       <div
-        className={`fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-slate-700/60 bg-slate-900 shadow-2xl transition-transform duration-300 ${
+        className={`fixed inset-y-0 right-0 z-[60] flex w-full max-w-full flex-col border-l border-slate-700/60 bg-slate-900 shadow-2xl transition-transform duration-300 sm:max-w-sm ${
           isOpen ? "translate-x-0" : "translate-x-full"
         }`}
         aria-label="Director AI assistant"
@@ -168,22 +168,65 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
 
         {/* Suggestion chips */}
         {academy && (
-          <div className="flex-shrink-0 overflow-x-auto border-b border-slate-800 px-3 py-2">
-            <div className="flex gap-2">
+          <div className="flex-shrink-0 border-b border-slate-800 px-3 py-2.5">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Content</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
               {[
-                "Format notes with proper headings and sections",
-                "Add testimonials from students",
-                "Add a FAQ section to the landing page",
-                "Add an instructor bio",
-                "Add an announcement banner",
-                "Change the CTA button text",
+                "Add key takeaways to all lessons",
                 "Add action items to every lesson",
+                "Rewrite notes with proper headings",
+                "Add quiz questions to all lessons",
+                "Add learning objectives to all modules",
+                "Expand the glossary for all modules",
+                "Make the notes more detailed and analytical",
               ].map((chip) => (
                 <button
                   key={chip}
                   type="button"
                   onClick={() => { setInput(chip); inputRef.current?.focus(); }}
                   className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-500/40 hover:text-cyan-300"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Visual &amp; Theme</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {[
+                "Change theme to amber",
+                "Change theme to emerald",
+                "Change theme to violet",
+                "Change theme to rose",
+                "Change theme to solar (light mode)",
+                "Use a split hero layout",
+                "Use a minimal layout",
+                "Use a centered layout",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Landing Page</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {[
+                "Add testimonials from students",
+                "Add a FAQ section",
+                "Add an instructor bio",
+                "Add an announcement banner",
+                "Change the CTA button text",
+                "Add social media links",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-sky-500/40 hover:text-sky-300"
                 >
                   {chip}
                 </button>
@@ -229,8 +272,11 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
           )}
         </div>
 
-        {/* Input */}
-        <div className="flex-shrink-0 border-t border-slate-800 p-3">
+        {/* Input — bottom padding accounts for mobile bottom nav */}
+        <div
+          className="flex-shrink-0 border-t border-slate-800 p-3"
+          style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}
+        >
           <div className="flex gap-2">
             <textarea
               ref={inputRef}

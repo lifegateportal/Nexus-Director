@@ -33,9 +33,9 @@ export function ProjectCard({ title, status, detail, metrics }: ProjectCardProps
   const cfg = STATUS_CFG[status] ?? DEFAULT_CFG;
 
   return (
-    <article className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-700/60 glass shadow-panel">
-      <header className="flex flex-shrink-0 items-center justify-between border-b border-slate-700/50 px-4 py-3">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-300">{title}</h2>
+    <article className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
+      <header className="flex flex-shrink-0 items-center justify-between border-b border-cyan-500/10 px-4 py-3">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-100">{title}</h2>
         <div className="flex items-center gap-2">
           <span
             className={`h-2 w-2 rounded-full ${cfg.dotCls}`}
@@ -53,9 +53,9 @@ export function ProjectCard({ title, status, detail, metrics }: ProjectCardProps
         {metrics && metrics.length > 0 && (
           <dl className="grid grid-cols-2 gap-2">
             {metrics.map(({ label, value }) => (
-              <div key={label} className="rounded-xl border border-slate-700/40 bg-shell-800/50 px-3 py-2.5">
-                <dt className="text-[10px] uppercase tracking-wider text-slate-500">{label}</dt>
-                <dd className="mt-0.5 text-sm font-semibold text-slate-100">{value}</dd>
+              <div key={label} className="rounded-xl border border-slate-700/50 bg-slate-900/70 px-3 py-2.5">
+                <dt className="text-[10px] uppercase tracking-wider text-slate-400">{label}</dt>
+                <dd className="mt-0.5 text-sm font-semibold text-white">{value}</dd>
               </div>
             ))}
           </dl>
@@ -63,7 +63,7 @@ export function ProjectCard({ title, status, detail, metrics }: ProjectCardProps
 
         <button
           type="button"
-          className="focus-ring mt-auto inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-slate-600/50 px-4 text-sm font-medium text-slate-200 transition hover:bg-slate-700/30 active:scale-[0.99] active:bg-slate-700/50"
+          className="focus-ring mt-auto inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/20 hover:border-cyan-400/50 active:scale-[0.99]"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-accent-400">
             <rect x="3" y="3" width="7" height="7" rx="1" />

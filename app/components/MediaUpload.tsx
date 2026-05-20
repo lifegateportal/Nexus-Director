@@ -123,7 +123,11 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
         body: JSON.stringify({ url }),
       });
       const json = await res.json() as { transcript?: string; videoId?: string; error?: string };
-      if (!res.ok || json.error) throw new Error(json.error ?? "Failed to fetch transcript");
+      if (!res.ok || json.error) {
+        // Persist the video ID even on transcript failure so the embed still renders
+        if (json.videoId) setYoutubeId(json.videoId);
+        throw new Error(json.error ?? "Failed to fetch transcript");
+      }
       setYoutubeId(json.videoId!);
       const virtualFile: UploadedFile = {
         name: `youtube-${json.videoId}.txt`,
@@ -278,13 +282,13 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
   }, [files, onLog, onBlueprint, onStageChange]);
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-700/60 glass shadow-panel">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
       <header className="flex flex-shrink-0 items-center gap-2 border-b border-slate-700/50 px-4 py-3">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-accent-400">
           <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
           <path d="M12 4v13M8.5 7.5 12 4l3.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-300">Feed the Pipeline</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-200">Feed the Pipeline</h2>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-4">
