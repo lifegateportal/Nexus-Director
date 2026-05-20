@@ -96,23 +96,85 @@ type NexusNavProps = {
 };
 
 export function NexusNav({ active, onSelect }: NexusNavProps) {
-  return (
-    <nav
-      className="flex h-full w-[72px] flex-shrink-0 flex-col items-center gap-1 border-r border-slate-700/50 py-4 glass"
-      aria-label="Nexus Director navigation"
+  const LogoMark = () => (
+    <div
+      className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 ring-1 ring-cyan-400/50"
+      style={{ boxShadow: "0 0 18px rgba(6,182,212,0.30)" }}
     >
-      {/* Logo mark */}
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-accent-500/15 ring-1 ring-accent-500/40">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-6 w-6 text-accent-400">
-          <path d="M12 2 21 6.5V17L12 21.5 3 17V6.5L12 2z" strokeLinejoin="round" />
-          <path d="M12 2v19.5M3 6.5l9 5 9-5" strokeLinejoin="round" />
-        </svg>
-      </div>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5 text-cyan-400">
+        <path d="M12 2 21 6.5V17L12 21.5 3 17V6.5L12 2z" strokeLinejoin="round" />
+        <path d="M12 2v19.5M3 6.5l9 5 9-5" strokeLinejoin="round" />
+      </svg>
+    </div>
+  );
 
-      {/* Nav items */}
-      <div className="flex flex-col gap-1">
-        {NAV_ITEMS.map((item, i) => {
-          const Icon = NAV_ICONS[i];
+  return (
+    <>
+      {/* ── Desktop sidebar (lg+) ─────────────────────────────── */}
+      <nav
+        className="hidden lg:flex h-full w-[72px] flex-shrink-0 flex-col items-center gap-1 border-r border-cyan-500/15 py-4 glass"
+        aria-label="Nexus Director navigation"
+      >
+        <div className="mb-4"><LogoMark /></div>
+
+        <div className="flex flex-col gap-1">
+          {NAV_ITEMS.map((item, i) => {
+            const Icon = NAV_ICONS[i];
+            const isActive = active === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelect(item.id)}
+                aria-label={item.label}
+                aria-current={isActive ? "page" : undefined}
+                className={[
+                  "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
+                  isActive
+                    ? "bg-gradient-to-br from-cyan-500/25 to-violet-500/15 text-cyan-300 ring-1 ring-cyan-400/40"
+                    : "text-slate-500 hover:bg-slate-700/40 hover:text-slate-200 active:bg-slate-700/60"
+                ].join(" ")}
+                style={isActive ? { boxShadow: "0 0 12px rgba(6,182,212,0.20)" } : undefined}
+              >
+                {isActive && (
+                  <span
+                    className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r-full bg-cyan-400"
+                    style={{ boxShadow: "0 0 6px rgba(6,182,212,0.80)" }}
+                  />
+                )}
+                <Icon />
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex-1" />
+        <div
+          className="mb-2 h-2 w-2 rounded-full bg-emerald-400"
+          style={{ boxShadow: "0 0 10px rgba(52,211,153,0.85)" }}
+          title="System healthy"
+        />
+      </nav>
+
+      {/* ── Mobile bottom bar (<lg) ───────────────────────────── */}
+      <nav
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around border-t border-cyan-500/20 glass-light"
+        style={{ paddingBottom: "max(env(safe-area-inset-bottom), 6px)" }}
+        aria-label="Nexus Director navigation"
+      >
+        {/* Logo tap — goes to overview */}
+        <button
+          type="button"
+          onClick={() => onSelect("overview")}
+          aria-label="Overview"
+          className="flex flex-col items-center justify-center gap-0.5 px-1 pt-2"
+        >
+          <LogoMark />
+        </button>
+
+        {NAV_ITEMS.filter((item) => item.id !== "overview").map((item, i) => {
+          // offset by 1 because we skipped overview (index 0)
+          const Icon = NAV_ICONS[i + 1];
           const isActive = active === item.id;
           return (
             <button
@@ -121,31 +183,24 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
               onClick={() => onSelect(item.id)}
               aria-label={item.label}
               aria-current={isActive ? "page" : undefined}
-              className={[
-                "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-colors",
-                isActive
-                  ? "bg-accent-500/15 text-accent-400 ring-1 ring-accent-500/40"
-                  : "text-slate-500 hover:bg-slate-700/30 hover:text-slate-300 active:bg-slate-700/50"
-              ].join(" ")}
+              className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
             >
+              <span className={isActive ? "text-cyan-400" : "text-slate-500"}>
+                <Icon />
+              </span>
+              <span className={`text-[9px] font-medium ${isActive ? "text-cyan-400" : "text-slate-600"}`}>
+                {item.label}
+              </span>
               {isActive && (
-                <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-accent-400" />
+                <span
+                  className="absolute top-0 h-0.5 w-10 rounded-full bg-cyan-400"
+                  style={{ boxShadow: "0 0 6px rgba(6,182,212,0.80)" }}
+                />
               )}
-              <Icon />
             </button>
           );
         })}
-      </div>
-
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* System health indicator */}
-      <div
-        className="mb-2 h-2 w-2 rounded-full bg-emerald-400"
-        style={{ boxShadow: "0 0 8px rgba(52,211,153,0.7)" }}
-        title="System healthy"
-      />
-    </nav>
+      </nav>
+    </>
   );
 }

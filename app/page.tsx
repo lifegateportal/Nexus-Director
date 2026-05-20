@@ -308,7 +308,8 @@ export default function HomePage() {
     <div className="flex min-h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame">
       <NexusNav active={activeNav} onSelect={setActiveNav} />
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/* Content column — reserves bottom space for mobile bottom nav (~60px) */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
         <StatusBar
           stage={stage}
           models={models}
@@ -316,21 +317,25 @@ export default function HomePage() {
           assistantActive={assistantOpen}
         />
 
-        <main className="grid min-h-0 flex-1 gap-3 overflow-hidden p-3 lg:grid-cols-5">
+        {/*
+          Mobile: flex-col + overflow-y-auto so panels stack and scroll.
+          Desktop (lg+): grid 5-cols + overflow-hidden so panels fill height.
+        */}
+        <main className="flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5">
 
           {/* ── Focused agent views (non-overview nav) ── */}
           {isFocused ? (
             <>
-              {/* Terminal — always visible, narrower in focused mode */}
-              <div className="min-h-0 lg:col-span-2">
+              {/* Terminal — hidden on mobile in focused mode (nav already shows context), full panel on desktop */}
+              <div className="hidden lg:block lg:min-h-0 lg:col-span-2">
                 <TerminalLog
                   entries={logs}
                   isStreaming={stage === "ingesting" || stage === "reasoning"}
                 />
               </div>
 
-              {/* Right panel: deploy view OR projects view OR pipeline results */}
-              <div className="min-h-0 lg:col-span-3">
+              {/* Primary panel — full width on mobile, 3/5 on desktop */}
+              <div className="min-h-[65dvh] lg:min-h-0 lg:col-span-3">
                 {activeNav === "projects" ? (
                   <ProjectsPanel
                     projects={projects}
@@ -340,7 +345,8 @@ export default function HomePage() {
                     onLoad={handleLoadProject}
                     onDelete={handleDeleteProject}
                   />
-                ) : activeNav === "deploy" ? (                  <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
+                ) : activeNav === "deploy" ? (
+                  <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Deploy</p>
                     <h2 className="text-lg font-bold text-white">
                       {blueprint?.title ?? "No project yet"}
@@ -385,7 +391,7 @@ export default function HomePage() {
                     externalTab={focusedTab}
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center rounded-2xl border border-cyan-500/15 glass">
+                  <div className="flex h-full min-h-[300px] items-center justify-center rounded-2xl border border-cyan-500/15 glass">
                     <p className="text-sm text-slate-400">Run the pipeline to see {activeNav} results</p>
                   </div>
                 )}
@@ -394,16 +400,16 @@ export default function HomePage() {
           ) : (
             /* ── Overview (default) layout ── */
             <>
-              {/* Terminal log — 3 / 5 columns */}
-              <div className="min-h-0 lg:col-span-3">
+              {/* Terminal log — full width mobile, 3/5 desktop */}
+              <div className="min-h-[280px] lg:min-h-0 lg:col-span-3">
                 <TerminalLog
                   entries={logs}
                   isStreaming={stage === "ingesting" || stage === "reasoning"}
                 />
               </div>
 
-              {/* Right column — 2 / 5 columns */}
-              <div className="grid min-h-0 grid-rows-2 gap-3 lg:col-span-2">
+              {/* Right column — full width mobile (stacked), 2/5 desktop (grid-rows-2) */}
+              <div className="flex flex-col gap-3 lg:col-span-2 lg:grid lg:min-h-0 lg:grid-rows-2">
                 {blueprint !== null ? (
                   <PipelineResults
                     blueprint={blueprint}
@@ -444,7 +450,7 @@ export default function HomePage() {
         />
       </div>
 
-      {/* Director AI drawer — no floating button, toggled from StatusBar */}
+      {/* Director AI drawer — toggled from StatusBar */}
       <AssistantPanel
         isOpen={assistantOpen}
         onClose={() => setAssistantOpen(false)}

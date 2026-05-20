@@ -72,7 +72,7 @@ export function PromptBar({ stage, onLog, onBlueprint, onStageChange, onDelivery
   };
 
   return (
-    <div className="flex-shrink-0 border-t border-slate-700/50 glass-light px-4 py-3">
+    <div className="flex-shrink-0 border-t border-slate-700/50 glass-light px-4 pt-3 pb-3">
       <div className="flex items-end gap-3">
         <textarea
           ref={textareaRef}
@@ -80,15 +80,15 @@ export function PromptBar({ stage, onLog, onBlueprint, onStageChange, onDelivery
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={!isIdle || running}
-          placeholder='Describe what to build — e.g. "Turn my cooking tutorials into a paid academy with a 30-second ad reel…"'
+          placeholder='Describe what to build…'
           rows={2}
-          className="flex-1 resize-none rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-base text-slate-100 placeholder:text-slate-600 focus:border-accent-500/60 focus:outline-none focus:ring-1 focus:ring-accent-500/40 disabled:opacity-40"
+          className="flex-1 resize-none rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-base text-slate-100 placeholder:text-slate-500 focus:border-cyan-500/60 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 disabled:opacity-40"
         />
         <button
           type="button"
           onClick={() => void handleRun()}
           disabled={!canSubmit}
-          className="flex min-h-12 min-w-[112px] flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-accent-500 px-5 text-sm font-semibold text-white shadow-glow transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+          className="flex min-h-12 min-w-[112px] flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 text-sm font-semibold text-slate-950 shadow-glow transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-30"
         >
           {running ? (
             <>
@@ -105,7 +105,7 @@ export function PromptBar({ stage, onLog, onBlueprint, onStageChange, onDelivery
           )}
         </button>
       </div>
-      <p className="mt-1.5 text-[11px] text-slate-600">⌘ Return to run · or drop files in the panel above</p>
+      <p className="mt-1.5 hidden text-[11px] text-slate-600 sm:block">⌘ Return to run · or drop files in the panel above</p>
 
       {/* Delivery preferences toggle */}
       <div className="mt-2 flex items-center gap-2">
