@@ -118,7 +118,7 @@ export default function PreviewPage() {
       </nav>
 
       {/* ── Hero ── */}
-      <section className="mx-auto max-w-4xl px-5 pb-20 pt-20 text-center">
+      <section className="mx-auto max-w-4xl px-5 pb-14 pt-12 text-center sm:pb-20 sm:pt-20">
         <span className="mb-5 inline-block rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-cyan-400">
           {academy.targetAudience}
         </span>
@@ -151,7 +151,7 @@ export default function PreviewPage() {
       </section>
 
       {/* ── Features ── */}
-      <section className="border-y border-slate-800/60 bg-slate-900/40 py-16">
+      <section className="border-y border-slate-800/60 bg-slate-900/40 py-10 sm:py-16">
         <div className="mx-auto max-w-6xl px-5">
           <p className="mb-10 text-center text-[11px] font-semibold uppercase tracking-widest text-slate-500">
             What you get
@@ -171,7 +171,7 @@ export default function PreviewPage() {
       </section>
 
       {/* ── Curriculum ── */}
-      <section className="mx-auto max-w-4xl px-5 py-16">
+      <section className="mx-auto max-w-4xl px-5 py-10 sm:py-16">
         <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-widest text-slate-500">
           Curriculum
         </p>
@@ -215,13 +215,13 @@ export default function PreviewPage() {
       </section>
 
       {/* ── Pricing ── */}
-      <section id="pricing" className="border-t border-slate-800/60 bg-slate-900/40 py-16">
+      <section id="pricing" className="border-t border-slate-800/60 bg-slate-900/40 py-10 sm:py-16">
         <div className="mx-auto max-w-5xl px-5">
           <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-widest text-slate-500">
             Pricing
           </p>
           <h2 className="mb-10 text-center text-2xl font-bold">Simple, transparent pricing</h2>
-          <div className={`grid gap-5 ${academy.pricing.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+          <div className={`grid gap-5 ${academy.pricing.length === 3 ? "lg:grid-cols-3" : "sm:grid-cols-2"}`}>
             {academy.pricing.map((tier, i) => {
               const isPopular = tier.period !== "once" && tier.priceUsd > 0 && i === Math.floor(academy.pricing.length / 2);
               return (
@@ -272,7 +272,7 @@ export default function PreviewPage() {
 
       {/* ── Instructor Bio ── */}
       {siteConfig?.instructorBio?.name && (
-        <section className="border-t border-slate-800/60 py-16">
+        <section className="border-t border-slate-800/60 py-10 sm:py-16">
           <div className="mx-auto max-w-3xl px-5">
             <p className="mb-8 text-center text-[11px] font-semibold uppercase tracking-widest text-slate-500">Your Instructor</p>
             <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
@@ -295,7 +295,7 @@ export default function PreviewPage() {
 
       {/* ── Testimonials ── */}
       {siteConfig?.testimonials && siteConfig.testimonials.length > 0 && (
-        <section className="border-t border-slate-800/60 bg-slate-900/40 py-16">
+        <section className="border-t border-slate-800/60 bg-slate-900/40 py-10 sm:py-16">
           <div className="mx-auto max-w-6xl px-5">
             <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-widest text-slate-500">Student Results</p>
             <h2 className="mb-10 text-center text-2xl font-bold">What students are saying</h2>
@@ -321,7 +321,7 @@ export default function PreviewPage() {
 
       {/* ── FAQ ── */}
       {siteConfig?.faqItems && siteConfig.faqItems.length > 0 && (
-        <section className="mx-auto max-w-3xl px-5 py-16">
+        <section className="mx-auto max-w-3xl px-5 py-10 sm:py-16">
           <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-widest text-slate-500">FAQ</p>
           <h2 className="mb-10 text-center text-2xl font-bold">Common questions</h2>
           <div className="space-y-3">
@@ -341,7 +341,7 @@ export default function PreviewPage() {
       )}
 
       {/* ── Onboarding ── */}
-      <section className="mx-auto max-w-3xl px-5 py-16">
+      <section className="mx-auto max-w-3xl px-5 py-10 sm:py-16">
         <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-widest text-slate-500">
           How it works
         </p>
@@ -359,7 +359,7 @@ export default function PreviewPage() {
       </section>
 
       {/* ── Footer ── */}
-      <footer className="border-t border-slate-800/60 py-10">
+      <footer className="border-t border-slate-800/60 pb-[max(env(safe-area-inset-bottom),_2.5rem)] pt-10">
         <div className="mx-auto max-w-6xl px-5">
           {/* Social links */}
           {siteConfig && Object.values(siteConfig.socialLinks).some(Boolean) && (

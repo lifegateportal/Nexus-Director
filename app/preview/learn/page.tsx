@@ -133,6 +133,8 @@ export default function LearnPage() {
   const [completedLessons, setCompletedLessons] = useState<Set<string>>(new Set());
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<DraftLesson | null>(null);
+  // Mobile: toggle between lesson list and lesson content
+  const [mobileView, setMobileView] = useState<"list" | "content">("list");
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // Build a flat ordered list of all lessons with start + end times in seconds
@@ -312,6 +314,7 @@ export default function LearnPage() {
   function selectLesson(lesson: Lesson) {
     setActiveLesson(lesson);
     setSelectedAnswers([]);
+    setMobileView("content");
     if (videoRef.current && lesson.type === "video") {
       const seg = timestamps.get(lesson.title);
       if (seg) {
@@ -365,7 +368,7 @@ export default function LearnPage() {
         </div>
       )}
 
-      <div className="mx-auto flex w-full max-w-7xl flex-1 gap-0 px-0 sm:gap-5 sm:px-4 sm:py-6">
+      <div className="mx-auto flex w-full max-w-7xl flex-1 gap-0 px-0 pb-[max(env(safe-area-inset-bottom),_1rem)] sm:gap-5 sm:px-4 sm:py-6">
 
         {/* ── Module sidebar ── */}
         <aside className="hidden w-64 flex-shrink-0 sm:block">
@@ -396,13 +399,16 @@ export default function LearnPage() {
           </nav>
         </aside>
 
+        {/* ── Content column (mobile tabs + lesson list/viewer stacked) ── */}
+        <div className="flex min-w-0 flex-1 flex-col">
+
         {/* ── Mobile module tabs ── */}
         <div className="flex gap-2 overflow-x-auto px-4 py-3 sm:hidden">
           {academy.curriculum.map((m, mi) => (
             <button
               key={mi}
               type="button"
-              onClick={() => { setActiveModule(mi); setActiveLesson(m.lessons[0] ?? null); }}
+              onClick={() => { setActiveModule(mi); setActiveLesson(m.lessons[0] ?? null); setMobileView("list"); }}
               className={`flex-shrink-0 rounded-xl border px-4 py-2 text-sm font-medium transition ${
                 activeModule === mi
                   ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-300"
@@ -416,9 +422,7 @@ export default function LearnPage() {
 
         {/* ── Lesson list + viewer ── */}
         <div className="flex min-w-0 flex-1 flex-col gap-4 px-4 sm:flex-row sm:px-0">
-
-          {/* Lesson list */}
-          <div className="w-full sm:w-72 flex-shrink-0">
+          <div className={`w-full sm:block sm:w-72 flex-shrink-0 ${mobileView === "content" ? "hidden" : "block"}`}>
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-slate-500">
               {mod.moduleTitle}
             </p>
@@ -467,7 +471,15 @@ export default function LearnPage() {
 
           {/* Lesson viewer */}
           {activeLesson && (
-            <div className="flex-1 rounded-2xl border border-slate-700/50 bg-slate-900 p-5 sm:p-6">
+            <div className={`flex-1 rounded-2xl border border-slate-700/50 bg-slate-900 p-5 sm:block sm:p-6 ${mobileView === "list" ? "hidden" : "block"}`}>
+              {/* Mobile back-to-lessons button */}
+              <button
+                type="button"
+                onClick={() => setMobileView("list")}
+                className="mb-4 flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-700 px-3 text-sm text-slate-400 transition hover:border-slate-500 hover:text-slate-200 sm:hidden"
+              >
+                ← Lessons
+              </button>
               {/* Lesson type badge */}
               <span className={`mb-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-semibold ${TYPE_COLORS[activeLesson.type] ?? TYPE_COLORS.reading}`}>
                 {TYPE_ICONS[activeLesson.type]} {activeLesson.type}
@@ -687,6 +699,7 @@ export default function LearnPage() {
             </div>
           )}
         </div>
+        </div>{/* end content column */}
       </div>
     </div>
 
