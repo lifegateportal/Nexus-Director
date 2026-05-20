@@ -66,8 +66,8 @@ export default function HomePage() {
   const [chatHistory,     setChatHistory]     = useState<ChatMessage[]>([]);
   const [panelLoadKey,    setPanelLoadKey]    = useState<string>("");
 
-  // Load saved projects from localStorage on mount
-  useEffect(() => { setProjects(listProjects()); }, []);
+  // Load saved projects from IndexedDB on mount
+  useEffect(() => { listProjects().then(setProjects); }, []);
 
   // Populate boot logs client-side only to avoid server/client timestamp mismatch.
   useEffect(() => {
@@ -112,7 +112,7 @@ export default function HomePage() {
     addLog({ level: "success", message: `Director: ${summary}`, model: "curator" });
   }, [addLog]);
 
-  const handleSaveProject = useCallback((name: string) => {
+  const handleSaveProject = useCallback(async (name: string) => {
     const id = currentProjectId || generateProjectId();
     const snapshot: ProjectSnapshot = {
       id,
@@ -127,10 +127,15 @@ export default function HomePage() {
       logicResult: logicResult ?? null,
       uiResult: uiResult ?? null,
     };
-    saveProject(snapshot);
-    setCurrentProjectId(id);
-    setProjects(listProjects());
-    addLog({ level: "success", message: `Project "${name}" saved.` });
+    try {
+      await saveProject(snapshot);
+      setCurrentProjectId(id);
+      setProjects(await listProjects());
+      addLog({ level: "success", message: `Project "${name}" saved.` });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Save failed";
+      addLog({ level: "error", message: `Could not save project: ${msg}` });
+    }
   }, [currentProjectId, projects, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, addLog]);
 
   const handleLoadProject = useCallback((id: string) => {
@@ -154,11 +159,17 @@ export default function HomePage() {
     addLog({ level: "success", message: `Project "${p.name}" loaded.` });
   }, [projects, addLog]);
 
-  const handleDeleteProject = useCallback((id: string) => {
-    deleteProject(id);
-    setProjects(listProjects());
+  const handleDeleteProject = useCallback(async (id: string) => {
+    await deleteProject(id);
+    setProjects(await listProjects());
     if (currentProjectId === id) setCurrentProjectId("");
   }, [currentProjectId]);
+
+  const handleImportProject = useCallback(async (snapshot: ProjectSnapshot) => {
+    await saveProject(snapshot);
+    setProjects(await listProjects());
+    addLog({ level: "success", message: `Project "${snapshot.name}" imported.` });
+  }, [addLog]);
 
   const handleStageChange = useCallback((s: PipelineStage) => {
     setStage(s);
@@ -362,6 +373,7 @@ export default function HomePage() {
                     onSave={handleSaveProject}
                     onLoad={handleLoadProject}
                     onDelete={handleDeleteProject}
+                    onImport={handleImportProject}
                   />
                 ) : activeNav === "deploy" ? (
                   <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
