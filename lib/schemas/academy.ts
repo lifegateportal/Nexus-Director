@@ -35,6 +35,8 @@ export const ProduceInputSchema = z.object({
     })
   ),
   visualDirection: z.string(),
+  rawTranscript: z.string().optional(),
+  deliveryInstructions: z.string().optional(),
 });
 
 export const AcademyPackageSchema = z.object({

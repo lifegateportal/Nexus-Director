@@ -269,12 +269,30 @@ export default function HomePage() {
         })
       });
 
-      if (!produceRes.ok) {
+      if (!produceRes.ok || !produceRes.body) {
         const e = await produceRes.json().catch(() => ({ error: `HTTP ${produceRes.status}` })) as { error?: string; detail?: string };
         throw new Error(e.detail ?? e.error ?? `Produce stage: HTTP ${produceRes.status}`);
       }
 
-      const academyData = AcademyPackageSchema.parse(await produceRes.json() as unknown);
+      // Read SSE stream — route sends ": ping" comments to keep the connection
+      // alive through reverse-proxy timeouts, then one "data: {...}" with the result.
+      const reader = produceRes.body.getReader();
+      const decoder = new TextDecoder();
+      let academyRaw: unknown = null;
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value).split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const parsed = JSON.parse(line.slice(6)) as { error?: string } & Record<string, unknown>;
+          if (parsed.error) throw new Error(parsed.error);
+          academyRaw = parsed;
+          break outer;
+        }
+      }
+
+      if (!academyRaw) throw new Error("Produce stage: empty response from server");
+      const academyData = AcademyPackageSchema.parse(academyRaw);
       setAcademyResult(academyData);
       setActiveNav("produce");
       addLog({
