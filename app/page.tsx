@@ -58,12 +58,14 @@ export default function HomePage() {
 
   // Load persisted state client-side only (avoids SSR hydration mismatch)
   useEffect(() => {
-    listProjects().then(setProjects);
-    setDeliveryInstructions(localStorage.getItem("nexus_delivery_instructions") ?? "");
-    try {
-      const raw = localStorage.getItem("nexus_site_config");
-      if (raw) setSiteConfig(SiteConfigSchema.parse(JSON.parse(raw) as unknown));
-    } catch { /* ignore */ }
+    void (async () => {
+      try { setProjects(await listProjects()); } catch { /* ignore */ }
+      try {
+        setDeliveryInstructions(localStorage.getItem("nexus_delivery_instructions") ?? "");
+        const raw = localStorage.getItem("nexus_site_config");
+        if (raw) setSiteConfig(SiteConfigSchema.parse(JSON.parse(raw) as unknown));
+      } catch { /* ignore */ }
+    })();
   }, []);
 
   // Populate boot logs client-side only to avoid server/client timestamp mismatch.
