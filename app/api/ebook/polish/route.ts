@@ -28,11 +28,11 @@ export async function POST(req: NextRequest) {
 
   try {
     // Send section headings + first 200 chars of each body (not full prose)
-    const sectionsSummary = chapter.sections
+    const sectionsSummary = (chapter.sections ?? [])
       .map((s) => `Section ${s.sectionNumber} — ${s.heading}:\n${(s.body ?? "").slice(0, 200)}…`)
       .join("\n\n");
 
-    const totalWordCount = chapter.sections.reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
+    const totalWordCount = (chapter.sections ?? []).reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
 
     // Trim VoiceDNA to key fields only to keep the prompt small and response fast
     const voiceDNASlim = {
