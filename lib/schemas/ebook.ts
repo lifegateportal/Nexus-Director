@@ -159,7 +159,7 @@ export const EbookManifestSchema = z.object({
 export const EbookJobStateSchema = z.object({
   jobId: z.string(),
   status: z.enum([
-    "idle", "transcribing", "analyzing", "mapping",
+    "idle", "transcribing", "filtering", "analyzing", "mapping",
     "architecting", "assigning", "writing", "polishing",
     "frontmatter", "exporting", "complete", "failed",
   ]).default("idle"),
@@ -168,6 +168,8 @@ export const EbookJobStateSchema = z.object({
     z.object({ label: z.string(), text: z.string() })
   ).default([]),
   masterTranscript: z.string().default(""),
+  filteredTranscript: z.string().default(""), // teaching-only content after signal filter
+  filterRemovedCount: z.number().default(0),  // number of non-teaching blocks removed
   voiceDNA: VoiceDNASchema.nullable().default(null),
   contentMap: ContentMapSchema.nullable().default(null),
   architecture: BookArchitectureSchema.nullable().default(null),

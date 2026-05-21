@@ -39,14 +39,48 @@ const SynthesisSchema = z.object({
 
 const SEGMENT_SYSTEM = `You are a content analyst extracting teaching segments from a single sermon/teaching recording.
 
-SEGMENT RULES:
-- Identify natural topic shifts as segment boundaries
-- keyPoints: explicit claims made in that segment (not your interpretation)
-- Aim for 3–8 segments per recording, each covering 200–600 words of material
+════════════════════════════════════════════
+SPEAKER-FIDELITY MANDATE — READ FIRST
+════════════════════════════════════════════
+You are cataloguing the SPEAKER'S material only. Every key point you extract must be:
+  - Explicitly stated or demonstrated by the speaker in this transcript
+  - Phrased using the speaker's own words and concepts
+  - Directly observable in the provided text — not inferred, interpolated, or generalized
 
-SCRIPTURE / QUOTE DETECTION: For every scripture or quote mentioned:
+YOU MUST NOT:
+  - Add points the speaker did not make
+  - Summarize away nuance or add editorial framing
+  - Introduce theological, doctrinal, or practical concepts not in the transcript
+  - Merge ideas from outside the recording to "fill gaps"
+
+════════════════════════════════════════════
+NON-TEACHING CONTENT — SKIP ENTIRELY
+════════════════════════════════════════════
+Do NOT create segments from:
+  - Opening or closing prayers / benedictions
+  - Announcements, event notices, giving appeals, offering moments
+  - "Good morning", "welcome", "turn to your neighbor" instructions
+  - Altar calls or sinner's prayer recitations
+  - Technical interruptions (mic check, applause breaks)
+  - Jokes or stories with no direct teaching application
+  - Any content already stripped by the signal filter
+
+If such content appears in the transcript, mark the segment topic as "[NON-TEACHING — SKIP]"
+and set estimatedWordCount to 0. The architect will discard these automatically.
+
+════════════════════════════════════════════
+SEGMENT RULES
+════════════════════════════════════════════
+- Identify natural topic shifts as segment boundaries
+- keyPoints: exact claims made in that segment — use the speaker's own words
+- Aim for 3–8 segments per recording, each covering 200–600 words of teaching material
+
+════════════════════════════════════════════
+SCRIPTURE / QUOTE DETECTION
+════════════════════════════════════════════
+For every scripture or quote mentioned:
 - type: "scripture" | "quote" | "proverb"
-- text: exact words spoken
+- text: exact words as spoken
 - reference: "Book Ch:V" for scripture, "Author, Source" for quotes, "" otherwise
 - translation: NIV / KJV / ESV etc., "" if not stated
 - isBlockQuote: true if 40+ words
@@ -140,7 +174,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 3. Synthesise themes/arc from segment topics only (no rawText) ──────
-    const topicSummary = allSegments
+    // Strip any non-teaching segments the LLM flagged before synthesis and export
+    const teachingSegments = allSegments.filter(
+      (s) => !s.topic.includes("[NON-TEACHING") && s.estimatedWordCount > 0
+    );
+
+    const topicSummary = teachingSegments
       .map((s) => `- [${s.sourceAudio}] ${s.topic}: ${s.keyPoints.join("; ")}`)
       .join("\n");
 
@@ -149,13 +188,13 @@ export async function POST(req: NextRequest) {
       schema: SynthesisSchema,
       mode: "tool",
       temperature: 0.2,
-      system: `You are a senior editor identifying the overarching message of a multi-part teaching series.`,
+      system: `You are a senior editor identifying the overarching message of a multi-part teaching series.\nBase your synthesis ONLY on what the speaker explicitly taught — do not add external theological context.`,
       prompt: `Based on these teaching segment topics, identify the overall themes and teaching arc.\n\n${topicSummary}`,
     });
 
     const contentMap = {
       ...synthesis,
-      segments: allSegments,
+      segments: teachingSegments,
       allQuotes,
     };
 

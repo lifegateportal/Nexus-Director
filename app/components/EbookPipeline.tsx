@@ -24,6 +24,7 @@ import type {
 type PipelineStage =
   | "idle"
   | "transcribing"
+  | "filtering"
   | "analyzing"
   | "mapping"
   | "architecting"
@@ -38,6 +39,7 @@ type PipelineStage =
 const STAGE_LABELS: Record<PipelineStage, string> = {
   idle: "Ready",
   transcribing: "Transcribing audio…",
+  filtering: "Filtering signal…",
   analyzing: "Extracting voice DNA…",
   mapping: "Mapping content…",
   architecting: "Designing chapters…",
@@ -51,7 +53,7 @@ const STAGE_LABELS: Record<PipelineStage, string> = {
 };
 
 const STAGE_ORDER: PipelineStage[] = [
-  "idle", "transcribing", "analyzing", "mapping", "architecting",
+  "idle", "transcribing", "filtering", "analyzing", "mapping", "architecting",
   "assigning", "writing", "polishing", "frontmatter", "exporting", "complete",
 ];
 
@@ -266,6 +268,7 @@ function AudioCard({
 
 const STAGE_STEPS: { key: PipelineStage; label: string; description: string }[] = [
   { key: "transcribing", label: "Transcribe",   description: "Converting audio to text via Deepgram nova-2" },
+  { key: "filtering",    label: "Signal Filter", description: "Stripping prayers, announcements, and non-teaching content from transcript" },
   { key: "analyzing",    label: "Voice DNA",    description: "Extracting author's signature phrases, tone, and teaching style" },
   { key: "mapping",      label: "Content Map",  description: "Inventorying every teaching segment, scripture, and quote" },
   { key: "architecting", label: "Chapters",     description: "Designing chapter and section structure from the content" },
@@ -499,7 +502,7 @@ function readTextFile(file: File): Promise<string> {
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // stores jobId (for IndexedDB)
 const JOB_STATE_KEY = "nexus_ebook_job_state";    // stores full state as JSON (primary)
 
-export function EbookPipeline() {
+export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest: EbookManifest) => void } = {}) {
   const [audioFiles, setAudioFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
   const [transcriptFiles, setTranscriptFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
   const [stage, setStage] = useState<PipelineStage>("idle");
@@ -727,17 +730,47 @@ export function EbookPipeline() {
         addLog(`Master transcript assembled — ${countWords(masterTranscript).toLocaleString()} raw words`);
         acc.masterTranscript = masterTranscript;
         acc.transcripts = transcriptResults;
-        await checkpoint("analyzing");
+        await checkpoint("filtering");
       } else {
         addLog(`↩ Resuming — transcript available (${countWords(masterTranscript).toLocaleString()} words)`);
       }
 
-      // ── Stage 2: Voice DNA ───────────────────────────────────────────────
+      // ── Stage 2: Signal Filter — strip prayers, announcements, housekeeping ─
+      let filteredTranscript = (acc as EbookJobState & { filteredTranscript?: string }).filteredTranscript ?? "";
+      if (!filteredTranscript) {
+        setStage("filtering");
+        addLog("Filtering signal — removing non-teaching content…");
+        try {
+          type FilterResult = { cleanedTranscript: string; removedSegments: { reason: string; excerpt: string }[]; summary: string };
+          const filterResult = await postJson<FilterResult>("/api/ebook/filter-signal", { masterTranscript });
+          filteredTranscript = filterResult.cleanedTranscript || masterTranscript;
+          const removedCount = filterResult.removedSegments.length;
+          if (removedCount > 0) {
+            addLog(`✓ Signal filtered — removed ${removedCount} non-teaching block${removedCount !== 1 ? "s" : ""}: ${filterResult.summary}`);
+          } else {
+            addLog("✓ Signal filter complete — no non-teaching content found");
+          }
+          (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = filteredTranscript;
+          (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filterRemovedCount = removedCount;
+        } catch (filterErr) {
+          // Non-fatal: if filtering fails, proceed with the raw transcript
+          filteredTranscript = masterTranscript;
+          addLog(`⚠ Signal filter unavailable — using raw transcript (${filterErr instanceof Error ? filterErr.message : "unknown error"})`);
+        }
+        await checkpoint("analyzing");
+      } else {
+        addLog(`↩ Resuming — filtered transcript available (${countWords(filteredTranscript).toLocaleString()} teaching words)`);
+      }
+
+      // Use filtered transcript for all downstream steps
+      const teachingTranscript = filteredTranscript || masterTranscript;
+
+      // ── Stage 3: Voice DNA ───────────────────────────────────────────
       let voiceDNA = acc.voiceDNA;
       if (!voiceDNA) {
         setStage("analyzing");
         addLog("Extracting Voice DNA…");
-        voiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript });
+        voiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript });
         addLog(`✓ Voice DNA captured — tone: ${voiceDNA.toneProfile}`);
         acc.voiceDNA = voiceDNA;
         await checkpoint("mapping");
@@ -745,12 +778,12 @@ export function EbookPipeline() {
         addLog(`↩ Resuming — voice DNA available`);
       }
 
-      // ── Stage 3: Content Map ─────────────────────────────────────────────
+      // ── Stage 4: Content Map ─────────────────────────────────────────────
       let contentMap = acc.contentMap;
       if (!contentMap) {
         setStage("mapping");
         addLog("Mapping content segments…");
-        contentMap = await postJson<ContentMap>("/api/ebook/content-map", { masterTranscript, voiceDNA });
+        contentMap = await postJson<ContentMap>("/api/ebook/content-map", { masterTranscript: teachingTranscript, voiceDNA });
         addLog(`✓ Content mapped — ${contentMap.segments.length} segments, ${contentMap.allQuotes.length} scriptures/quotes`);
         acc.contentMap = contentMap;
         await checkpoint("architecting");
@@ -758,7 +791,7 @@ export function EbookPipeline() {
         addLog(`↩ Resuming — content map available (${contentMap.segments.length} segments)`);
       }
 
-      // ── Stage 4: Architect ───────────────────────────────────────────────
+      // ── Stage 5: Architect ───────────────────────────────────────────────
       let architecture = acc.architecture;
       if (!architecture) {
         setStage("architecting");
@@ -1000,6 +1033,8 @@ export function EbookPipeline() {
       acc.chapters = polishedChapters;
       await checkpoint("complete");
       setStage("complete");
+      // Notify parent so the Nexus Assistant can take over for post-production edits
+      onManifestReady?.(manifest);
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";

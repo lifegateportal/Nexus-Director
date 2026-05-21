@@ -27,12 +27,19 @@ export async function POST(req: NextRequest) {
   const { input: chapter } = input;
 
   try {
-    // Send section headings + first 300 chars of each body (not full prose)
+    // Send section headings + first 200 chars of each body (not full prose)
     const sectionsSummary = chapter.sections
-      .map((s) => `Section ${s.sectionNumber} — ${s.heading}:\n${s.body.slice(0, 300)}…`)
+      .map((s) => `Section ${s.sectionNumber} — ${s.heading}:\n${s.body.slice(0, 200)}…`)
       .join("\n\n");
 
     const totalWordCount = chapter.sections.reduce((acc, s) => acc + s.wordCount, 0);
+
+    // Trim VoiceDNA to key fields only to keep the prompt small and response fast
+    const voiceDNASlim = {
+      signaturePhrases: chapter.voiceDNA.signaturePhrases.slice(0, 6),
+      toneMarkers: chapter.voiceDNA.toneMarkers.slice(0, 4),
+      avoidWords: chapter.voiceDNA.avoidWords.slice(0, 6),
+    };
 
     const { object } = await generateObject({
       model: deepSeekModel,
@@ -51,7 +58,7 @@ Your tasks:
 4. REFLECTION QUESTIONS: 3–4 questions arising naturally from what the author actually taught.
 
 VOICE: Use the author's signature phrases and tone. Do not use words in the avoidWords list.`,
-      prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(chapter.voiceDNA)}\n\nSECTION SUMMARIES:\n${sectionsSummary}`,
+      prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}`,
     });
 
     // Merge: preserve section bodies that were already written

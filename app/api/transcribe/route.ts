@@ -21,14 +21,25 @@ export async function POST(request: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const mimeType = file.type || "audio/mpeg";
+    // Map video containers to their audio equivalent so Deepgram accepts them.
+    // iOS Files app reports MP4 sermon recordings as video/mp4 or video/quicktime.
+    const VIDEO_TO_AUDIO: Record<string, string> = {
+      "video/mp4": "audio/mp4",
+      "video/quicktime": "audio/mp4",
+      "video/x-m4v": "audio/mp4",
+      "video/webm": "audio/webm",
+      "video/ogg": "audio/ogg",
+      "video/x-matroska": "audio/webm",
+    };
+    const rawMime = file.type || "";
+    const mimeType = VIDEO_TO_AUDIO[rawMime] ?? (rawMime || "audio/mpeg");
 
     const deepgram = createClient(env.DEEPGRAM_API_KEY);
 
     const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
       buffer,
       {
-        model: "nova-3",
+        model: "nova-2",
         smart_format: true,
         punctuate: true,
         paragraphs: true,

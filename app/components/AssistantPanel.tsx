@@ -3,8 +3,10 @@
 import { useState, useRef, useEffect } from "react";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
+import { EbookManifestSchema } from "@/lib/schemas/ebook";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import type { SiteConfig } from "@/lib/schemas/site-config";
+import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChatMessage } from "@/lib/project-store";
 
 type Message = ChatMessage;
@@ -16,15 +18,18 @@ type AssistantPanelProps = {
   onUpdate: (academy: AcademyPackage, summary: string) => void;
   siteConfig: SiteConfig;
   onSiteUpdate: (config: SiteConfig, summary: string) => void;
+  /** Ebook manifest — when present, enables book production control */
+  ebookManifest?: EbookManifest | null;
+  onEbookUpdate?: (manifest: EbookManifest, summary: string) => void;
   /** When a project is loaded, pass its saved messages + a new loadKey to restore chat */
   loadedHistory?: Message[];
   loadKey?: string;
   onChatChange?: (msgs: Message[]) => void;
 };
 
-const IDLE_HINT = "No academy loaded yet. Run the pipeline first, then I can help you make changes.";
+const IDLE_HINT = "No content loaded yet. Run the pipeline first, then I can help you make changes.";
 
-export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
+export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate, ebookManifest, onEbookUpdate, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     { role: "system", content: IDLE_HINT },
   ]);
@@ -41,10 +46,15 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadKey]);
 
-  // Update greeting when academy first loads (only if no project history was restored)
+  // Update greeting when academy or ebook first loads (only if no project history was restored)
   useEffect(() => {
     if (loadKey) return; // project load handles its own history
-    if (academy) {
+    if (ebookManifest) {
+      setMessages([{
+        role: "system",
+        content: `Book loaded: "${ebookManifest.bookTitle}" by ${ebookManifest.authorName} — ${ebookManifest.chapters.length} chapters, ${ebookManifest.totalWordCount.toLocaleString()} words.\n\nYou can ask me to change the title, rename chapters, edit section headings, update takeaways, revise the preface, and more.`,
+      }]);
+    } else if (academy) {
       const lessonCount = academy.curriculum.flatMap((m) => m.lessons).length;
       setMessages([{
         role: "system",
@@ -54,7 +64,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
       setMessages([{ role: "system", content: IDLE_HINT }]);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [!!academy]);
+  }, [!!academy, !!ebookManifest]);
 
   // Notify parent whenever messages change so it can persist them
   useEffect(() => {
@@ -78,11 +88,12 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
     const text = input.trim();
     if (!text || loading) return;
 
-    if (!academy) {
+    const hasContent = academy || ebookManifest;
+    if (!hasContent) {
       setMessages((prev) => [
         ...prev,
         { role: "user", content: text },
-        { role: "assistant", content: "Run the pipeline first so I have an academy to edit." },
+        { role: "assistant", content: "Run the pipeline first so I have content to edit." },
       ]);
       setInput("");
       return;
@@ -93,6 +104,28 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
     setLoading(true);
 
     try {
+      // ── Route to ebook assistant when a book manifest is loaded ────────────
+      if (ebookManifest && onEbookUpdate) {
+        const res = await fetch("/api/ebook/assistant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ manifest: ebookManifest, instruction: text }),
+        });
+        const json = await res.json() as { manifest?: unknown; summary?: string; error?: string };
+        if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+        const parsed = EbookManifestSchema.safeParse(json.manifest);
+        if (!parsed.success) throw new Error("Invalid ebook manifest returned from assistant");
+        onEbookUpdate(parsed.data, json.summary ?? "Book updated.");
+        setMessages((prev) => [...prev, { role: "assistant", content: json.summary ?? "Done." }]);
+        return;
+      }
+
+      // ── Academy assistant (existing path) ──────────────────────────────────
+      if (!academy) {
+        setMessages((prev) => [...prev, { role: "assistant", content: "No academy loaded." }]);
+        return;
+      }
+
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -154,7 +187,11 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-800 px-4 py-4">
           <div>
             <p className="text-sm font-bold text-slate-100">Nexus Director AI</p>
-            <p className="text-[11px] text-slate-500">Edit your academy with natural language</p>
+            <p className="text-[11px] text-slate-500">
+              {ebookManifest
+                ? "Edit your book with natural language"
+                : "Edit your academy with natural language"}
+            </p>
           </div>
           <button
             type="button"
@@ -166,8 +203,51 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
           </button>
         </div>
 
-        {/* Suggestion chips */}
-        {academy && (
+        {/* Suggestion chips — ebook mode */}
+        {ebookManifest && (
+          <div className="flex-shrink-0 border-b border-slate-800 px-3 py-2.5">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Book Metadata</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {[
+                "Change the book title",
+                "Update the subtitle",
+                "Revise the preface",
+                "Rewrite the introduction",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-500/40 hover:text-cyan-300"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Chapters</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {[
+                "Rename chapter 1",
+                "Add a key takeaway to chapter 1",
+                "Replace the reflection questions in chapter 1",
+                "Edit the intro of chapter 1",
+                "Edit the conclusion of chapter 1",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Suggestion chips — academy mode */}
+        {academy && !ebookManifest && (
           <div className="flex-shrink-0 border-b border-slate-800 px-3 py-2.5">
             <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Content</p>
             <div className="flex gap-1.5 overflow-x-auto pb-1">
