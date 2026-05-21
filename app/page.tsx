@@ -10,6 +10,7 @@ import { PipelineResults } from "@/app/components/PipelineResults";
 import { PromptBar } from "@/app/components/PromptBar";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { ProjectsPanel } from "@/app/components/ProjectsPanel";
+import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { LogicTransformResultSchema } from "@/lib/schemas/blueprint";
 import { UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
@@ -328,6 +329,7 @@ export default function HomePage() {
     produce:   "academy",
     deploy:    null,
     projects:  null,
+    ebook:     null,
   };
   const focusedTab = NAV_TAB[activeNav] ?? undefined;
   const isFocused = activeNav !== "overview";
@@ -374,6 +376,10 @@ export default function HomePage() {
                     onDelete={handleDeleteProject}
                     onImport={handleImportProject}
                   />
+                ) : activeNav === "ebook" ? (
+                  <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
+                    <EbookPipeline />
+                  </div>
                 ) : activeNav === "deploy" ? (
                   <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Deploy</p>

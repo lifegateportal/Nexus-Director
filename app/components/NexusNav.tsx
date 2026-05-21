@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 
-type NavItem = { id: string; label: string };
+type NavItem = { id: string; label: string; href?: string };
 
 const NAV_ITEMS: NavItem[] = [
   { id: "overview",  label: "Overview"  },
@@ -11,7 +13,8 @@ const NAV_ITEMS: NavItem[] = [
   { id: "design",    label: "Design"    },
   { id: "produce",   label: "Produce"   },
   { id: "deploy",    label: "Deploy"    },
-  { id: "projects",  label: "Projects"  }
+  { id: "projects",  label: "Projects"  },
+  { id: "ebook",     label: "Ebook"     },
 ];
 
 /** Overview — mission control hub */
@@ -88,7 +91,18 @@ function IconProjects() {
   );
 }
 
-const NAV_ICONS = [IconGrid, IconEye, IconCode, IconLayout, IconFilm, IconDeploy, IconProjects];
+/** Ebook — audio to ebook production */
+function IconEbook() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 7h7M9 11h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+const NAV_ICONS = [IconGrid, IconEye, IconCode, IconLayout, IconFilm, IconDeploy, IconProjects, IconEbook];
 
 type NexusNavProps = {
   active: string;
@@ -96,6 +110,7 @@ type NexusNavProps = {
 };
 
 export function NexusNav({ active, onSelect }: NexusNavProps) {
+  const pathname = usePathname();
   const LogoMark = () => (
     <div
       className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 ring-1 ring-cyan-400/50"
@@ -120,7 +135,34 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         <div className="flex flex-col gap-1">
           {NAV_ITEMS.map((item, i) => {
             const Icon = NAV_ICONS[i];
-            const isActive = active === item.id;
+            const isActive = item.href ? pathname.startsWith(item.href) : active === item.id;
+            const btnClass = [
+              "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
+              isActive
+                ? "bg-gradient-to-br from-cyan-500/25 to-violet-500/15 text-cyan-300 ring-1 ring-cyan-400/40"
+                : "text-slate-500 hover:bg-slate-700/40 hover:text-slate-200 active:bg-slate-700/60"
+            ].join(" ");
+            const indicator = isActive ? (
+              <span
+                className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r-full bg-cyan-400"
+                style={{ boxShadow: "0 0 6px rgba(6,182,212,0.80)" }}
+              />
+            ) : null;
+            if (item.href) {
+              return (
+                <Link
+                  key={item.id}
+                  href={item.href}
+                  aria-label={item.label}
+                  aria-current={isActive ? "page" : undefined}
+                  className={btnClass}
+                  style={isActive ? { boxShadow: "0 0 12px rgba(6,182,212,0.20)" } : undefined}
+                >
+                  {indicator}
+                  <Icon />
+                </Link>
+              );
+            }
             return (
               <button
                 key={item.id}
@@ -128,20 +170,10 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
                 onClick={() => onSelect(item.id)}
                 aria-label={item.label}
                 aria-current={isActive ? "page" : undefined}
-                className={[
-                  "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
-                  isActive
-                    ? "bg-gradient-to-br from-cyan-500/25 to-violet-500/15 text-cyan-300 ring-1 ring-cyan-400/40"
-                    : "text-slate-500 hover:bg-slate-700/40 hover:text-slate-200 active:bg-slate-700/60"
-                ].join(" ")}
+                className={btnClass}
                 style={isActive ? { boxShadow: "0 0 12px rgba(6,182,212,0.20)" } : undefined}
               >
-                {isActive && (
-                  <span
-                    className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r-full bg-cyan-400"
-                    style={{ boxShadow: "0 0 6px rgba(6,182,212,0.80)" }}
-                  />
-                )}
+                {indicator}
                 <Icon />
               </button>
             );
@@ -175,16 +207,9 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         {NAV_ITEMS.filter((item) => item.id !== "overview").map((item, i) => {
           // offset by 1 because we skipped overview (index 0)
           const Icon = NAV_ICONS[i + 1];
-          const isActive = active === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelect(item.id)}
-              aria-label={item.label}
-              aria-current={isActive ? "page" : undefined}
-              className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
-            >
+          const isActive = item.href ? pathname.startsWith(item.href) : active === item.id;
+          const inner = (
+            <>
               <span className={isActive ? "text-cyan-400" : "text-slate-500"}>
                 <Icon />
               </span>
@@ -197,6 +222,31 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
                   style={{ boxShadow: "0 0 6px rgba(6,182,212,0.80)" }}
                 />
               )}
+            </>
+          );
+          if (item.href) {
+            return (
+              <Link
+                key={item.id}
+                href={item.href}
+                aria-label={item.label}
+                aria-current={isActive ? "page" : undefined}
+                className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
+              >
+                {inner}
+              </Link>
+            );
+          }
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item.id)}
+              aria-label={item.label}
+              aria-current={isActive ? "page" : undefined}
+              className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
+            >
+              {inner}
             </button>
           );
         })}
