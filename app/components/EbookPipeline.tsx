@@ -1235,6 +1235,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
 
     } catch (err) {
       const msg = err instanceof Error && err.message.trim() ? err.message : "Pipeline failed";
+      const failedStage = acc.currentStage || stage || "transcribing";
       // Log full stack to browser console for debugging
       console.error("[EbookPipeline] runPipeline crash:", err);
       const stackHint = err instanceof Error && err.stack
@@ -1242,9 +1243,10 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         : "";
       setError(msg + stackHint);
       acc.status = "failed";
-      acc.currentStage = "failed";
+      acc.currentStage = failedStage;
       acc.errorLog = logRef.current;
       acc.updatedAt = new Date().toISOString();
+      try { localStorage.setItem(JOB_STATE_KEY, JSON.stringify(acc)); } catch { /* ignore */ }
       try { await saveEbookJob({ ...acc }); } catch { /* ignore */ }
       // Update savedJobRef so the Resume button has the partial state
       savedJobRef.current = { ...acc };
@@ -1383,9 +1385,9 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
                 setSignalFilterState(parseSignalFilterLog(saved.errorLog ?? []).state);
                 setSignalFilterDetail(parseSignalFilterLog(saved.errorLog ?? []).detail);
                 // Determine which stage to label the resume from
-                const resumeStage = saved.contentMap
+                const resumeStage = saved.currentStage || (saved.contentMap
                   ? saved.architecture ? "writing" : "architecting"
-                  : saved.voiceDNA ? "content mapping" : "voice DNA";
+                  : saved.voiceDNA ? "content mapping" : "voice DNA");
                 addLog(`↩ Resuming from ${resumeStage}…`);
                 void runPipeline(saved);
               }}
@@ -1393,6 +1395,13 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
             >
               {(() => {
                 const saved = savedJobRef.current!;
+                if (saved.currentStage === "writing") return `Resume — continue writing (${saved.sections.length} / ${saved.sectionAssignments.length} sections done)`;
+                if (saved.currentStage === "frontmatter") return "Resume — retry from Front Matter";
+                if (saved.currentStage === "polishing") return "Resume — retry from Polish";
+                if (saved.currentStage === "assigning") return "Resume — retry from Assign Segments";
+                if (saved.currentStage === "architecting") return "Resume — retry from Chapter Design";
+                if (saved.currentStage === "mapping") return "Resume — retry from Content Map";
+                if (saved.currentStage === "analyzing") return "Resume — retry from Voice DNA";
                 if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
                 if (!saved.contentMap) return "Resume — retry from Content Map";
                 if (!saved.architecture) return "Resume — retry from Chapter Design";
