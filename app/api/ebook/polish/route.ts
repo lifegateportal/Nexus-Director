@@ -15,6 +15,33 @@ const PolishOutputSchema = z.object({
   reflectionQuestions: z.array(z.string()).default([]),
 });
 
+function fallbackPolish(chapter: z.infer<typeof PolishChapterRequestSchema>["input"], safeSections: Array<z.infer<typeof z.object({
+  chapterNumber: z.ZodNumber;
+  sectionNumber: z.ZodNumber;
+  heading: z.ZodString;
+  body: z.ZodString;
+  wordCount: z.ZodNumber;
+  status: z.ZodEnum<{ pending: "pending"; writing: "writing"; complete: "complete"; failed: "failed" }>;
+})>>) {
+  const nonEmptyBodies = safeSections
+    .map((section) => section.body.trim())
+    .filter(Boolean);
+
+  const introSource = nonEmptyBodies[0] ?? "";
+  const conclusionSource = nonEmptyBodies[nonEmptyBodies.length - 1] ?? introSource;
+  const keyTakeaways = safeSections
+    .map((section) => section.heading.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+
+  return {
+    intro: introSource.split(/\n{2,}/)[0] ?? "",
+    conclusion: conclusionSource.split(/\n{2,}/).slice(-1)[0] ?? "",
+    keyTakeaways,
+    reflectionQuestions: keyTakeaways.slice(0, 3).map((heading) => `How does ${heading.toLowerCase()} shape your response?`),
+  };
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input;
@@ -35,14 +62,13 @@ export async function POST(req: NextRequest) {
     toneMarkers: (chapter.voiceDNA as { toneMarkers?: string[] } | undefined)?.toneMarkers ?? [],
     avoidWords: chapter.voiceDNA?.avoidWords ?? [],
   };
+  const totalWordCount = safeSections.reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
 
   try {
     // Send section headings + first 200 chars of each body (not full prose)
     const sectionsSummary = safeSections
       .map((s) => `Section ${s.sectionNumber} — ${s.heading}:\n${(s.body ?? "").slice(0, 200)}…`)
       .join("\n\n");
-
-    const totalWordCount = safeSections.reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
 
     // Trim VoiceDNA to key fields only to keep the prompt small and response fast
     const voiceDNASlim = {
@@ -83,13 +109,19 @@ VOICE: Use the author's signature phrases and tone. Do not use words in the avoi
 
     return NextResponse.json(merged, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Chapter polish failed";
+    const fallback = fallbackPolish(chapter, safeSections);
     return NextResponse.json({
-      route: "ebook/polish",
-      error: message,
+      ...fallback,
+      number: chapter.number,
+      title: chapter.title,
+      sections: safeSections,
+      totalWordCount,
+      status: "complete" as const,
+      fallback: true,
+      error: err instanceof Error && err.message.trim() ? err.message : "Chapter polish used fallback",
       details: err instanceof Error && err.stack
         ? err.stack.split("\n").slice(0, 3).join(" | ")
         : undefined,
-    }, { status: 500 });
+    }, { status: 200 });
   }
 }
