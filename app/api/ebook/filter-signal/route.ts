@@ -38,7 +38,13 @@ export async function POST(req: NextRequest) {
     input = RequestSchema.parse(body);
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Invalid input" },
+      {
+        route: "ebook/filter-signal",
+        error: err instanceof Error ? err.message : "Invalid input",
+        details: err instanceof Error && err.stack
+          ? err.stack.split("\n").slice(0, 2).join(" | ")
+          : undefined,
+      },
       { status: 400 }
     );
   }
@@ -114,7 +120,13 @@ If no closing non-teaching is found, set teachingEndPhrase to the last teaching 
     }, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Signal filter failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({
+      route: "ebook/filter-signal",
+      error: message,
+      details: err instanceof Error && err.stack
+        ? err.stack.split("\n").slice(0, 3).join(" | ")
+        : undefined,
+    }, { status: 500 });
   }
 }
 

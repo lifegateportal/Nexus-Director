@@ -56,19 +56,49 @@ const STAGE_ORDER: PipelineStage[] = [
   "idle", "transcribing", "filtering", "analyzing", "mapping", "architecting",
   "assigning", "writing", "polishing", "frontmatter", "exporting", "complete",
 ];
+type SignalFilterState = "idle" | "applied" | "skipped";
+
+function routeLabel(url: string): string {
+  return url.split("/").filter(Boolean).slice(-2).join("/");
+}
+
+function parseSignalFilterLog(logEntries: string[]): { state: SignalFilterState; detail: string | null } {
+  const relevant = [...logEntries].reverse().find(
+    (entry) => entry.includes("Signal filter unavailable") || entry.includes("Signal filtered") || entry.includes("Signal filter complete")
+  );
+  if (!relevant) return { state: "idle", detail: null };
+  const message = relevant.replace(/^\[[^\]]+\]\s*/, "");
+  if (message.includes("Signal filter unavailable")) {
+    return { state: "skipped", detail: message };
+  }
+  return { state: "applied", detail: message };
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> {
+  const route = routeLabel(url);
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      const cause = err instanceof Error ? err.message : "Unknown network failure";
+      throw new Error([`Request failed: ${route}`, `Cause: ${cause}`].join("\n"));
+    }
     if (!res.ok) {
-      const err = await res.json().catch(() => ({})) as { error?: string };
-      const msg = err.error || `HTTP ${res.status} error from ${url.split("/").pop()}`;
+      const rawText = await res.text();
+      let err: { error?: string; details?: string; route?: string } = {};
+      try {
+        err = rawText ? JSON.parse(rawText) as { error?: string; details?: string; route?: string } : {};
+      } catch {
+        err = rawText ? { details: rawText } : {};
+      }
+      const msg = err.error || `HTTP ${res.status} error from ${route}`;
       // Retry once on transient gateway/auth errors (Codespaces proxy warm-up or LLM timeout)
       if (attempt < retries && (res.status === 401 || res.status === 502 || res.status === 503 || res.status === 504)) {
         await new Promise<void>((r) => setTimeout(r, 3000));
@@ -78,11 +108,16 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
       if (res.status === 401) {
         throw new Error("Session expired or API key invalid — please refresh the page and try again");
       }
-      throw new Error(msg);
+      throw new Error([
+        `Request failed: ${err.route || route}`,
+        `Status: ${res.status} ${res.statusText}`,
+        `Error: ${msg}`,
+        err.details ? `Details: ${err.details}` : "",
+      ].filter(Boolean).join("\n"));
     }
     return res.json() as Promise<T>;
   }
-  throw new Error(`Request failed after retries: ${url.split("/").pop()}`);
+  throw new Error(`Request failed after retries: ${route}`);
 }
 
 async function streamSection(assignment: SectionAssignment): Promise<string> {
@@ -269,7 +304,17 @@ function resolveActiveStep(current: PipelineStage): PipelineStage {
   return current;
 }
 
-function EbookStageTracker({ current, progress }: { current: PipelineStage; progress: { total: number; completed: number } }) {
+function EbookStageTracker({
+  current,
+  progress,
+  signalFilterState,
+  signalFilterDetail,
+}: {
+  current: PipelineStage;
+  progress: { total: number; completed: number };
+  signalFilterState: SignalFilterState;
+  signalFilterDetail: string | null;
+}) {
   const currentIdx = STAGE_ORDER.indexOf(current);
   const activeKey = resolveActiveStep(current);
   const activeStep = STAGE_STEPS.find((s) => s.key === activeKey);
@@ -308,19 +353,22 @@ function EbookStageTracker({ current, progress }: { current: PipelineStage; prog
           const idx = STAGE_ORDER.indexOf(step.key);
           const done   = idx < currentIdx || current === "complete";
           const active = step.key === activeKey && current !== "complete" && current !== "failed" && current !== "idle";
+          const skipped = step.key === "filtering" && signalFilterState === "skipped";
           return (
             <div key={step.key} className="flex items-center gap-1.5">
               <span
                 className={`h-2 w-2 flex-shrink-0 rounded-full transition-all ${
+                  skipped ? "bg-amber-400" :
                   done   ? "bg-emerald-400" :
                   active ? "bg-cyan-400 animate-pulse" :
                            "bg-slate-700"
                 }`}
-                style={done ? { boxShadow: "0 0 6px rgba(52,211,153,0.6)" } :
+                style={skipped ? { boxShadow: "0 0 6px rgba(251,191,36,0.7)" } :
+                       done ? { boxShadow: "0 0 6px rgba(52,211,153,0.6)" } :
                        active ? { boxShadow: "0 0 8px rgba(6,182,212,0.9)" } : undefined}
               />
               <span className={`text-[11px] font-medium transition-colors ${
-                active ? "text-cyan-300" : done ? "text-emerald-400" : "text-slate-600"
+                skipped ? "text-amber-300" : active ? "text-cyan-300" : done ? "text-emerald-400" : "text-slate-600"
               }`}>
                 {step.label}
               </span>
@@ -328,6 +376,15 @@ function EbookStageTracker({ current, progress }: { current: PipelineStage; prog
           );
         })}
       </div>
+
+      {signalFilterState === "skipped" && signalFilterDetail && current !== "failed" && (
+        <div className="border-b border-amber-500/10 bg-amber-500/5 px-4 py-2.5">
+          <p className="text-xs text-amber-300/90 leading-relaxed">
+            Signal filter was skipped. Downstream steps are running on the raw transcript.
+          </p>
+          <p className="mt-1 text-[11px] text-amber-200/70 leading-relaxed break-words">{signalFilterDetail}</p>
+        </div>
+      )}
 
       {/* Active step description */}
       {activeStep && current !== "complete" && current !== "failed" && (
@@ -496,6 +553,8 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
   const [exportUrls, setExportUrls] = useState<{ pdfUrl?: string; epubUrl?: string } | null>(null);
   const [completedManifest, setCompletedManifest] = useState<EbookManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [signalFilterState, setSignalFilterState] = useState<SignalFilterState>("idle");
+  const [signalFilterDetail, setSignalFilterDetail] = useState<string | null>(null);
   const [totalWords, setTotalWords] = useState(0);
   const jobIdRef = useRef<string>(newJobId());
   // Mirror of log in a ref so runPipeline (async) can read the current value for checkpoints
@@ -652,6 +711,9 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
 
     const restore = (job: EbookJobState) => {
       savedJobRef.current = job;
+      const filterInfo = parseSignalFilterLog(job.errorLog ?? []);
+      setSignalFilterState(filterInfo.state);
+      setSignalFilterDetail(filterInfo.detail);
       if (job.chapters.length === 0 && job.status !== "complete" && job.status !== "failed") return;
       jobIdRef.current = job.jobId;
       setStage(job.status as PipelineStage);
@@ -777,6 +839,8 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       logRef.current = [];
       setLog([]);
       setChapters([]);
+      setSignalFilterState("idle");
+      setSignalFilterDetail(null);
       setExportUrls(null);
       setCompletedManifest(null);
       setTotalWords(0);
@@ -867,15 +931,22 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
           } else {
             addLog("✓ Signal filter complete — no non-teaching content found");
           }
+          setSignalFilterState("applied");
+          setSignalFilterDetail(filterResult.summary || null);
           (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = filteredTranscript;
           (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filterRemovedCount = removedCount;
         } catch (filterErr) {
           // Non-fatal: if filtering fails, proceed with the raw transcript
           filteredTranscript = masterTranscript;
-          addLog(`⚠ Signal filter unavailable — using raw transcript (${filterErr instanceof Error ? filterErr.message : "unknown error"})`);
+          const detail = filterErr instanceof Error ? filterErr.message : "unknown error";
+          setSignalFilterState("skipped");
+          setSignalFilterDetail(detail);
+          addLog(`⚠ Signal filter unavailable — using raw transcript (${detail})`);
         }
         await checkpoint("analyzing");
       } else {
+        setSignalFilterState("applied");
+        setSignalFilterDetail(null);
         addLog(`↩ Resuming — filtered transcript available (${countWords(filteredTranscript).toLocaleString()} teaching words)`);
       }
 
@@ -1235,7 +1306,12 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
 
       {/* Stage Tracker */}
       {stage !== "idle" && (
-        <EbookStageTracker current={stage} progress={progress} />
+        <EbookStageTracker
+          current={stage}
+          progress={progress}
+          signalFilterState={signalFilterState}
+          signalFilterDetail={signalFilterDetail}
+        />
       )}
 
       {/* Writing progress ring + word count (shown separately below tracker) */}
@@ -1282,7 +1358,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         <div className="rounded-xl border border-red-500/30 bg-red-500/8 px-4 py-3 space-y-3">
           <div>
             <p className="text-xs font-semibold text-red-400 mb-1">Pipeline Error</p>
-            <p className="text-xs text-red-300/80 leading-relaxed">{error}</p>
+            <pre className="whitespace-pre-wrap break-words font-sans text-xs text-red-300/80 leading-relaxed">{error}</pre>
           </div>
           {/* Resume button — only show when we have partial data to resume from */}
           {savedJobRef.current?.masterTranscript && (
@@ -1291,6 +1367,8 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
               onClick={() => {
                 const saved = savedJobRef.current!;
                 setError(null);
+                setSignalFilterState(parseSignalFilterLog(saved.errorLog ?? []).state);
+                setSignalFilterDetail(parseSignalFilterLog(saved.errorLog ?? []).detail);
                 // Determine which stage to label the resume from
                 const resumeStage = saved.contentMap
                   ? saved.architecture ? "writing" : "architecting"
@@ -1317,6 +1395,8 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
             onClick={() => {
               setStage("idle");
               setError(null);
+              setSignalFilterState("idle");
+              setSignalFilterDetail(null);
               setChapters([]);
               setLog([]);
               logRef.current = [];
