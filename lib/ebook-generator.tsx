@@ -1,20 +1,154 @@
 /**
  * ebook-generator.tsx
  * Converts an EbookManifest into PDF and EPUB binary buffers.
- * @react-pdf/renderer and epub-gen-memory are loaded via dynamic imports
- * with webpackIgnore so webpack never attempts to bundle them.
+ * PDF: pdfkit (pure JS, zero native dependencies — works on any server)
+ * EPUB: epub-gen-memory
  */
 
-import React from "react";
 import type { EbookManifest, ChapterDraft, FrontBackMatter } from "@/lib/schemas/ebook";
 
-// ─── PDF Generator ────────────────────────────────────────────────────────────
-// All @react-pdf/renderer usage lives inside this async function so webpack
-// never sees a static import and cannot fail the build trying to resolve it.
+// ─── PDF Generator (pdfkit) ───────────────────────────────────────────────────
+
 export async function generatePdfBuffer(manifest: EbookManifest): Promise<Buffer> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const PDFDocument = (await import("pdfkit")).default as any;
+
+  return new Promise<Buffer>((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 72, size: "A4", autoFirstPage: true });
+    const chunks: Buffer[] = [];
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    // ── Title page ────────────────────────────────────────────────────────────
+    doc
+      .moveDown(6)
+      .fontSize(28).font("Helvetica-Bold").fillColor("#111111")
+      .text(manifest.bookTitle, { align: "center" });
+
+    if (manifest.subtitle) {
+      doc
+        .moveDown(0.8)
+        .fontSize(14).font("Helvetica").fillColor("#555555")
+        .text(manifest.subtitle, { align: "center" });
+    }
+
+    doc
+      .moveDown(2)
+      .fontSize(13).font("Helvetica").fillColor("#333333")
+      .text(manifest.authorName, { align: "center" });
+
+    writeFrontMatter(doc, manifest.frontMatter);
+
+    for (const chapter of manifest.chapters) {
+      writeChapter(doc, chapter);
+    }
+
+    writeBackMatter(doc, manifest.frontMatter);
+    doc.end();
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeDivider(doc: any) {
+  doc.moveDown(0.5);
+  doc
+    .moveTo(doc.page.margins.left, doc.y)
+    .lineTo(doc.page.width - doc.page.margins.right, doc.y)
+    .strokeColor("#e0e0e0").lineWidth(0.5).stroke();
+  doc.moveDown(0.5);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeFrontMatter(doc: any, fm: FrontBackMatter) {
+  doc.addPage();
+  doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Preface");
+  writeDivider(doc);
+  doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.preface, { lineGap: 4 });
+
+  doc.addPage();
+  doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Introduction");
+  writeDivider(doc);
+  doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.introduction, { lineGap: 4 });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeChapter(doc: any, chapter: ChapterDraft) {
+  doc.addPage();
+  doc.fontSize(10).font("Helvetica").fillColor("#888888").text(`CHAPTER ${chapter.number}`);
+  doc.moveDown(0.3).fontSize(22).font("Helvetica-Bold").fillColor("#111111").text(chapter.title);
+  writeDivider(doc);
+
+  if (chapter.intro) {
+    doc.fontSize(11).font("Helvetica-Oblique").fillColor("#333333").text(chapter.intro, { lineGap: 4 });
+    doc.moveDown();
+  }
+
+  for (const section of chapter.sections) {
+    doc.fontSize(13).font("Helvetica-Bold").fillColor("#222222").text(section.heading);
+    doc.moveDown(0.4).fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(section.body, { lineGap: 4 });
+    doc.moveDown();
+  }
+
+  if (chapter.conclusion) {
+    writeDivider(doc);
+    doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(chapter.conclusion, { lineGap: 4 });
+    doc.moveDown();
+  }
+
+  if (chapter.keyTakeaways.length > 0) {
+    doc.fontSize(9).font("Helvetica-Bold").fillColor("#888888").text("KEY TAKEAWAYS");
+    doc.moveDown(0.3);
+    for (const t of chapter.keyTakeaways) {
+      doc.fontSize(10).font("Helvetica").fillColor("#222222").text(`• ${t}`, { lineGap: 3 });
+    }
+    doc.moveDown();
+  }
+
+  if (chapter.reflectionQuestions.length > 0) {
+    doc.fontSize(9).font("Helvetica-Bold").fillColor("#888888").text("REFLECTION QUESTIONS");
+    doc.moveDown(0.3);
+    chapter.reflectionQuestions.forEach((q, i) => {
+      doc.fontSize(10).font("Helvetica").fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: 3 });
+    });
+    doc.moveDown();
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeBackMatter(doc: any, fm: FrontBackMatter) {
+  doc.addPage();
+  doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Conclusion");
+  writeDivider(doc);
+  doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.conclusion, { lineGap: 4 });
+
+  if (fm.aboutAuthor) {
+    doc.addPage();
+    doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("About the Author");
+    writeDivider(doc);
+    doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.aboutAuthor, { lineGap: 4 });
+  }
+
+  if (fm.resourcesList.length > 0) {
+    doc.addPage();
+    doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Resources");
+    writeDivider(doc);
+    for (const r of fm.resourcesList) {
+      doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3 });
+    }
+  }
+}
+
+// ─── EPUB Helpers ─────────────────────────────────────────────────────────────
+
+// ─── (Legacy PDF generator removed — replaced by pdfkit above) ─────────────────
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function _legacyGeneratePdfBuffer_unused(manifest: EbookManifest): Promise<Buffer> {
+  // String split prevents webpack from statically tracing the dead import
+  const _pkg = "@react-pdf" + "/renderer";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { Document, Page, Text, View, StyleSheet, renderToBuffer } = (
-    await import("@react-pdf/renderer")
+    await import(_pkg as any)
   ) as any;
 
   const styles = StyleSheet.create({
@@ -230,13 +364,9 @@ function EbookPdfDocument({ manifest }: { manifest: EbookManifest }) {
   );
 }
 
-  // ─── Render ──────────────────────────────────────────────────────────────────
-  return Buffer.from(
-    await renderToBuffer(React.createElement(EbookPdfDocument, { manifest }))
-  );
+  // Legacy render (unused)
+  return Buffer.alloc(0);
 }
-
-// ─── EPUB Helpers ─────────────────────────────────────────────────────────────
 
 function escapeHtml(str: string): string {
   return str

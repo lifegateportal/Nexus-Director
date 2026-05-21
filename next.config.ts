@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@deepgram/sdk", "@react-pdf/renderer", "epub-gen-memory"],
+  serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory"],
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -13,7 +13,6 @@ const nextConfig: NextConfig = {
       const existing = Array.isArray(config.externals) ? config.externals : [config.externals].filter(Boolean);
       config.externals = [
         ...existing,
-        { "@react-pdf/renderer": "commonjs @react-pdf/renderer" },
         { "epub-gen-memory": "commonjs epub-gen-memory" },
       ];
     }
