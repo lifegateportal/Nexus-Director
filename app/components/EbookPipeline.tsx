@@ -976,7 +976,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         // Full bodies are re-merged client-side after the response to avoid a large payload.
         const slimSections = chapterSections.map((s) => ({
           ...s,
-          body: s.body.slice(0, 400),
+          body: (s.body ?? "").slice(0, 400),
         }));
 
         const polished = await postJson<ChapterDraft>("/api/ebook/polish", {
