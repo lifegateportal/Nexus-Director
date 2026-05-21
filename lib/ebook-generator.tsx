@@ -14,7 +14,7 @@ import type { EbookManifest, ChapterDraft, FrontBackMatter } from "@/lib/schemas
 export async function generatePdfBuffer(manifest: EbookManifest): Promise<Buffer> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { Document, Page, Text, View, StyleSheet, renderToBuffer } = (
-    await import(/* webpackIgnore: true */ "@react-pdf/renderer")
+    await import("@react-pdf/renderer")
   ) as any;
 
   const styles = StyleSheet.create({
@@ -334,7 +334,7 @@ function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; data: s
 export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffer> {
   // Dynamic import to avoid issues with the CJS module at build time
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const EPub = (await import(/* webpackIgnore: true */ "epub-gen-memory") as any).default;
+  const EPub = (await import("epub-gen-memory") as any).default;
 
   const content = [
     ...frontMatterChapters(manifest.frontMatter),
