@@ -8,6 +8,17 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      const existing = Array.isArray(config.externals) ? config.externals : [config.externals].filter(Boolean);
+      config.externals = [
+        ...existing,
+        { "@react-pdf/renderer": "commonjs @react-pdf/renderer" },
+        { "epub-gen-memory": "commonjs epub-gen-memory" },
+      ];
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

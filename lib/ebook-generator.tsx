@@ -1,23 +1,23 @@
 /**
  * ebook-generator.tsx
  * Converts an EbookManifest into PDF and EPUB binary buffers.
- * Uses @react-pdf/renderer for PDF and epub-gen-memory for EPUB.
+ * @react-pdf/renderer and epub-gen-memory are loaded via dynamic imports
+ * with webpackIgnore so webpack never attempts to bundle them.
  */
 
 import React from "react";
-import {
-  Document,
-  Page,
-  Text,
-  View,
-  StyleSheet,
-  renderToBuffer,
-} from "@react-pdf/renderer";
 import type { EbookManifest, ChapterDraft, FrontBackMatter } from "@/lib/schemas/ebook";
 
-// ─── PDF Styles ───────────────────────────────────────────────────────────────
+// ─── PDF Generator ────────────────────────────────────────────────────────────
+// All @react-pdf/renderer usage lives inside this async function so webpack
+// never sees a static import and cannot fail the build trying to resolve it.
+export async function generatePdfBuffer(manifest: EbookManifest): Promise<Buffer> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { Document, Page, Text, View, StyleSheet, renderToBuffer } = (
+    await import(/* webpackIgnore: true */ "@react-pdf/renderer")
+  ) as any;
 
-const styles = StyleSheet.create({
+  const styles = StyleSheet.create({
   page: {
     paddingTop: 72,
     paddingBottom: 72,
@@ -109,11 +109,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 16,
   },
-});
+  });
 
-// ─── PDF Document Component ───────────────────────────────────────────────────
+  // ─── Components (defined after dynamic import so they close over Document/Page/etc.) ──
 
-function TitlePage({ manifest }: { manifest: EbookManifest }) {
+  function TitlePage({ manifest }: { manifest: EbookManifest }) {
   return (
     <Page style={styles.titlePage}>
       <Text style={styles.bookTitle}>{manifest.bookTitle}</Text>
@@ -230,12 +230,10 @@ function EbookPdfDocument({ manifest }: { manifest: EbookManifest }) {
   );
 }
 
-// ─── PDF Generator ────────────────────────────────────────────────────────────
-
-export async function generatePdfBuffer(manifest: EbookManifest): Promise<Buffer> {
-  const doc = React.createElement(EbookPdfDocument, { manifest });
-  const pdfBuffer = await renderToBuffer(doc as React.ReactElement);
-  return Buffer.from(pdfBuffer);
+  // ─── Render ──────────────────────────────────────────────────────────────────
+  return Buffer.from(
+    await renderToBuffer(React.createElement(EbookPdfDocument, { manifest }))
+  );
 }
 
 // ─── EPUB Helpers ─────────────────────────────────────────────────────────────
@@ -335,7 +333,8 @@ function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; data: s
 
 export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffer> {
   // Dynamic import to avoid issues with the CJS module at build time
-  const EPub = (await import("epub-gen-memory")).default;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const EPub = (await import(/* webpackIgnore: true */ "epub-gen-memory") as any).default;
 
   const content = [
     ...frontMatterChapters(manifest.frontMatter),
