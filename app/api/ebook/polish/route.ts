@@ -25,20 +25,30 @@ export async function POST(req: NextRequest) {
   }
 
   const { input: chapter } = input;
+  const safeSections = (chapter.sections ?? []).map((section) => ({
+    ...section,
+    body: section.body ?? "",
+    heading: section.heading ?? "",
+  }));
+  const safeVoiceDNA = {
+    signaturePhrases: chapter.voiceDNA?.signaturePhrases ?? [],
+    toneMarkers: (chapter.voiceDNA as { toneMarkers?: string[] } | undefined)?.toneMarkers ?? [],
+    avoidWords: chapter.voiceDNA?.avoidWords ?? [],
+  };
 
   try {
     // Send section headings + first 200 chars of each body (not full prose)
-    const sectionsSummary = chapter.sections
+    const sectionsSummary = safeSections
       .map((s) => `Section ${s.sectionNumber} — ${s.heading}:\n${(s.body ?? "").slice(0, 200)}…`)
       .join("\n\n");
 
-    const totalWordCount = chapter.sections.reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
+    const totalWordCount = safeSections.reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
 
     // Trim VoiceDNA to key fields only to keep the prompt small and response fast
     const voiceDNASlim = {
-      signaturePhrases: (chapter.voiceDNA.signaturePhrases ?? []).slice(0, 6),
-      toneMarkers: (chapter.voiceDNA.toneMarkers ?? []).slice(0, 4),
-      avoidWords: (chapter.voiceDNA.avoidWords ?? []).slice(0, 6),
+      signaturePhrases: safeVoiceDNA.signaturePhrases.slice(0, 6),
+      toneMarkers: safeVoiceDNA.toneMarkers.slice(0, 4),
+      avoidWords: safeVoiceDNA.avoidWords.slice(0, 6),
     };
 
     const { object } = await generateObject({
@@ -66,7 +76,7 @@ VOICE: Use the author's signature phrases and tone. Do not use words in the avoi
       ...object,
       number: chapter.number,
       title: chapter.title,
-      sections: chapter.sections,
+      sections: safeSections,
       totalWordCount,
       status: "complete" as const,
     };
@@ -74,6 +84,12 @@ VOICE: Use the author's signature phrases and tone. Do not use words in the avoi
     return NextResponse.json(merged, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Chapter polish failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({
+      route: "ebook/polish",
+      error: message,
+      details: err instanceof Error && err.stack
+        ? err.stack.split("\n").slice(0, 3).join(" | ")
+        : undefined,
+    }, { status: 500 });
   }
 }

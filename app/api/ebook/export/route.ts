@@ -18,7 +18,8 @@ export async function POST(req: NextRequest) {
   }
 
   const { manifest, formats } = input;
-  const slug = manifest.bookTitle
+  const safeBookTitle = typeof manifest.bookTitle === "string" ? manifest.bookTitle : "ebook";
+  const slug = safeBookTitle
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .slice(0, 40);
@@ -42,7 +43,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(results, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Export failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({
+      route: "ebook/export",
+      error: message,
+      details: err instanceof Error && err.stack
+        ? err.stack.split("\n").slice(0, 3).join(" | ")
+        : undefined,
+    }, { status: 500 });
   }
 }
 

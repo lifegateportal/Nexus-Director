@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: FrontBackMatterSchema,
@@ -50,16 +51,22 @@ VOICE DNA:
 ${JSON.stringify(input.voiceDNA, null, 2)}
 
 FULL TRANSCRIPT (source of truth — opening & closing only):
-${input.masterTranscript.slice(0, 5000)}
+${transcript.slice(0, 5000)}
 
 [… middle omitted …]
 
-${input.masterTranscript.slice(-3000)}`,
+${transcript.slice(-3000)}`,
     });
 
     return NextResponse.json(object, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Front matter generation failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({
+      route: "ebook/frontmatter",
+      error: message,
+      details: err instanceof Error && err.stack
+        ? err.stack.split("\n").slice(0, 3).join(" | ")
+        : undefined,
+    }, { status: 500 });
   }
 }
