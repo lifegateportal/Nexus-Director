@@ -7,6 +7,28 @@ import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
 export const runtime = "nodejs";
 export const maxDuration = 90;
 
+function fallbackSectionBody(input: z.infer<typeof WriteSectionRequestSchema>["assignment"]): string {
+  const cleanedExcerpts = input.transcriptExcerpts
+    .map((excerpt) => excerpt
+      .replace(/\r\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim())
+    .filter(Boolean);
+
+  const bodyFromTranscript = cleanedExcerpts.join("\n\n").trim();
+  if (bodyFromTranscript) return bodyFromTranscript;
+
+  const bodyFromKeyPoints = input.keyPoints
+    .map((point) => point.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (bodyFromKeyPoints) return bodyFromKeyPoints;
+
+  return input.heading.trim() || "Section content unavailable.";
+}
+
 const EDITORIAL_SYSTEM = `You are an editorial assistant transforming a teacher's spoken transcript into polished written prose.
 
 ════════════════════════════════════════════
@@ -126,7 +148,7 @@ ${excerptBlock}
 Now write the section prose:`;
 
   const SectionBodySchema = z.object({
-    body: z.string().describe("The polished prose for this section, using only the provided transcript content"),
+    body: z.string().default("").describe("The polished prose for this section, using only the provided transcript content"),
   });
 
   try {
@@ -138,9 +160,17 @@ Now write the section prose:`;
       system: EDITORIAL_SYSTEM,
       prompt,
     });
-    return NextResponse.json({ body: object.body }, { status: 200 });
+    const body = (object.body ?? "").trim() || fallbackSectionBody(assignment);
+    return NextResponse.json({ body }, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Section write failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const fallbackBody = fallbackSectionBody(assignment);
+    return NextResponse.json({
+      body: fallbackBody,
+      fallback: true,
+      error: err instanceof Error && err.message.trim() ? err.message : "Section write used transcript fallback",
+      details: err instanceof Error && err.stack
+        ? err.stack.split("\n").slice(0, 3).join(" | ")
+        : undefined,
+    }, { status: 200 });
   }
 }

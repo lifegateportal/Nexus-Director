@@ -1234,7 +1234,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       onManifestReady?.(manifest);
 
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
+      const msg = err instanceof Error && err.message.trim() ? err.message : "Pipeline failed";
       // Log full stack to browser console for debugging
       console.error("[EbookPipeline] runPipeline crash:", err);
       const stackHint = err instanceof Error && err.stack
