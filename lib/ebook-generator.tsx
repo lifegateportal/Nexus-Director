@@ -462,11 +462,10 @@ function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; content
 // ─── EPUB Generator ───────────────────────────────────────────────────────────
 
 export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffer> {
-  // Dynamic import to avoid issues with the CJS module at build time
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const EPub = (await import("epub-gen-memory") as any).default;
+  const { epub } = await import("epub-gen-memory") as any;
 
-  const content = [
+  const chapters = [
     ...frontMatterChapters(manifest.frontMatter),
     ...manifest.chapters.map((ch) => ({
       title: `Chapter ${ch.number}: ${ch.title}`,
@@ -475,7 +474,7 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
     ...backMatterChapters(manifest.frontMatter),
   ];
 
-  const epubBuffer = await new EPub(
+  const epubBuffer = await epub(
     {
       title: manifest.bookTitle,
       author: manifest.authorName,
@@ -485,8 +484,8 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
       lang: "en",
       tocTitle: "Table of Contents",
     },
-    content
-  ).genEpub();
+    chapters
+  );
 
   return Buffer.from(epubBuffer);
 }
