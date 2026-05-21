@@ -567,6 +567,8 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
     const cm = raw.contentMap as Record<string, unknown> | null;
     const contentMap = cm ? {
       ...cm,
+      overarchingThemes: fixArrays(cm.overarchingThemes),
+      teachingArc:       fixStr(cm.teachingArc),
       allQuotes: fixArrays(cm.allQuotes),
       segments: fixArrays<Record<string, unknown>>(cm.segments).map((s) => ({
         ...s,

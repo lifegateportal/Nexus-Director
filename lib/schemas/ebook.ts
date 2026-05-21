@@ -39,8 +39,8 @@ export const ContentSegmentSchema = z.object({
 
 export const ContentMapSchema = z.object({
   totalEstimatedWords: z.number(),
-  overarchingThemes: z.array(z.string()),
-  teachingArc: z.string(),                      // how the full teaching flows
+  overarchingThemes: z.array(z.string()).default([]),
+  teachingArc: z.string().default(""),            // how the full teaching flows
   segments: z.array(ContentSegmentSchema),
   allQuotes: z.array(QuoteSchema).default([]), // full quote/scripture registry
 });

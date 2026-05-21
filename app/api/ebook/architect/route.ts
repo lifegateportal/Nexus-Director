@@ -70,7 +70,7 @@ RULES:
 - targetWordCount per section = sum of that section's segments' estimatedWordCount
 - bookTitle and authorName must come from the content; use "the Author" if name is unknown
 - estimatedTotalWords = sum of all section targetWordCounts`,
-      prompt: `Design the chapter architecture.\n\nVOICE DNA TONE: ${input.voiceDNA.toneProfile}\nTEACHING ARC: ${input.contentMap.teachingArc}\nTHEMES: ${input.contentMap.overarchingThemes.join(", ")}\n\nSEGMENTS:\n${JSON.stringify(segmentsLite)}`,
+      prompt: `Design the chapter architecture.\n\nVOICE DNA TONE: ${input.voiceDNA.toneProfile}\nTEACHING ARC: ${input.contentMap.teachingArc}\nTHEMES: ${(input.contentMap.overarchingThemes ?? []).join(", ")}\n\nSEGMENTS:\n${JSON.stringify(segmentsLite)}`,
     });
 
     // ── Rehydrate full BookArchitecture from minimal output ───────────────

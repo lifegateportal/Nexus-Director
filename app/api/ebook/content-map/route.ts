@@ -33,8 +33,8 @@ const SlotSegmentsSchema = z.object({
 // Final synthesis schema (receives only topics/themes, no raw text)
 const SynthesisSchema = z.object({
   totalEstimatedWords: z.number(),
-  overarchingThemes: z.array(z.string()),
-  teachingArc: z.string(),
+  overarchingThemes: z.array(z.string()).default([]),
+  teachingArc: z.string().default(""),
 });
 
 const SEGMENT_SYSTEM = `You are a content analyst extracting teaching segments from a single sermon/teaching recording.

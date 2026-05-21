@@ -298,19 +298,19 @@ function ChapterPage({ chapter }: { chapter: ChapterDraft }) {
         </>
       ) : null}
 
-      {chapter.keyTakeaways.length > 0 ? (
+      {(chapter.keyTakeaways ?? []).length > 0 ? (
         <>
           <Text style={styles.sectionLabel}>Key Takeaways</Text>
-          {chapter.keyTakeaways.map((t, i) => (
+          {(chapter.keyTakeaways ?? []).map((t, i) => (
             <Text key={i} style={styles.takeawayItem}>• {t}</Text>
           ))}
         </>
       ) : null}
 
-      {chapter.reflectionQuestions.length > 0 ? (
+      {(chapter.reflectionQuestions ?? []).length > 0 ? (
         <>
           <Text style={styles.sectionLabel}>Reflection Questions</Text>
-          {chapter.reflectionQuestions.map((q, i) => (
+          {(chapter.reflectionQuestions ?? []).map((q, i) => (
             <Text key={i} style={styles.takeawayItem}>{i + 1}. {q}</Text>
           ))}
         </>
@@ -334,11 +334,11 @@ function BackMatterPage({ fm }: { fm: FrontBackMatter }) {
         </>
       ) : null}
 
-      {fm.resourcesList.length > 0 ? (
+      {(fm.resourcesList ?? []).length > 0 ? (
         <>
           <Text style={{ ...styles.chapterTitle, marginTop: 24 }}>Resources</Text>
           <View style={styles.divider} />
-          {fm.resourcesList.map((r, i) => (
+          {(fm.resourcesList ?? []).map((r, i) => (
             <Text key={i} style={styles.takeawayItem}>• {r}</Text>
           ))}
         </>
@@ -407,7 +407,7 @@ function chapterToHtml(chapter: ChapterDraft): string {
 
   for (const section of chapter.sections) {
     parts.push(`<h2>${escapeHtml(section.heading)}</h2>`);
-    parts.push(paragraphsToHtml(section.body));
+    parts.push(paragraphsToHtml(section.body ?? ""));
   }
 
   if (chapter.conclusion) {
@@ -415,17 +415,17 @@ function chapterToHtml(chapter: ChapterDraft): string {
     parts.push(paragraphsToHtml(chapter.conclusion));
   }
 
-  if (chapter.keyTakeaways.length > 0) {
+  if ((chapter.keyTakeaways ?? []).length > 0) {
     parts.push("<h3>Key Takeaways</h3><ul>");
-    for (const t of chapter.keyTakeaways) {
+    for (const t of (chapter.keyTakeaways ?? [])) {
       parts.push(`<li>${escapeHtml(t)}</li>`);
     }
     parts.push("</ul>");
   }
 
-  if (chapter.reflectionQuestions.length > 0) {
+  if ((chapter.reflectionQuestions ?? []).length > 0) {
     parts.push("<h3>Reflection Questions</h3><ol>");
-    for (const q of chapter.reflectionQuestions) {
+    for (const q of (chapter.reflectionQuestions ?? [])) {
       parts.push(`<li>${escapeHtml(q)}</li>`);
     }
     parts.push("</ol>");
@@ -449,10 +449,10 @@ function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; content
     });
   }
 
-  if (fm.resourcesList.length > 0) {
+  if ((fm.resourcesList ?? []).length > 0) {
     chapters.push({
       title: "Resources",
-      content: `<ul>${fm.resourcesList.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`,
+      content: `<ul>${(fm.resourcesList ?? []).map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`,
     });
   }
 
