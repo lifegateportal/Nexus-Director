@@ -10,28 +10,86 @@ export const maxDuration = 120;
 // ── Absolute minimum schema — no keyPoints, no quotes, no nested arrays ──────
 // Everything gets rehydrated server-side from the contentMap after generation.
 const MinimalSectionSchema = z.object({
-  sectionNumber: z.number().int().positive(),
-  heading: z.string(),
-  sourceSegmentIds: z.array(z.string()),
-  targetWordCount: z.number().int().positive(),
+  sectionNumber: z.number().default(1),
+  heading: z.string().default(""),
+  sourceSegmentIds: z.array(z.string()).default([]),
+  targetWordCount: z.number().default(0),
 });
 
 const MinimalChapterSchema = z.object({
-  number: z.number().int().positive(),
-  title: z.string(),
-  keyTheme: z.string(),
-  sections: z.array(MinimalSectionSchema),
+  number: z.number().default(1),
+  title: z.string().default(""),
+  keyTheme: z.string().default(""),
+  sections: z.array(MinimalSectionSchema).default([]),
 });
 
 const MinimalArchitectureSchema = z.object({
-  bookTitle: z.string(),
-  subtitle: z.string(),
-  authorName: z.string(),
-  estimatedTotalWords: z.number().int().positive(),
-  frontMatterNotes: z.string(),
-  backMatterNotes: z.string(),
-  chapters: z.array(MinimalChapterSchema),
+  bookTitle: z.string().default("Untitled Teaching Manuscript"),
+  subtitle: z.string().default(""),
+  authorName: z.string().default("the Author"),
+  estimatedTotalWords: z.number().default(0),
+  frontMatterNotes: z.string().default(""),
+  backMatterNotes: z.string().default(""),
+  chapters: z.array(MinimalChapterSchema).default([]),
 });
+
+function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
+  const sections = input.contentMap.segments.map((segment, index) => ({
+    sectionNumber: index + 1,
+    heading: segment.topic || `Section ${index + 1}`,
+    sourceSegmentIds: [segment.id],
+    targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
+  }));
+
+  return {
+    bookTitle: input.contentMap.overarchingThemes[0] || input.contentMap.segments[0]?.topic || "Untitled Teaching Manuscript",
+    subtitle: input.contentMap.teachingArc || "Drawn directly from the source teaching",
+    authorName: "the Author",
+    estimatedTotalWords: sections.reduce((sum, section) => sum + section.targetWordCount, 0),
+    frontMatterNotes: input.contentMap.segments[0]?.topic || "",
+    backMatterNotes: input.contentMap.segments.at(-1)?.topic || "",
+    chapters: [
+      {
+        number: 1,
+        title: input.contentMap.overarchingThemes[0] || "Core Teaching",
+        keyTheme: input.contentMap.overarchingThemes[0] || input.contentMap.teachingArc || "Core teaching",
+        sections,
+      },
+    ],
+  };
+}
+
+function normalizeArchitecture(
+  minimal: z.infer<typeof MinimalArchitectureSchema>,
+  input: z.infer<typeof ArchitectRequestSchema>,
+) {
+  const fallback = fallbackArchitecture(input);
+  const chapters = (minimal.chapters ?? [])
+    .map((chapter, chapterIndex) => ({
+      number: Math.max(1, Math.trunc(chapter.number || chapterIndex + 1)),
+      title: (chapter.title || "").trim() || fallback.chapters[0].title,
+      keyTheme: (chapter.keyTheme || "").trim() || fallback.chapters[0].keyTheme,
+      sections: (chapter.sections ?? [])
+        .map((section, sectionIndex) => ({
+          sectionNumber: Math.max(1, Math.trunc(section.sectionNumber || sectionIndex + 1)),
+          heading: (section.heading || "").trim() || `Section ${sectionIndex + 1}`,
+          sourceSegmentIds: (section.sourceSegmentIds ?? []).filter((id) => id in Object.fromEntries(input.contentMap.segments.map((s) => [s.id, true]))),
+          targetWordCount: Math.max(0, Math.trunc(section.targetWordCount || 0)),
+        }))
+        .filter((section) => section.sourceSegmentIds.length > 0),
+    }))
+    .filter((chapter) => chapter.sections.length > 0);
+
+  return {
+    bookTitle: (minimal.bookTitle || "").trim() || fallback.bookTitle,
+    subtitle: (minimal.subtitle || "").trim(),
+    authorName: (minimal.authorName || "").trim() || fallback.authorName,
+    estimatedTotalWords: Math.max(0, Math.trunc(minimal.estimatedTotalWords || 0)) || fallback.estimatedTotalWords,
+    frontMatterNotes: (minimal.frontMatterNotes || "").trim() || fallback.frontMatterNotes,
+    backMatterNotes: (minimal.backMatterNotes || "").trim() || fallback.backMatterNotes,
+    chapters: chapters.length > 0 ? chapters : fallback.chapters,
+  };
+}
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
@@ -44,6 +102,7 @@ export async function POST(req: NextRequest) {
 
   // Build segment + quote lookups for rehydration
   const segmentMap = Object.fromEntries(input.contentMap.segments.map((s) => [s.id, s]));
+  const validSegmentIds = new Set(input.contentMap.segments.map((s) => s.id));
   const quoteMap = Object.fromEntries((input.contentMap.allQuotes ?? []).map((q) => [q.id, q]));
 
   // Trim input to only what the LLM needs for architecture decisions
@@ -56,12 +115,14 @@ export async function POST(req: NextRequest) {
   }));
 
   try {
-    const { object: minimal } = await generateObject({
-      model: deepSeekModel,
-      schema: MinimalArchitectureSchema,
-      mode: "tool",
-      temperature: 0.2,
-      system: `You are a book architect designing the chapter structure of a published teaching book.
+    let minimal: z.infer<typeof MinimalArchitectureSchema>;
+    try {
+      const result = await generateObject({
+        model: deepSeekModel,
+        schema: MinimalArchitectureSchema,
+        mode: "tool",
+        temperature: 0.2,
+        system: `You are a book architect designing the chapter structure of a published teaching book.
 
 RULES:
 - sourceSegmentIds must reference actual segment IDs from the segment list (e.g. "seg-1")
@@ -69,19 +130,27 @@ RULES:
 - Each chapter: 3–5 sections; each section: one focused teaching point
 - targetWordCount per section = sum of that section's segments' estimatedWordCount
 - bookTitle and authorName must come from the content; use "the Author" if name is unknown
-- estimatedTotalWords = sum of all section targetWordCounts`,
-      prompt: `Design the chapter architecture.\n\nVOICE DNA TONE: ${input.voiceDNA.toneProfile}\nTEACHING ARC: ${input.contentMap.teachingArc}\nTHEMES: ${(input.contentMap.overarchingThemes ?? []).join(", ")}\n\nSEGMENTS:\n${JSON.stringify(segmentsLite)}`,
-    });
+- estimatedTotalWords = sum of all section targetWordCounts
+- Always return every required field, even if some strings are brief
+- Never leave sections empty; every chapter must include at least one section with at least one sourceSegmentId`,
+        prompt: `Design the chapter architecture.\n\nVOICE DNA TONE: ${input.voiceDNA.toneProfile}\nTEACHING ARC: ${input.contentMap.teachingArc}\nTHEMES: ${(input.contentMap.overarchingThemes ?? []).join(", ")}\n\nSEGMENTS:\n${JSON.stringify(segmentsLite)}`,
+      });
+      minimal = result.object;
+    } catch {
+      minimal = fallbackArchitecture(input);
+    }
+
+    const normalized = normalizeArchitecture(minimal, input);
 
     // ── Rehydrate full BookArchitecture from minimal output ───────────────
     const hydrated = {
-      bookTitle: minimal.bookTitle,
-      subtitle: minimal.subtitle,
-      authorName: minimal.authorName,
-      estimatedTotalWords: minimal.estimatedTotalWords,
-      frontMatterNotes: minimal.frontMatterNotes,
-      backMatterNotes: minimal.backMatterNotes,
-      chapters: minimal.chapters.map((ch) => {
+      bookTitle: normalized.bookTitle,
+      subtitle: normalized.subtitle,
+      authorName: normalized.authorName,
+      estimatedTotalWords: normalized.estimatedTotalWords,
+      frontMatterNotes: normalized.frontMatterNotes,
+      backMatterNotes: normalized.backMatterNotes,
+      chapters: normalized.chapters.map((ch) => {
         const chapterSegIds = [...new Set(ch.sections.flatMap((s) => s.sourceSegmentIds))];
         const chapterQuotes = chapterSegIds
           .flatMap((sid) => segmentMap[sid]?.quotes ?? [])
@@ -95,7 +164,8 @@ RULES:
           sourceSegmentIds: chapterSegIds,
           quotesInChapter: chapterQuotes,
           sections: ch.sections.map((sec) => {
-            const secSegments = sec.sourceSegmentIds.map((id) => segmentMap[id]).filter(Boolean);
+            const safeSourceSegmentIds = sec.sourceSegmentIds.filter((id) => validSegmentIds.has(id));
+            const secSegments = safeSourceSegmentIds.map((id) => segmentMap[id]).filter(Boolean);
             const secKeyPoints = secSegments.flatMap((s) => s?.keyPoints ?? []);
             const secQuotes = secSegments
               .flatMap((s) => s?.quotes ?? [])
@@ -105,8 +175,8 @@ RULES:
             return {
               sectionNumber: sec.sectionNumber,
               heading: sec.heading,
-              sourceSegmentIds: sec.sourceSegmentIds,
-              targetWordCount: sec.targetWordCount,
+              sourceSegmentIds: safeSourceSegmentIds,
+              targetWordCount: sec.targetWordCount || secSegments.reduce((sum, seg) => sum + (seg?.estimatedWordCount ?? 0), 0),
               keyPoints: secKeyPoints,
               quotesInSection: secQuotes,
             };
@@ -118,6 +188,12 @@ RULES:
     return NextResponse.json(hydrated, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Architecture generation failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({
+      route: "ebook/architect",
+      error: message,
+      details: err instanceof Error && err.stack
+        ? err.stack.split("\n").slice(0, 3).join(" | ")
+        : undefined,
+    }, { status: 500 });
   }
 }
