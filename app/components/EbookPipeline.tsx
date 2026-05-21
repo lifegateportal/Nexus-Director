@@ -1256,6 +1256,19 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
   // ─── Render ──────────────────────────────────────────────────────────────
 
   const isRunning = stage !== "idle" && stage !== "complete" && stage !== "failed";
+  const hasResumableState = Boolean(
+    savedJobRef.current && (
+      savedJobRef.current.masterTranscript ||
+      savedJobRef.current.transcripts.length > 0 ||
+      savedJobRef.current.voiceDNA ||
+      savedJobRef.current.contentMap ||
+      savedJobRef.current.architecture ||
+      savedJobRef.current.sectionAssignments.length > 0 ||
+      savedJobRef.current.sections.length > 0 ||
+      savedJobRef.current.chapters.length > 0 ||
+      savedJobRef.current.frontMatter
+    )
+  );
 
   return (
     <div className="flex flex-col gap-5 pb-[max(env(safe-area-inset-bottom),3.75rem)] lg:pb-6">
@@ -1361,7 +1374,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
             <pre className="whitespace-pre-wrap break-words font-sans text-xs text-red-300/80 leading-relaxed">{error}</pre>
           </div>
           {/* Resume button — only show when we have partial data to resume from */}
-          {savedJobRef.current?.masterTranscript && (
+          {hasResumableState && (
             <button
               type="button"
               onClick={() => {
