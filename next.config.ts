@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory"],
+  serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory", "pdfkit"],
+  outputFileTracingIncludes: {
+    "/api/ebook/export": ["./node_modules/pdfkit/js/data/**/*"],
+  },
   typescript: {
     ignoreBuildErrors: true,
   },
