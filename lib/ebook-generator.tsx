@@ -463,7 +463,7 @@ function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; content
 
 export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffer> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { epub } = await import("epub-gen-memory") as any;
+  const epub = (await import("epub-gen-memory") as any).default;
 
   const chapters = [
     ...frontMatterChapters(manifest.frontMatter),
