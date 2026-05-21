@@ -15,33 +15,6 @@ const PolishOutputSchema = z.object({
   reflectionQuestions: z.array(z.string()).default([]),
 });
 
-function fallbackPolish(chapter: z.infer<typeof PolishChapterRequestSchema>["input"], safeSections: Array<z.infer<typeof z.object({
-  chapterNumber: z.ZodNumber;
-  sectionNumber: z.ZodNumber;
-  heading: z.ZodString;
-  body: z.ZodString;
-  wordCount: z.ZodNumber;
-  status: z.ZodEnum<{ pending: "pending"; writing: "writing"; complete: "complete"; failed: "failed" }>;
-})>>) {
-  const nonEmptyBodies = safeSections
-    .map((section) => section.body.trim())
-    .filter(Boolean);
-
-  const introSource = nonEmptyBodies[0] ?? "";
-  const conclusionSource = nonEmptyBodies[nonEmptyBodies.length - 1] ?? introSource;
-  const keyTakeaways = safeSections
-    .map((section) => section.heading.trim())
-    .filter(Boolean)
-    .slice(0, 5);
-
-  return {
-    intro: introSource.split(/\n{2,}/)[0] ?? "",
-    conclusion: conclusionSource.split(/\n{2,}/).slice(-1)[0] ?? "",
-    keyTakeaways,
-    reflectionQuestions: keyTakeaways.slice(0, 3).map((heading) => `How does ${heading.toLowerCase()} shape your response?`),
-  };
-}
-
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input;
@@ -52,29 +25,20 @@ export async function POST(req: NextRequest) {
   }
 
   const { input: chapter } = input;
-  const safeSections = (chapter.sections ?? []).map((section) => ({
-    ...section,
-    body: section.body ?? "",
-    heading: section.heading ?? "",
-  }));
-  const safeVoiceDNA = {
-    signaturePhrases: chapter.voiceDNA?.signaturePhrases ?? [],
-    toneMarkers: (chapter.voiceDNA as { toneMarkers?: string[] } | undefined)?.toneMarkers ?? [],
-    avoidWords: chapter.voiceDNA?.avoidWords ?? [],
-  };
-  const totalWordCount = safeSections.reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
 
   try {
     // Send section headings + first 200 chars of each body (not full prose)
-    const sectionsSummary = safeSections
+    const sectionsSummary = chapter.sections
       .map((s) => `Section ${s.sectionNumber} — ${s.heading}:\n${(s.body ?? "").slice(0, 200)}…`)
       .join("\n\n");
 
+    const totalWordCount = chapter.sections.reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
+
     // Trim VoiceDNA to key fields only to keep the prompt small and response fast
     const voiceDNASlim = {
-      signaturePhrases: safeVoiceDNA.signaturePhrases.slice(0, 6),
-      toneMarkers: safeVoiceDNA.toneMarkers.slice(0, 4),
-      avoidWords: safeVoiceDNA.avoidWords.slice(0, 6),
+      signaturePhrases: (chapter.voiceDNA?.signaturePhrases ?? []).slice(0, 6),
+      toneMarkers: (chapter.voiceDNA?.toneMarkers ?? []).slice(0, 4),
+      avoidWords: (chapter.voiceDNA?.avoidWords ?? []).slice(0, 6),
     };
 
     const { object } = await generateObject({
@@ -102,26 +66,14 @@ VOICE: Use the author's signature phrases and tone. Do not use words in the avoi
       ...object,
       number: chapter.number,
       title: chapter.title,
-      sections: safeSections,
+      sections: chapter.sections,
       totalWordCount,
       status: "complete" as const,
     };
 
     return NextResponse.json(merged, { status: 200 });
   } catch (err) {
-    const fallback = fallbackPolish(chapter, safeSections);
-    return NextResponse.json({
-      ...fallback,
-      number: chapter.number,
-      title: chapter.title,
-      sections: safeSections,
-      totalWordCount,
-      status: "complete" as const,
-      fallback: true,
-      error: err instanceof Error && err.message.trim() ? err.message : "Chapter polish used fallback",
-      details: err instanceof Error && err.stack
-        ? err.stack.split("\n").slice(0, 3).join(" | ")
-        : undefined,
-    }, { status: 200 });
+    const message = err instanceof Error ? err.message : "Chapter polish failed";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
