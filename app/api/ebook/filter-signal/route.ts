@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateText, generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 
@@ -10,30 +10,101 @@ const RequestSchema = z.object({
   masterTranscript: z.string().min(50),
 });
 
-// What we ask the LLM to strip
-const FilterResultSchema = z.object({
-  cleanedTranscript: z.string(),
+export type FilterSignalResult = {
+  cleanedTranscript: string;
+  removedSegments: { reason: string; excerpt: string }[];
+  summary: string;
+};
+
+const MetaSchema = z.object({
   removedSegments: z.array(
     z.object({
       reason: z.enum([
-        "opening-prayer",
-        "closing-prayer",
-        "announcement",
-        "housekeeping",
-        "altar-call",
-        "offering-appeal",
-        "greeting-pleasantries",
-        "off-topic-tangent",
-        "technical-break",
+        "opening-prayer", "closing-prayer", "announcement", "housekeeping",
+        "altar-call", "offering-appeal", "greeting-pleasantries",
+        "off-topic-tangent", "technical-break",
       ]),
-      excerpt: z.string().max(200), // first ~200 chars of what was removed
+      excerpt: z.string().max(200),
     })
-  ),
-  teachingStartsAt: z.string(), // first sentence of the core teaching
-  summary: z.string(),          // one-sentence description of what was removed
+  ).default([]),
+  summary: z.string().default(""),
 });
 
-export type FilterSignalResult = z.infer<typeof FilterResultSchema>;
+const WHAT_TO_REMOVE = `WHAT TO REMOVE (strip every occurrence):
+1. OPENING-PRAYER — opening prayer, invocation, or dedication before teaching.
+2. CLOSING-PRAYER — closing prayer, benediction, or corporate prayer at the end.
+3. ANNOUNCEMENT — church/event announcements, schedule notices, promotions.
+4. HOUSEKEEPING — "welcome", "thanks for coming", "silence your phone", stand/sit cues, "turn to your neighbor and say…"
+5. ALTAR-CALL — salvation appeals, "raise your hand if…", repeat-after-me prayers.
+6. OFFERING-APPEAL — offering moments, tithing messages, giving appeals.
+7. GREETING-PLEASANTRIES — "good morning", "how is everyone", extended greetings, banter before teaching.
+8. OFF-TOPIC-TANGENT — personal anecdotes or jokes that do not illustrate a teaching point.
+9. TECHNICAL-BREAK — "can everyone hear me", microphone issues, applause-only breaks.
+
+WHAT TO KEEP — everything that is core teaching:
+- Scripture exposition, Bible references, theological/doctrinal points
+- Stories and analogies that directly illustrate a teaching point
+- Application of principles, arguments, conclusions
+- Quotes or proverbs used to support a teaching point
+
+CRITICAL:
+- Reproduce kept content VERBATIM — do not rephrase, condense, or edit.
+- Preserve all slot markers ([Slot-N]) and separators (═══).
+- Output ONLY the cleaned transcript text. No labels, no commentary, no JSON.`;
+
+export async function POST(req: NextRequest) {
+  const body = await req.json() as unknown;
+  let input;
+  try {
+    input = RequestSchema.parse(body);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Invalid input" },
+      { status: 400 }
+    );
+  }
+
+  // Limit context to 12 000 words
+  const words = input.masterTranscript.split(/\s+/);
+  const transcript = words.length > 12_000
+    ? words.slice(0, 12_000).join(" ") + "\n[… transcript continues beyond this filter window …]"
+    : input.masterTranscript;
+
+  try {
+    // Step 1: Get the cleaned transcript as plain text (avoids JSON encoding of large strings)
+    const { text: cleanedTranscript } = await generateText({
+      model: deepSeekModel,
+      temperature: 0.1,
+      system: `You are a content signal filter for a book production pipeline.\n\n${WHAT_TO_REMOVE}`,
+      prompt: `Filter this transcript to teaching-only content. Return ONLY the cleaned text:\n\n${transcript}`,
+    });
+
+    // Step 2: Lightweight metadata — small schema, fast call
+    let meta = { removedSegments: [] as { reason: string; excerpt: string }[], summary: "" };
+    try {
+      const { object } = await generateObject({
+        model: deepSeekModel,
+        schema: MetaSchema,
+        mode: "tool",
+        temperature: 0.1,
+        system: "You are a transcript analysis assistant.",
+        prompt: `Compare the original and cleaned transcripts. List what was removed and write a one-sentence summary.\n\nORIGINAL (first 3000 chars):\n${transcript.slice(0, 3000)}\n\nCLEANED (first 3000 chars):\n${cleanedTranscript.slice(0, 3000)}`,
+      });
+      meta = { removedSegments: object.removedSegments, summary: object.summary };
+    } catch {
+      // metadata is optional — ignore failures
+    }
+
+    return NextResponse.json(
+      { cleanedTranscript: cleanedTranscript.trim() || input.masterTranscript, ...meta },
+      { status: 200 }
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Signal filter failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
