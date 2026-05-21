@@ -535,6 +535,15 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
   function normalizeJob(raw: EbookJobState): EbookJobState {
     const fixArrays = <T,>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : []);
     const fixStr = (v: unknown, fb = ""): string => (typeof v === "string" ? v : fb);
+    const transcripts = fixArrays<Record<string, unknown>>(raw.transcripts as unknown)
+      .map((t) => ({
+        label: fixStr(t.label),
+        text: fixStr(t.text),
+      }))
+      .filter((t) => t.text);
+    const rebuiltMasterTranscript = transcripts
+      .map((t) => `[${t.label}]\n${t.text}`)
+      .join("\n\n═══════════════════════════════════════\n\n");
 
     const vdna = raw.voiceDNA as Record<string, unknown> | null;
     const voiceDNA = vdna ? {
@@ -616,7 +625,19 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       })),
     }));
 
-    return { ...raw, voiceDNA, contentMap, architecture, sections, sectionAssignments, chapters } as EbookJobState;
+    return {
+      ...raw,
+      audioFileNames: fixArrays(raw.audioFileNames),
+      transcripts,
+      masterTranscript: fixStr(raw.masterTranscript, rebuiltMasterTranscript),
+      filteredTranscript: fixStr((raw as EbookJobState & { filteredTranscript?: unknown }).filteredTranscript),
+      voiceDNA,
+      contentMap,
+      architecture,
+      sections,
+      sectionAssignments,
+      chapters,
+    } as EbookJobState;
   }
 
   useEffect(() => {
@@ -1087,11 +1108,19 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       if (!frontMatter) {
         setStage("frontmatter");
         addLog("Writing preface, introduction, and conclusion…");
+        const frontMatterTranscript = typeof masterTranscript === "string" && masterTranscript
+          ? masterTranscript
+          : acc.transcripts
+              .map((t) => `[${t.label}]\n${t.text}`)
+              .join("\n\n═══════════════════════════════════════\n\n");
+        if (countWords(frontMatterTranscript) < 100) {
+          throw new Error("Saved job is missing transcript text required for front matter");
+        }
         frontMatter = await postJson<FrontBackMatter>("/api/ebook/frontmatter", {
-          masterTranscript: masterTranscript.slice(0, 14000),
-        architecture,
-        voiceDNA,
-      });
+          masterTranscript: frontMatterTranscript.slice(0, 14000),
+          architecture,
+          voiceDNA,
+        });
         addLog("✓ Front and back matter complete");
         acc.frontMatter = frontMatter;
         await checkpoint("exporting");
