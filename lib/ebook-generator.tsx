@@ -384,15 +384,15 @@ function paragraphsToHtml(text: string): string {
     .join("\n");
 }
 
-function frontMatterChapters(fm: FrontBackMatter): Array<{ title: string; data: string }> {
+function frontMatterChapters(fm: FrontBackMatter): Array<{ title: string; content: string }> {
   const chapters = [
     {
       title: "Preface",
-      data: paragraphsToHtml(fm.preface),
+      content: paragraphsToHtml(fm.preface),
     },
     {
       title: "Introduction",
-      data: paragraphsToHtml(fm.introduction),
+      content: paragraphsToHtml(fm.introduction),
     },
   ];
   return chapters;
@@ -434,25 +434,25 @@ function chapterToHtml(chapter: ChapterDraft): string {
   return parts.join("\n");
 }
 
-function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; data: string }> {
-  const chapters: Array<{ title: string; data: string }> = [
+function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; content: string }> {
+  const chapters: Array<{ title: string; content: string }> = [
     {
       title: "Conclusion",
-      data: paragraphsToHtml(fm.conclusion),
+      content: paragraphsToHtml(fm.conclusion),
     },
   ];
 
   if (fm.aboutAuthor) {
     chapters.push({
       title: "About the Author",
-      data: paragraphsToHtml(fm.aboutAuthor),
+      content: paragraphsToHtml(fm.aboutAuthor),
     });
   }
 
   if (fm.resourcesList.length > 0) {
     chapters.push({
       title: "Resources",
-      data: `<ul>${fm.resourcesList.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`,
+      content: `<ul>${fm.resourcesList.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`,
     });
   }
 
@@ -470,7 +470,7 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
     ...frontMatterChapters(manifest.frontMatter),
     ...manifest.chapters.map((ch) => ({
       title: `Chapter ${ch.number}: ${ch.title}`,
-      data: chapterToHtml(ch),
+      content: chapterToHtml(ch),
     })),
     ...backMatterChapters(manifest.frontMatter),
   ];
