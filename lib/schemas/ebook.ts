@@ -30,7 +30,7 @@ export const ContentSegmentSchema = z.object({
   sourceAudio: z.enum(["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6"]),
   topic: z.string(),
   rawText: z.string(),                          // the actual transcript excerpt
-  keyPoints: z.array(z.string()),               // points explicitly made in this segment
+  keyPoints: z.array(z.string()).default([]),               // points explicitly made in this segment
   quotes: z.array(QuoteSchema).default([]),     // any scripture/quotes in this segment
   estimatedWordCount: z.number(),
 });
@@ -51,7 +51,7 @@ export const SectionBlueprintSchema = z.object({
   sectionNumber: z.number(),
   heading: z.string(),
   sourceSegmentIds: z.array(z.string()),        // which ContentSegment IDs feed this section
-  keyPoints: z.array(z.string()),               // from the actual content
+  keyPoints: z.array(z.string()).default([]),               // from the actual content
   quotesInSection: z.array(QuoteSchema).default([]),
   targetWordCount: z.number(),                  // determined by available content
 });
@@ -86,9 +86,9 @@ export const SectionAssignmentSchema = z.object({
   chapterTitle: z.string(),
   sectionNumber: z.number(),
   heading: z.string(),
-  transcriptExcerpts: z.array(z.string()),      // raw transcript text to write from
+  transcriptExcerpts: z.array(z.string()).default([]),      // raw transcript text to write from
   quotes: z.array(QuoteSchema).default([]),
-  keyPoints: z.array(z.string()),
+  keyPoints: z.array(z.string()).default([]),
   voiceDNA: VoiceDNASchema,
   previousSectionEnding: z.string(),           // last 2 paragraphs of previous section
   targetWordCount: z.number(),

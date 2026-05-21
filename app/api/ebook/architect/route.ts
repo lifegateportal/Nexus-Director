@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
     id: s.id,
     sourceAudio: s.sourceAudio,
     topic: s.topic,
-    keyPoints: s.keyPoints.slice(0, 3), // first 3 only
+    keyPoints: (s.keyPoints ?? []).slice(0, 3), // first 3 only
     estimatedWordCount: s.estimatedWordCount,
   }));
 
