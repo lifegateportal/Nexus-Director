@@ -14,13 +14,13 @@ export const QuoteSchema = z.object({
 // ─── Voice DNA ───────────────────────────────────────────────────────────────
 
 export const VoiceDNASchema = z.object({
-  signaturePhrases: z.array(z.string()),        // repeated phrases, verbal stamps
-  preferredTerminology: z.array(z.string()),   // domain vocabulary the author uses
-  toneProfile: z.string(),                      // e.g. "authoritative, pastoral, warm"
-  sentencePattern: z.enum(["short-punchy", "long-explanatory", "mixed"]),
-  rhetoricalPatterns: z.array(z.string()),      // "uses threes", "rhetorical questions"
-  teachingStyle: z.string(),                    // how they open/develop/close points
-  avoidWords: z.array(z.string()),             // words the author never says (for ghost-writing guard)
+  signaturePhrases: z.array(z.string()).default([]),        // repeated phrases, verbal stamps
+  preferredTerminology: z.array(z.string()).default([]),   // domain vocabulary the author uses
+  toneProfile: z.string().default(""),                      // e.g. "authoritative, pastoral, warm"
+  sentencePattern: z.enum(["short-punchy", "long-explanatory", "mixed"]).default("mixed"),
+  rhetoricalPatterns: z.array(z.string()).default([]),      // "uses threes", "rhetorical questions"
+  teachingStyle: z.string().default(""),                    // how they open/develop/close points
+  avoidWords: z.array(z.string()).default([]),             // words the author never says (for ghost-writing guard)
 });
 
 // ─── Content Segment ─────────────────────────────────────────────────────────
@@ -99,9 +99,9 @@ export const SectionAssignmentSchema = z.object({
 export const SectionDraftSchema = z.object({
   chapterNumber: z.number(),
   sectionNumber: z.number(),
-  heading: z.string(),
-  body: z.string(),
-  wordCount: z.number(),
+  heading: z.string().default(""),
+  body: z.string().default(""),
+  wordCount: z.number().default(0),
   status: z.enum(["pending", "writing", "complete", "failed"]).default("pending"),
 });
 
@@ -120,13 +120,13 @@ export const ChapterPolishInputSchema = z.object({
 
 export const ChapterDraftSchema = z.object({
   number: z.number(),
-  title: z.string(),
-  intro: z.string(),
+  title: z.string().default(""),
+  intro: z.string().default(""),
   sections: z.array(SectionDraftSchema),
-  conclusion: z.string(),
-  keyTakeaways: z.array(z.string()),
-  reflectionQuestions: z.array(z.string()),
-  totalWordCount: z.number(),
+  conclusion: z.string().default(""),
+  keyTakeaways: z.array(z.string()).default([]),
+  reflectionQuestions: z.array(z.string()).default([]),
+  totalWordCount: z.number().default(0),
   status: z.enum(["pending", "polishing", "complete", "failed"]).default("pending"),
 });
 

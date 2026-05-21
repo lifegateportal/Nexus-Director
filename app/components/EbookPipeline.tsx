@@ -545,13 +545,88 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
   }, [exportUrls]);
 
   // ── Hydrate from localStorage (primary) or IndexedDB (fallback) on mount ──
+
+  // Sanitize raw localStorage data — applies missing defaults that Zod can't fill
+  // because data is loaded with JSON.parse (not Zod.parse), so .default() never runs.
+  function normalizeJob(raw: EbookJobState): EbookJobState {
+    const fixArrays = <T,>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : []);
+    const fixStr = (v: unknown, fb = ""): string => (typeof v === "string" ? v : fb);
+
+    const vdna = raw.voiceDNA as Record<string, unknown> | null;
+    const voiceDNA = vdna ? {
+      ...vdna,
+      signaturePhrases:      fixArrays(vdna.signaturePhrases),
+      preferredTerminology:  fixArrays(vdna.preferredTerminology),
+      rhetoricalPatterns:    fixArrays(vdna.rhetoricalPatterns),
+      avoidWords:            fixArrays(vdna.avoidWords),
+      toneProfile:           fixStr(vdna.toneProfile),
+      teachingStyle:         fixStr(vdna.teachingStyle),
+      sentencePattern:       (vdna.sentencePattern as string) ?? "mixed",
+    } : null;
+
+    const cm = raw.contentMap as Record<string, unknown> | null;
+    const contentMap = cm ? {
+      ...cm,
+      allQuotes: fixArrays(cm.allQuotes),
+      segments: fixArrays<Record<string, unknown>>(cm.segments).map((s) => ({
+        ...s,
+        keyPoints: fixArrays(s.keyPoints),
+        quotes:    fixArrays(s.quotes),
+        rawText:   fixStr(s.rawText),
+      })),
+    } : null;
+
+    const arch = raw.architecture as Record<string, unknown> | null;
+    const architecture = arch ? {
+      ...arch,
+      chapters: fixArrays<Record<string, unknown>>(arch.chapters).map((c) => ({
+        ...c,
+        quotesInChapter: fixArrays(c.quotesInChapter),
+        sections: fixArrays<Record<string, unknown>>(c.sections).map((s) => ({
+          ...s,
+          keyPoints:       fixArrays(s.keyPoints),
+          quotesInSection: fixArrays(s.quotesInSection),
+          sourceSegmentIds: fixArrays(s.sourceSegmentIds),
+        })),
+      })),
+    } : null;
+
+    const sections = fixArrays<Record<string, unknown>>(raw.sections as unknown).map((s) => ({
+      ...s,
+      body:    fixStr(s.body),
+      heading: fixStr(s.heading),
+    }));
+
+    const sectionAssignments = fixArrays<Record<string, unknown>>(raw.sectionAssignments as unknown).map((a) => ({
+      ...a,
+      keyPoints:          fixArrays(a.keyPoints),
+      transcriptExcerpts: fixArrays(a.transcriptExcerpts),
+      quotes:             fixArrays(a.quotes),
+    }));
+
+    const chapters = fixArrays<Record<string, unknown>>(raw.chapters as unknown).map((c) => ({
+      ...c,
+      intro:               fixStr(c.intro),
+      conclusion:          fixStr(c.conclusion),
+      keyTakeaways:        fixArrays(c.keyTakeaways),
+      reflectionQuestions: fixArrays(c.reflectionQuestions),
+      sections: fixArrays<Record<string, unknown>>(c.sections).map((s) => ({
+        ...s,
+        body:    fixStr(s.body),
+        heading: fixStr(s.heading),
+      })),
+    }));
+
+    return { ...raw, voiceDNA, contentMap, architecture, sections, sectionAssignments, chapters } as EbookJobState;
+  }
+
   useEffect(() => {
     // Try localStorage first — it's synchronous and reliably available in Safari
     const tryLocalStorage = () => {
       try {
         const raw = localStorage.getItem(JOB_STATE_KEY);
         if (!raw) return null;
-        return JSON.parse(raw) as EbookJobState;
+        return normalizeJob(JSON.parse(raw) as EbookJobState);
       } catch { return null; }
     };
 
@@ -587,7 +662,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
     if (!savedId) return;
     void getEbookJob(savedId).then((job) => {
       if (!job) return;
-      restore(job);
+      restore(normalizeJob(job));
     }).catch(() => { /* IndexedDB unavailable — ignore */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
