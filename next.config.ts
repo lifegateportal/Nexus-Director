@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@deepgram/sdk"],
+  serverExternalPackages: ["@deepgram/sdk", "@react-pdf/renderer", "epub-gen-memory"],
   typescript: {
     ignoreBuildErrors: true,
   },
