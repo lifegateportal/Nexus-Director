@@ -96,19 +96,19 @@ function writeChapter(doc: any, chapter: ChapterDraft) {
     doc.moveDown();
   }
 
-  if (chapter.keyTakeaways.length > 0) {
+  if ((chapter.keyTakeaways ?? []).length > 0) {
     doc.fontSize(9).font("Helvetica-Bold").fillColor("#888888").text("KEY TAKEAWAYS");
     doc.moveDown(0.3);
-    for (const t of chapter.keyTakeaways) {
+    for (const t of (chapter.keyTakeaways ?? [])) {
       doc.fontSize(10).font("Helvetica").fillColor("#222222").text(`• ${t}`, { lineGap: 3 });
     }
     doc.moveDown();
   }
 
-  if (chapter.reflectionQuestions.length > 0) {
+  if ((chapter.reflectionQuestions ?? []).length > 0) {
     doc.fontSize(9).font("Helvetica-Bold").fillColor("#888888").text("REFLECTION QUESTIONS");
     doc.moveDown(0.3);
-    chapter.reflectionQuestions.forEach((q, i) => {
+    (chapter.reflectionQuestions ?? []).forEach((q, i) => {
       doc.fontSize(10).font("Helvetica").fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: 3 });
     });
     doc.moveDown();
@@ -129,11 +129,11 @@ function writeBackMatter(doc: any, fm: FrontBackMatter) {
     doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.aboutAuthor, { lineGap: 4 });
   }
 
-  if (fm.resourcesList.length > 0) {
+  if ((fm.resourcesList ?? []).length > 0) {
     doc.addPage();
     doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Resources");
     writeDivider(doc);
-    for (const r of fm.resourcesList) {
+    for (const r of (fm.resourcesList ?? [])) {
       doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3 });
     }
   }

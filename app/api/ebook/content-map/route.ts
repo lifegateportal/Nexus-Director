@@ -13,7 +13,7 @@ const MAX_SLOT_WORDS = 5000;
 // Per-slot extraction schema — NO rawText (LLM must not copy back large text blobs)
 const SlotSegmentExtractSchema = z.object({
   topic: z.string(),
-  keyPoints: z.array(z.string()),
+  keyPoints: z.array(z.string()).default([]),
   quotes: z.array(
     z.object({
       text: z.string(),

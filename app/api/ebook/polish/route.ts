@@ -9,10 +9,10 @@ export const maxDuration = 90;
 
 // Slim output — section bodies are already written; LLM only adds framing + takeaways
 const PolishOutputSchema = z.object({
-  intro: z.string(),
-  conclusion: z.string(),
-  keyTakeaways: z.array(z.string()),
-  reflectionQuestions: z.array(z.string()),
+  intro: z.string().default(""),
+  conclusion: z.string().default(""),
+  keyTakeaways: z.array(z.string()).default([]),
+  reflectionQuestions: z.array(z.string()).default([]),
 });
 
 export async function POST(req: NextRequest) {

@@ -1,5 +1,6 @@
-import { NextRequest } from "next/server";
-import { streamText } from "ai";
+import { NextRequest, NextResponse } from "next/server";
+import { generateObject } from "ai";
+import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
 
@@ -124,12 +125,22 @@ ${excerptBlock}
 
 Now write the section prose:`;
 
-  const result = streamText({
-    model: deepSeekModel,
-    system: EDITORIAL_SYSTEM,
-    prompt,
-    temperature: 0.25,
+  const SectionBodySchema = z.object({
+    body: z.string().describe("The polished prose for this section, using only the provided transcript content"),
   });
 
-  return result.toTextStreamResponse();
+  try {
+    const { object } = await generateObject({
+      model: deepSeekModel,
+      schema: SectionBodySchema,
+      mode: "tool",
+      temperature: 0.25,
+      system: EDITORIAL_SYSTEM,
+      prompt,
+    });
+    return NextResponse.json({ body: object.body }, { status: 200 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Section write failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }

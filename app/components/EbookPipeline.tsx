@@ -86,24 +86,8 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
 }
 
 async function streamSection(assignment: SectionAssignment): Promise<string> {
-  const res = await fetch("/api/ebook/write-section", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ assignment }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error?: string }).error ?? "Section write failed");
-  }
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
-  }
-  return text.trim();
+  const result = await postJson<{ body: string }>("/api/ebook/write-section", { assignment });
+  return (result.body ?? "").trim();
 }
 
 function countWords(text: string): number {
@@ -599,12 +583,25 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       heading: fixStr(s.heading),
     }));
 
-    const sectionAssignments = fixArrays<Record<string, unknown>>(raw.sectionAssignments as unknown).map((a) => ({
-      ...a,
-      keyPoints:          fixArrays(a.keyPoints),
-      transcriptExcerpts: fixArrays(a.transcriptExcerpts),
-      quotes:             fixArrays(a.quotes),
-    }));
+    const sectionAssignments = fixArrays<Record<string, unknown>>(raw.sectionAssignments as unknown).map((a) => {
+      const avdna = a.voiceDNA as Record<string, unknown> | null | undefined;
+      return {
+        ...a,
+        keyPoints:          fixArrays(a.keyPoints),
+        transcriptExcerpts: fixArrays(a.transcriptExcerpts),
+        quotes:             fixArrays(a.quotes),
+        voiceDNA: avdna ? {
+          ...avdna,
+          signaturePhrases:     fixArrays(avdna.signaturePhrases),
+          preferredTerminology: fixArrays(avdna.preferredTerminology),
+          rhetoricalPatterns:   fixArrays(avdna.rhetoricalPatterns),
+          avoidWords:           fixArrays(avdna.avoidWords),
+          toneProfile:          fixStr(avdna.toneProfile),
+          teachingStyle:        fixStr(avdna.teachingStyle),
+          sentencePattern:      (avdna.sentencePattern as string) ?? "mixed",
+        } : a.voiceDNA,
+      };
+    });
 
     const chapters = fixArrays<Record<string, unknown>>(raw.chapters as unknown).map((c) => ({
       ...c,
@@ -1138,7 +1135,12 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      setError(msg);
+      // Log full stack to browser console for debugging
+      console.error("[EbookPipeline] runPipeline crash:", err);
+      const stackHint = err instanceof Error && err.stack
+        ? ` [at: ${err.stack.split("\n").slice(1, 3).join(" → ").replace(/\s+/g, " ").slice(0, 120)}]`
+        : "";
+      setError(msg + stackHint);
       acc.status = "failed";
       acc.currentStage = "failed";
       acc.errorLog = logRef.current;
