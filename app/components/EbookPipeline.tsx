@@ -391,7 +391,7 @@ function ChapterCard({ chapter }: { chapter: ChapterDraft }) {
             <div key={s.sectionNumber}>
               <p className="text-xs font-semibold text-cyan-400/80 mb-1">{s.heading}</p>
               <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">
-                {s.body.slice(0, 220)}{s.body.length > 220 ? "…" : ""}
+                {(s.body ?? "").slice(0, 220)}{(s.body ?? "").length > 220 ? "…" : ""}
               </p>
             </div>
           ))}
@@ -884,7 +884,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       const allSections: SectionDraft[] = [...acc.sections];
       let completedCount = allSections.length;
       let previousEnding = allSections.length > 0
-        ? allSections[allSections.length - 1].body.split("\n\n").slice(-2).join("\n\n")
+        ? (allSections[allSections.length - 1].body ?? "").split("\n\n").slice(-2).join("\n\n")
         : "";
       if (completedCount > 0) {
         addLog(`↩ Resuming — ${completedCount} sections already written, continuing from section ${completedCount + 1}`);
@@ -933,7 +933,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         };
         allSections.push(draft);
         completedCount++;
-        previousEnding = body.split("\n\n").slice(-2).join("\n\n");
+        previousEnding = (body ?? "").split("\n\n").slice(-2).join("\n\n");
 
         // Update UI
         setChapters((prev) =>
@@ -986,7 +986,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
             sections: slimSections,
             chapterSegmentTexts: [], // not used by the route; omit to reduce payload
             voiceDNA,
-            quotesInChapter: chapterBlueprint.quotesInChapter.slice(0, 8),
+            quotesInChapter: (chapterBlueprint.quotesInChapter ?? []).slice(0, 8),
           },
         });
 
