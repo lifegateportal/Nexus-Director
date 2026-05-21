@@ -510,6 +510,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
   const [exportUrls, setExportUrls] = useState<{ pdfUrl?: string; epubUrl?: string } | null>(null);
+  const [completedManifest, setCompletedManifest] = useState<EbookManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [totalWords, setTotalWords] = useState(0);
   const jobIdRef = useRef<string>(newJobId());
@@ -517,12 +518,31 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
   const logRef = useRef<string[]>([]);
   // Full saved job (loaded on mount) — enables resume-from-failure
   const savedJobRef = useRef<EbookJobState | null>(null);
+  // Prevent double-triggering the auto-download across re-renders
+  const autoDownloadedRef = useRef(false);
 
   const addLog = useCallback((msg: string) => {
     const entry = `[${new Date().toLocaleTimeString()}] ${msg}`;
     logRef.current = [...logRef.current.slice(-80), entry];
     setLog([...logRef.current]);
   }, []);
+
+  // ── Auto-download PDF when export completes ──────────────────────────────
+  useEffect(() => {
+    if (exportUrls?.pdfUrl && !autoDownloadedRef.current) {
+      autoDownloadedRef.current = true;
+      try {
+        const a = document.createElement("a");
+        a.href = exportUrls.pdfUrl;
+        a.download = "";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch {
+        // auto-download blocked — user can still click the button manually
+      }
+    }
+  }, [exportUrls]);
 
   // ── Hydrate from localStorage (primary) or IndexedDB (fallback) on mount ──
   useEffect(() => {
@@ -663,7 +683,9 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       setLog([]);
       setChapters([]);
       setExportUrls(null);
+      setCompletedManifest(null);
       setTotalWords(0);
+      autoDownloadedRef.current = false;
     }
     const jobId = resume?.jobId ?? jobIdRef.current;
     jobIdRef.current = jobId;
@@ -1033,6 +1055,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       acc.chapters = polishedChapters;
       await checkpoint("complete");
       setStage("complete");
+      setCompletedManifest(manifest);
       // Notify parent so the Nexus Assistant can take over for post-production edits
       onManifestReady?.(manifest);
 
@@ -1131,9 +1154,11 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
               setLog([]);
               logRef.current = [];
               setExportUrls(null);
+              setCompletedManifest(null);
               setTotalWords(0);
               setProgress({ total: 0, completed: 0 });
               jobIdRef.current = newJobId();
+              autoDownloadedRef.current = false;
               localStorage.removeItem(JOB_STORAGE_KEY);
               localStorage.removeItem(JOB_STATE_KEY);
             }}
@@ -1188,10 +1213,12 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
               setLog([]);
               logRef.current = [];
               setExportUrls(null);
+              setCompletedManifest(null);
               setTotalWords(0);
               setProgress({ total: 0, completed: 0 });
               savedJobRef.current = null;
               jobIdRef.current = newJobId();
+              autoDownloadedRef.current = false;
               localStorage.removeItem(JOB_STORAGE_KEY);
               localStorage.removeItem(JOB_STATE_KEY);
             }}
@@ -1205,9 +1232,12 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       {/* Download Buttons */}
       {exportUrls && (
         <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/6 p-4 space-y-3">
-          <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest">
-            Your Ebook Is Ready
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest">
+              Your Ebook Is Ready
+            </p>
+            <span className="text-[10px] text-slate-500">PDF auto-downloaded</span>
+          </div>
           <div className="flex flex-col sm:flex-row gap-3">
             {exportUrls.pdfUrl && (
               <a
@@ -1238,6 +1268,33 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
               </a>
             )}
           </div>
+          {/* Project File backup — lets user save full structured manifest locally */}
+          {completedManifest && (
+            <button
+              type="button"
+              onClick={() => {
+                const slug = completedManifest.bookTitle.replace(/\s+/g, "-").toLowerCase().slice(0, 60);
+                const blob = new Blob([JSON.stringify(completedManifest, null, 2)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${slug}-project.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 2000);
+              }}
+              className="w-full min-h-[48px] flex items-center justify-center gap-2 rounded-xl border border-slate-600/50 bg-slate-800/60 text-slate-300 text-sm font-medium hover:border-slate-500 hover:text-slate-100 active:scale-[0.98] transition-all"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 flex-shrink-0">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" strokeLinecap="round" strokeLinejoin="round" />
+                <polyline points="14,2 14,8 20,8" />
+                <line x1="12" y1="18" x2="12" y2="12" strokeLinecap="round" />
+                <polyline points="9,15 12,18 15,15" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Save Project File (.json)
+            </button>
+          )}
         </div>
       )}
 
