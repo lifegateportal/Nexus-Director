@@ -58,28 +58,36 @@ export async function POST(req: NextRequest) {
 
   const { manifest, instruction, pipeline } = input;
 
-  const safeExcerpt = (value: string | null | undefined, max = 300) => (value ?? "").slice(0, max);
+  const safeExcerpt = (value: string | null | undefined, max = 600) => (value ?? "").slice(0, max);
 
-  // Build a compact book summary to give the LLM context without the full prose
+  // Build a rich book context — front matter in full, section bodies as excerpts
+  // (full body sent for short sections; excerpted for long ones to stay within token budget)
   const bookSummary = {
     bookTitle: manifest.bookTitle,
     subtitle: manifest.subtitle,
     authorName: manifest.authorName,
     totalWordCount: manifest.totalWordCount,
     frontMatter: {
-      prefaceExcerpt: safeExcerpt(manifest.frontMatter.preface),
-      introductionExcerpt: safeExcerpt(manifest.frontMatter.introduction),
+      preface: manifest.frontMatter.preface,
+      introduction: manifest.frontMatter.introduction,
+      conclusion: manifest.frontMatter.conclusion,
+      aboutAuthor: manifest.frontMatter.aboutAuthor,
+      resourcesList: manifest.frontMatter.resourcesList,
     },
     chapters: manifest.chapters.map((ch) => ({
       number: ch.number,
       title: ch.title,
+      intro: ch.intro,
+      conclusion: ch.conclusion,
       keyTakeaways: ch.keyTakeaways,
       reflectionQuestions: ch.reflectionQuestions,
       totalWordCount: ch.totalWordCount,
       sections: ch.sections.map((s) => ({
         sectionNumber: s.sectionNumber,
+        chapterNumber: ch.number,
         heading: s.heading,
-        bodyExcerpt: safeExcerpt(s.body),
+        // Send full body for short sections; excerpt for long ones to manage token budget
+        body: (s.body ?? "").length <= 1200 ? s.body : safeExcerpt(s.body, 800) + "\n…[truncated for context — rewrite using existing content and instruction]",
         wordCount: s.wordCount,
       })),
     })),
@@ -105,7 +113,7 @@ export async function POST(req: NextRequest) {
       schema: EbookChangeSchema,
       mode: "tool",
       temperature: 0.15,
-      system: `You are the Nexus Book Director — a precision ebook editor with full authority over every aspect of this published teaching book.
+      system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
 
 ════════════════════════════════════════════
 SPEAKER-FIDELITY LAW — NON-NEGOTIABLE
@@ -121,39 +129,54 @@ BOOK-SAFETY RULE — ALWAYS APPLY
 - Keep only reader-appropriate teaching prose.
 
 ════════════════════════════════════════════
-WHAT YOU CAN DO
+FULL AUTHORITY — WHAT YOU CAN DO
 ════════════════════════════════════════════
-TITLE & METADATA:
-  "change the title to…"            → update bookTitle
-  "update the subtitle"             → update subtitle
-  "set the author name to…"         → update authorName
+METADATA:
+  "change the title to…"              → update bookTitle
+  "update the subtitle"               → update subtitle
+  "set the author name to…"           → update authorName
 
-FRONT MATTER:
-  "rewrite the preface"             → update frontMatter.preface using existing content
-  "revise the introduction"         → update frontMatter.introduction
-  "update the conclusion"           → update frontMatter.conclusion
+FRONT MATTER (return full frontMatter object with ALL fields):
+  "rewrite the preface"               → update frontMatter.preface
+  "revise the introduction"           → update frontMatter.introduction
+  "update the conclusion"             → update frontMatter.conclusion
+  "update about the author"           → update frontMatter.aboutAuthor
+  "update the resources list"         → update frontMatter.resourcesList
+  Any front matter instruction        → return the COMPLETE frontMatter object with all fields preserved
 
-CHAPTER OPERATIONS:
-  "rename chapter N to…"            → update chapters[N-1].title
-  "edit the intro of chapter N"     → update chapters[N-1].intro
-  "edit the conclusion of chapter N"→ update chapters[N-1].conclusion
-  "add a takeaway to chapter N"     → update chapters[N-1].keyTakeaways
-  "replace the reflection questions in chapter N" → update chapters[N-1].reflectionQuestions
-  "reorder the sections in chapter N"             → reorder sections array
+CHAPTER OPERATIONS (return the full chapters array):
+  "rename chapter N to…"              → update chapters[N-1].title
+  "rewrite the intro of chapter N"    → update chapters[N-1].intro (full prose, not excerpt)
+  "rewrite the conclusion of chapter N" → update chapters[N-1].conclusion
+  "add/replace takeaways in chapter N" → update chapters[N-1].keyTakeaways (5–7 bullet items)
+  "replace reflection questions in chapter N" → update chapters[N-1].reflectionQuestions (4–6 questions)
+  "reorder sections in chapter N"     → reorder chapters[N-1].sections array
 
-SECTION OPERATIONS:
-  "rename section N.M to…"          → use updatedSections with chapterNumber N, sectionNumber M
-  "rewrite section N.M"             → use updatedSections (use body from existing bookSummary + instruction)
-  "improve the heading of section N.M"→ updatedSections with updated heading
+SECTION OPERATIONS (return only changed sections via updatedSections):
+  "rename section N.M to…"            → updatedSections: [{chapterNumber:N, sectionNumber:M, heading:…, body:existing}]
+  "rewrite section N.M"               → updatedSections: [{chapterNumber:N, sectionNumber:M, heading:existing, body:FULL REWRITE}]
+  "expand section N.M"                → updatedSections with longer body using existing content
+  "improve section N.M"               → updatedSections with refined prose, same ideas
+  "fix the tone in section N.M"       → updatedSections with tone adjusted, same content
+  "remove audience language from section N.M" → updatedSections with congregation/live-event language removed
+
+BOOK-WIDE OPERATIONS:
+  "fix all live-audience language"    → return full chapters array with all sections cleaned
+  "remove all greeting/crowd phrases" → return full chapters array
+  "standardise all section headings"  → return full chapters array with consistent heading format
+  "add takeaways to all chapters"     → return full chapters array with keyTakeaways filled in
 
 ════════════════════════════════════════════
 OUTPUT RULES
 ════════════════════════════════════════════
-- Only return fields that ACTUALLY changed — leave others as undefined
-- If chapters array is returned, include ALL chapters (changed and unchanged)
-- If updatedSections is returned, include ONLY the changed sections; client merges them
+- Return ONLY fields that ACTUALLY changed — leave others as undefined
+- If chapters array is returned, include ALL chapters (changed and unchanged) with ALL their sections
+- If updatedSections is returned, include ONLY the changed sections — the client merges them by chapterNumber + sectionNumber
+- The body field in updatedSections MUST be the FULL rewritten prose — never truncate
+- frontMatter: if returned, include ALL fields (preface, introduction, conclusion, aboutAuthor, resourcesList)
 - Always write a concise one-sentence "summary" of exactly what changed
-- If the instruction is ambiguous, make the most useful interpretation and explain in summary`,
+- If the instruction is ambiguous, make the most useful interpretation and explain in summary
+- If asked to do something outside your authority or that violates fidelity law, explain why in the summary and return no changes`,
       prompt: [
         "CURRENT BOOK STRUCTURE:",
         JSON.stringify(bookSummary, null, 2),

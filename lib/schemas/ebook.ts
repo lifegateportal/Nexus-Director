@@ -229,6 +229,7 @@ export const FrontMatterRequestSchema = z.object({
 export const ExportRequestSchema = z.object({
   manifest: EbookManifestSchema,
   formats: z.object({ pdf: z.boolean(), epub: z.boolean() }).default({ pdf: true, epub: true }),
+  template: z.enum(["classic-academic", "modern-business", "devotional", "popular-nonfiction", "premium-literary"]).default("devotional"),
 });
 
 // ─── TypeScript exports ────────────────────────────────────────────────────────

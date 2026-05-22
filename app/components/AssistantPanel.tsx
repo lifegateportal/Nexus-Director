@@ -216,13 +216,14 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         {/* Suggestion chips — ebook mode */}
         {ebookManifest && (
           <div className="flex-shrink-0 border-b border-slate-800 px-3 py-2.5">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Book Metadata</p>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Metadata</p>
             <div className="flex gap-1.5 overflow-x-auto pb-1">
               {[
                 "Change the book title",
                 "Update the subtitle",
                 "Revise the preface",
                 "Rewrite the introduction",
+                "Update the conclusion",
               ].map((chip) => (
                 <button
                   key={chip}
@@ -234,20 +235,38 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
                 </button>
               ))}
             </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Chapters</p>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Chapters &amp; Sections</p>
             <div className="flex gap-1.5 overflow-x-auto pb-1">
               {[
                 "Rename chapter 1",
-                "Add a key takeaway to chapter 1",
+                "Rewrite the intro of chapter 1",
                 "Replace the reflection questions in chapter 1",
-                "Edit the intro of chapter 1",
-                "Edit the conclusion of chapter 1",
+                "Add takeaways to all chapters",
+                "Rewrite section 1.1",
+                "Fix live-audience language in section 1.1",
               ].map((chip) => (
                 <button
                   key={chip}
                   type="button"
                   onClick={() => { setInput(chip); inputRef.current?.focus(); }}
                   className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Book-Wide Fixes</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {[
+                "Fix all live-audience language",
+                "Remove all greeting phrases",
+                "Standardise all section headings",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-amber-500/40 hover:text-amber-300"
                 >
                   {chip}
                 </button>

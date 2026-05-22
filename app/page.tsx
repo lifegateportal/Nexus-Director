@@ -11,6 +11,8 @@ import { PromptBar } from "@/app/components/PromptBar";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { ProjectsPanel } from "@/app/components/ProjectsPanel";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
+import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
+import type { EbookManifest } from "@/lib/schemas/ebook";
 import { LogicTransformResultSchema } from "@/lib/schemas/blueprint";
 import { UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
@@ -50,6 +52,10 @@ export default function HomePage() {
   const [stage,       setStage]       = useState<PipelineStage>("idle");
   const [models,      setModels]      = useState<ModelState[]>(INITIAL_MODELS);
   const [activeNav,   setActiveNav]   = useState("overview");
+
+  // Ebook pipeline state — lifted so the AI assistant can read and edit the book
+  const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
+  const [ebookSnapshot, setEbookSnapshot] = useState<EbookPipelineSnapshot | null>(null);
 
   // Project persistence
   const [projects,        setProjects]        = useState<ProjectSnapshot[]>([]);
@@ -378,7 +384,11 @@ export default function HomePage() {
                   />
                 ) : activeNav === "ebook" ? (
                   <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
-                    <EbookPipeline />
+                    <EbookPipeline
+                      ebookManifest={ebookManifest}
+                      onManifestReady={setEbookManifest}
+                      onPipelineSnapshotChange={setEbookSnapshot}
+                    />
                   </div>
                 ) : activeNav === "deploy" ? (
                   <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
@@ -493,6 +503,12 @@ export default function HomePage() {
         onUpdate={handleAssistantUpdate}
         siteConfig={siteConfig}
         onSiteUpdate={handleSiteUpdate}
+        ebookManifest={ebookManifest}
+        onEbookUpdate={(updated, summary) => {
+          setEbookManifest(updated);
+          void summary;
+        }}
+        ebookPipelineSnapshot={ebookSnapshot}
         loadedHistory={chatHistory}
         loadKey={panelLoadKey}
         onChatChange={setChatHistory}

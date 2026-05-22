@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
-  const { manifest, formats } = input;
+  const { manifest, formats, template } = input;
   const safeBookTitle = typeof manifest.bookTitle === "string" ? manifest.bookTitle : "ebook";
   const slug = safeBookTitle
     .toLowerCase()
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
 
     // ── Generate PDF ──────────────────────────────────────────────────────────
     if (formats.pdf) {
-      const pdfBuffer = await generatePdfBuffer(manifest);
+      const pdfBuffer = await generatePdfBuffer(manifest, template);
       results.pdfUrl = await uploadOrStream(pdfBuffer, `${prefix}.pdf`, "application/pdf");
     }
 

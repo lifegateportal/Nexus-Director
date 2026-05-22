@@ -8,6 +8,7 @@ import {
   newJobId,
 } from "@/lib/ebook-job-store";
 import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
+import { BOOK_TEMPLATES, BOOK_TEMPLATE_IDS, type BookTemplateId } from "@/lib/book-templates";
 import type {
   VoiceDNA,
   ContentMap,
@@ -668,6 +669,7 @@ export function EbookPipeline({
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
   const [exportUrls, setExportUrls] = useState<{ pdfUrl?: string; epubUrl?: string } | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<BookTemplateId>("devotional");
   const [completedManifest, setCompletedManifest] = useState<EbookManifest | null>(null);
   const [reviewContext, setReviewContext] = useState<{ contentMap: ContentMap; frontMatter: FrontBackMatter } | null>(null);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
@@ -722,6 +724,23 @@ export function EbookPipeline({
     setExportUrls(null);
     onManifestReady?.(normalized);
   }, [onManifestReady, recalculateManifestTotal]);
+
+  // Apply externally-provided manifest updates (e.g. from the AI assistant).
+  // Uses a ref guard so this only fires when the parent genuinely pushes a new value,
+  // not when onManifestReady causes the same object to round-trip back as a prop.
+  const externalManifestRef = useRef<EbookManifest | null>(null);
+  useEffect(() => {
+    if (!ebookManifest || ebookManifest === externalManifestRef.current) return;
+    externalManifestRef.current = ebookManifest;
+    // Only inject when the pipeline has already produced a completed manifest
+    setCompletedManifest((current) => {
+      if (current === null) return current;
+      setChapters(ebookManifest.chapters);
+      setTotalWords(ebookManifest.totalWordCount);
+      return ebookManifest;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ebookManifest]);
 
   useEffect(() => {
   if (!ebookManifest && !completedManifest) {
@@ -797,7 +816,7 @@ export function EbookPipeline({
       addLog("Generating PDF and EPUB files…");
       const urls = await postJson<{ pdfUrl?: string; epubUrl?: string }>(
         "/api/ebook/export",
-        { manifest: exportManifest, formats: { pdf: true, epub: true } }
+        { manifest: exportManifest, formats: { pdf: true, epub: true }, template: selectedTemplate }
       );
       setExportUrls(urls);
       addLog(`✓ PDF ready: ${urls.pdfUrl ? "yes" : "no"} | EPUB ready: ${urls.epubUrl ? "yes" : "no"}`);
@@ -1646,6 +1665,35 @@ export function EbookPipeline({
 
         {completedManifest && reviewContext && (
           <div className="rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-4 shadow-panel space-y-4">
+            {/* Template Picker */}
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3">Book Layout Template</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {BOOK_TEMPLATE_IDS.map((id) => {
+                  const tmpl = BOOK_TEMPLATES[id];
+                  const active = selectedTemplate === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setSelectedTemplate(id)}
+                      className={`min-h-[64px] text-left rounded-xl border px-3 py-2.5 transition-all active:scale-[0.98] ${
+                        active
+                          ? "border-cyan-500/60 bg-cyan-500/10 ring-1 ring-cyan-500/30"
+                          : "border-slate-700/50 bg-slate-800/50 hover:border-slate-600"
+                      }`}
+                    >
+                      <p className={`text-sm font-semibold leading-tight ${active ? "text-cyan-300" : "text-slate-200"}`}>{tmpl.name}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400 leading-snug">{tmpl.badge}</p>
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedTemplate && (
+                <p className="mt-2 text-xs text-slate-500 italic">{BOOK_TEMPLATES[selectedTemplate].description}</p>
+              )}
+            </div>
+
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Final Review</p>
