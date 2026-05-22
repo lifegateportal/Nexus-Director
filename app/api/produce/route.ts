@@ -80,7 +80,8 @@ PRICING — exactly 3 tiers:
 2. Pro — priceUsd: 47–97, period: "monthly", 5–7 bullets
 3. Lifetime — priceUsd: 197–497, period: "once", 6–8 bullets
 
-CURRICULUM — each module: moduleTitle, moduleDescription (2–3 sentences), learningObjectives (3–5), keyTerms (4–8 entries with term + definition), lessonOutlines (2–4 stubs)
+CURRICULUM — each module: moduleTitle, moduleDescription (2–3 sentences), lessonOutlines (2–4 stubs with title, type, durationMinutes only).
+Do NOT output learningObjectives or keyTerms here — those are generated in a separate pass.
 
 SEO: title (50–60 chars), description (140–155 chars), keywords (8–12)
 onboardingSteps: 4–6 steps from signup → first lesson`,
@@ -107,6 +108,8 @@ onboardingSteps: 4–6 steps from signup → first lesson`,
           keyTerms: Array<{ term: string; definition: string }>;
           lessons: FullLesson[];
         };
+        // ModuleLessonsSchema now includes learningObjectives + keyTerms so they
+        // are generated in Phase 2, keeping Phase 1 well under 8K output tokens.
 
         const fullCurriculum: FullModule[] = [];
 
@@ -117,10 +120,16 @@ onboardingSteps: 4–6 steps from signup → first lesson`,
             mode: "json",
             maxTokens: 7_000,
             temperature: 0.3,
-            system: `You are the Curator. Write full lesson content for one academy module. You receive lesson outlines — expand each into the complete lesson.
+            system: `You are the Curator. Write full module content for one academy module.
+
+Output these top-level fields:
+- learningObjectives: 3–5 measurable outcomes starting with action verbs (Understand, Apply, Identify, Demonstrate, Analyse)
+- keyTerms: 4–8 glossary entries — domain-specific terms from this module. Each: term + 1–2 sentence definition grounded in the transcript.
+- lessons: expand every lesson outline into the full lesson.
 
 For EVERY lesson provide:
-- title / type / durationMinutes / description: match the outline exactly
+- title / type / durationMinutes: match the outline exactly
+- description: one sentence on what the student learns and why it matters
 - notes: 300–600 words of dense educational prose grounded in the transcript.
   Structure: # [Title] → framing para → ## [Concept 1] → ## [Concept 2] → ## Key Principles
   Rules: min 2 H2 sections, **bold** key terms, > blockquotes for direct quotes, no invented content.
@@ -128,18 +137,18 @@ For EVERY lesson provide:
 - actionItems: 3–4 steps starting with action verbs (Write down..., Identify..., Practice...)
 - quiz: EXACTLY 3 questions, each with EXACTLY 4 options, correct is 0–3
 
-Ground every claim in the transcript. Be specific to this module's content.`,
+Ground every claim in the transcript. Be specific to this module.`,
             prompt: `MODULE: ${mod.moduleTitle}
 DESCRIPTION: ${mod.moduleDescription}
-LESSON OUTLINES:
+LESSON OUTLINES (title / type / durationMinutes):
 ${JSON.stringify(mod.lessonOutlines, null, 2)}${transcriptSection}`,
           });
 
           fullCurriculum.push({
             moduleTitle: mod.moduleTitle,
             moduleDescription: mod.moduleDescription,
-            learningObjectives: mod.learningObjectives,
-            keyTerms: mod.keyTerms,
+            learningObjectives: lessonData.learningObjectives,
+            keyTerms: lessonData.keyTerms,
             lessons: lessonData.lessons,
           });
         }

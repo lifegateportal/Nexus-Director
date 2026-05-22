@@ -114,11 +114,11 @@ export type AcademyPackage = z.infer<typeof AcademyPackageSchema>;
 // Phase 1: full academy structure with lightweight lesson stubs (no notes/quiz).
 // Keeps DeepSeek Phase 1 output well under 8K tokens.
 
+// Minimal stub used in Phase 1 — description/notes generated in Phase 2.
 const LessonOutlineSchema = z.object({
   title: z.string(),
   type: z.enum(["video", "reading", "quiz", "exercise"]),
   durationMinutes: z.number(),
-  description: z.string(),
 });
 
 export const AcademyShellSchema = z.object({
@@ -143,11 +143,11 @@ export const AcademyShellSchema = z.object({
     period: z.enum(["once", "monthly", "yearly"]),
     features: z.array(z.string()),
   })),
+  // learningObjectives and keyTerms are deferred to Phase 2 to keep this
+  // call well under DeepSeek's 8K output limit.
   curriculum: z.array(z.object({
     moduleTitle: z.string(),
     moduleDescription: z.string(),
-    learningObjectives: z.array(z.string()).default([]),
-    keyTerms: z.array(z.object({ term: z.string(), definition: z.string() })).default([]),
     lessonOutlines: z.array(LessonOutlineSchema),
   })),
   seoMeta: z.object({
@@ -158,8 +158,12 @@ export const AcademyShellSchema = z.object({
   onboardingSteps: z.array(z.string()),
 });
 
-// Phase 2: full lesson content for a single module (per-module API call).
+// Phase 2: module metadata + full lesson content (per-module API call).
+// learningObjectives and keyTerms are generated here alongside lesson notes
+// so all detailed prose is spread across multiple bounded calls.
 export const ModuleLessonsSchema = z.object({
+  learningObjectives: z.array(z.string()).default([]),
+  keyTerms: z.array(z.object({ term: z.string(), definition: z.string() })).default([]),
   lessons: z.array(z.object({
     title: z.string(),
     type: z.enum(["video", "reading", "quiz", "exercise"]),
