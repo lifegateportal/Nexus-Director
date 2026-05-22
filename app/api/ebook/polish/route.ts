@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
       ({ object } = await generateObject({
         model: deepSeekModel,
         schema: PolishOutputSchema,
-        mode: "tool",
+        mode: "json",
         temperature: 0.2,
         system: `You are an editorial assistant finalizing a chapter of a published teaching book.
 

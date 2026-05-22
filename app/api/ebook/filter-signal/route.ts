@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: MarkersSchema,
-      mode: "tool",
+      mode: "json",
       temperature: 0.1,
       system: `You are a content signal filter for a book production pipeline.
 

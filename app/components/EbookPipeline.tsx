@@ -1458,7 +1458,7 @@ export function EbookPipeline({
         // Restore full section bodies that were stripped for the request
         const fullPolished: ChapterDraft = {
           ...polished,
-          sections: polished.sections.map((s) => {
+          sections: (polished.sections ?? chapterSections).map((s) => {
             const full = chapterSections.find((cs) => cs.sectionNumber === s.sectionNumber);
             return full ? { ...s, body: full.body, wordCount: full.wordCount } : s;
           }),
