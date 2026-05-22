@@ -146,6 +146,33 @@ function findMatchingBlockQuote(paragraph: string, quotes: Quote[]): Quote | nul
   }) ?? null;
 }
 
+/**
+ * Detects AI-formatted inline scripture blocks where the section writer could not
+ * be matched against allQuotes. Looks for:
+ *   <body text>\n— Book Chapter:Verse (Translation)
+ * Returns null when the paragraph doesn't match this pattern.
+ */
+function detectInlineScripture(paragraph: string): Quote | null {
+  // Must contain an internal newline followed by an em/en-dash (reference line)
+  const match = paragraph.match(/^([\s\S]+?)\n[\u2014\u2013-]\s*(.+?)\s*$/);
+  if (!match) return null;
+  // Reference must contain a digit (chapter:verse or year) to avoid false positives on
+  // plain attribution lines like "— Author Name"
+  const refFull = match[2].trim();
+  if (!/\d/.test(refFull)) return null;
+  const text = match[1].trim();
+  // Parse optional translation in parentheses: "Jeremiah 29:11 (NIV)" → ref + translation
+  const transMatch = refFull.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  return {
+    id: "",
+    text,
+    reference: transMatch ? transMatch[1].trim() : refFull,
+    translation: transMatch ? transMatch[2].trim() : "",
+    type: "scripture",
+    isBlockQuote: true,
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet, tmpl: BookTemplateConfig) {
   const bodyWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -187,6 +214,12 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
     const matchingQuote = findMatchingBlockQuote(paragraph, quotes);
     if (matchingQuote) {
       writeScriptureBlock(doc, matchingQuote, fonts, tmpl);
+      return;
+    }
+    // Fallback: detect the "body text\n— Reference (Translation)" pattern directly
+    const inlineScripture = detectInlineScripture(paragraph);
+    if (inlineScripture) {
+      writeScriptureBlock(doc, inlineScripture, fonts, tmpl);
       return;
     }
 
@@ -586,6 +619,12 @@ function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italic
         ? `&mdash; ${escapeHtml(matchingQuote.reference)}${matchingQuote.translation ? ` (${escapeHtml(matchingQuote.translation)})` : ""}`
         : "";
       return `<blockquote class="scripture-block"><p>${escapeHtml(matchingQuote.text)}</p>${reference ? `<div class="scripture-ref">${reference}</div>` : ""}</blockquote>`;
+    }
+    // Fallback: detect the "body text\n— Reference (Translation)" pattern directly
+    const inlineScripture = detectInlineScripture(paragraph);
+    if (inlineScripture) {
+      const refPart = inlineScripture.reference + (inlineScripture.translation ? ` (${inlineScripture.translation})` : "");
+      return `<blockquote class="scripture-block"><p>${escapeHtml(inlineScripture.text)}</p>${refPart ? `<div class="scripture-ref">&mdash; ${escapeHtml(refPart)}</div>` : ""}</blockquote>`;
     }
     const classes = ["book-paragraph"];
     if (index === 0) classes.push("no-indent");

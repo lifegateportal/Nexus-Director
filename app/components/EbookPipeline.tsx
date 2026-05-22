@@ -734,14 +734,18 @@ export function EbookPipeline({
     if (!ebookManifest || ebookManifest === externalManifestRef.current) return;
     externalManifestRef.current = ebookManifest;
     // Only inject when the pipeline has already produced a completed manifest
-    setCompletedManifest((current) => {
-      if (current === null) return current;
-      setChapters(ebookManifest.chapters);
-      setTotalWords(ebookManifest.totalWordCount);
-      return ebookManifest;
-    });
+    setCompletedManifest((current) => current === null ? current : ebookManifest);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ebookManifest]);
+
+  // Sync chapters + word count from completedManifest on every change.
+  // This is the single source of truth for Chapter Card content and ensures
+  // AI assistant edits are immediately visible in the Review UI.
+  useEffect(() => {
+    if (!completedManifest) return;
+    setChapters(completedManifest.chapters);
+    setTotalWords(completedManifest.totalWordCount);
+  }, [completedManifest]);
 
   useEffect(() => {
   if (!ebookManifest && !completedManifest) {
@@ -830,7 +834,7 @@ export function EbookPipeline({
       setExportingBook(false);
       setStage("complete");
     }
-  }, [addLog, completedManifest, recalculateManifestTotal, reviewContext, syncCompletedManifest]);
+  }, [addLog, completedManifest, recalculateManifestTotal, reviewContext, selectedTemplate, syncCompletedManifest]);
 
   // ── Auto-download PDF when export completes ──────────────────────────────
   useEffect(() => {
@@ -1458,7 +1462,7 @@ export function EbookPipeline({
         // Restore full section bodies that were stripped for the request
         const fullPolished: ChapterDraft = {
           ...polished,
-          sections: (polished.sections ?? chapterSections).map((s) => {
+          sections: polished.sections.map((s) => {
             const full = chapterSections.find((cs) => cs.sectionNumber === s.sectionNumber);
             return full ? { ...s, body: full.body, wordCount: full.wordCount } : s;
           }),
