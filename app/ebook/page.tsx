@@ -1,16 +1,37 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
-import type { EbookManifest } from "@/lib/schemas/ebook";
+import { EbookManifestSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
+import type { EbookManifest, EbookJobState } from "@/lib/schemas/ebook";
 import type { SiteConfig } from "@/lib/schemas/site-config";
+import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 
 export default function EbookPage() {
   const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
+  const [ebookPipelineSnapshot, setEbookPipelineSnapshot] = useState<EbookPipelineSnapshot | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const [siteConfig] = useState<SiteConfig>(() => SiteConfigSchema.parse({}));
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const buildManifestFromJob = useCallback((job: EbookJobState): EbookManifest | null => {
+    if (!job.architecture || !job.frontMatter || !job.contentMap) return null;
+    return {
+      jobId: job.jobId,
+      bookTitle: job.architecture.bookTitle,
+      subtitle: job.architecture.subtitle,
+      authorName: job.architecture.authorName,
+      frontMatter: job.frontMatter,
+      chapters: job.chapters ?? [],
+      totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+      allQuotes: job.contentMap.allQuotes ?? [],
+      generatedAt: new Date().toISOString(),
+    };
+  }, []);
 
   const handleManifestReady = useCallback((manifest: EbookManifest) => {
     setEbookManifest(manifest);
@@ -19,6 +40,62 @@ export default function EbookPage() {
   const handleEbookUpdate = useCallback((manifest: EbookManifest) => {
     setEbookManifest(manifest);
   }, []);
+
+  const handlePipelineSnapshotChange = useCallback((snapshot: EbookPipelineSnapshot | null) => {
+    setEbookPipelineSnapshot(snapshot);
+  }, []);
+
+  const handleExportJson = useCallback(() => {
+    if (!ebookManifest) return;
+    const blob = new Blob([JSON.stringify({ ebookManifest }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${ebookManifest.bookTitle.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_ebook_manifest.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [ebookManifest]);
+
+  const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const raw = JSON.parse((ev.target?.result as string) ?? "") as unknown;
+        const wrapped = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
+        const candidateManifest = wrapped?.manifest ?? wrapped?.ebookManifest ?? raw;
+        const candidateJobState = wrapped?.job ?? wrapped?.jobState ?? raw;
+
+        const directManifest = EbookManifestSchema.safeParse(candidateManifest);
+        if (directManifest.success) {
+          setEbookManifest(directManifest.data);
+          setImportError(null);
+          setImportSuccess(`Imported "${directManifest.data.bookTitle}".`);
+          setAssistantOpen(true);
+          return;
+        }
+
+        const jobState = EbookJobStateSchema.safeParse(candidateJobState);
+        if (jobState.success) {
+          const manifest = buildManifestFromJob(jobState.data);
+          if (!manifest) throw new Error("Job JSON is valid but missing completed book data.");
+          setEbookManifest(manifest);
+          setImportError(null);
+          setImportSuccess(`Imported completed job "${manifest.bookTitle}".`);
+          setAssistantOpen(true);
+          return;
+        }
+
+        throw new Error("Unsupported JSON format. Import a Nexus ebook manifest or completed ebook job export.");
+      } catch (err) {
+        setImportSuccess(null);
+        setImportError(err instanceof Error ? err.message : "Could not import JSON.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }, [buildManifestFromJob]);
 
   return (
     <main className="min-h-dvh bg-slate-950 text-slate-100">
@@ -44,24 +121,72 @@ export default function EbookPage() {
 
           {/* Nexus Director AI button — appears once production completes */}
           {ebookManifest && (
-            <button
-              type="button"
-              onClick={() => setAssistantOpen(true)}
-              className="flex items-center gap-2 min-h-[44px] rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-300 transition hover:border-cyan-400/60 hover:bg-cyan-500/15 active:scale-[0.97]"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
-                <path d="M9 12h6M12 9v6" strokeLinecap="round" />
-              </svg>
-              Director AI
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setAssistantOpen(true)}
+                className="flex items-center gap-2 min-h-[44px] rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-300 transition hover:border-cyan-400/60 hover:bg-cyan-500/15 active:scale-[0.97]"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
+                  <path d="M9 12h6M12 9v6" strokeLinecap="round" />
+                </svg>
+                Director AI
+              </button>
+              <button
+                type="button"
+                onClick={handleExportJson}
+                className="flex items-center gap-2 min-h-[44px] rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-300 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 active:scale-[0.97]"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                  <path d="M12 3v12" strokeLinecap="round" />
+                  <polyline points="17 12 12 17 7 12" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
+                </svg>
+                Export JSON
+              </button>
+            </>
           )}
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            className="flex items-center gap-2 min-h-[44px] rounded-xl border border-slate-700 bg-slate-900/70 px-3.5 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300 active:scale-[0.97]"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" strokeLinecap="round" strokeLinejoin="round" />
+              <polyline points="17 8 12 3 7 8" strokeLinecap="round" strokeLinejoin="round" />
+              <line x1="12" y1="3" x2="12" y2="15" strokeLinecap="round" />
+            </svg>
+            Import JSON
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={handleImportJson}
+          />
         </div>
       </div>
 
+      {(importError || importSuccess) && (
+        <div className="mx-auto mt-3 max-w-3xl px-4 lg:px-8">
+          {importError && (
+            <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{importError}</p>
+          )}
+          {importSuccess && (
+            <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">{importSuccess}</p>
+          )}
+        </div>
+      )}
+
       {/* Pipeline */}
       <div className="mx-auto max-w-3xl px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:px-8 lg:pt-6">
-        <EbookPipeline onManifestReady={handleManifestReady} />
+        <EbookPipeline
+          ebookManifest={ebookManifest}
+          onManifestReady={handleManifestReady}
+          onPipelineSnapshotChange={handlePipelineSnapshotChange}
+        />
       </div>
 
       {/* Nexus Director AI — ebook post-production assistant */}
@@ -74,6 +199,7 @@ export default function EbookPage() {
         onSiteUpdate={() => {}}
         ebookManifest={ebookManifest}
         onEbookUpdate={handleEbookUpdate}
+        ebookPipelineSnapshot={ebookPipelineSnapshot}
       />
     </main>
   );

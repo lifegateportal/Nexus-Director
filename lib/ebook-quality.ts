@@ -1,0 +1,130 @@
+import type { ChapterDraft, ContentMap, FrontBackMatter } from "@/lib/schemas/ebook";
+import { NON_BOOK_CUE_RE } from "@/lib/editorial-style-bible";
+
+export type QualityIssue = {
+  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP";
+  severity: "warn" | "error";
+  message: string;
+};
+
+export type QualityReport = {
+  score: number;
+  pass: boolean;
+  issues: QualityIssue[];
+};
+
+function tokenize(input: string): Set<string> {
+  return new Set(
+    input
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 3)
+  );
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const token of a) {
+    if (b.has(token)) inter += 1;
+  }
+  const union = a.size + b.size - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+const SERIES_RECAP_RE = /\b(this\s+month'?s\s+theme|our\s+monthly\s+theme|series\s+theme|as\s+i\s+said\s+last\s+(week|message|time)|from\s+our\s+last\s+message|in\s+the\s+previous\s+message|continuing\s+this\s+series|part\s+\d+\s+of\s+this\s+series)\b/gi;
+
+function normalizeRecapSentence(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function evaluateBookQuality(input: {
+  chapters: ChapterDraft[];
+  contentMap: ContentMap;
+  frontMatter: FrontBackMatter;
+}): QualityReport {
+  const issues: QualityIssue[] = [];
+  let score = 100;
+
+  const sourceCorpus = input.contentMap.segments.map((s) => s.rawText).join("\n\n");
+  const sourceTokens = tokenize(sourceCorpus);
+  const seenRecapSentences = new Set<string>();
+
+  for (const chapter of input.chapters) {
+    for (const section of chapter.sections) {
+      const body = section.body ?? "";
+      const cueHits = body.match(NON_BOOK_CUE_RE)?.length ?? 0;
+      if (cueHits > 0) {
+        issues.push({
+          code: "AUDIENCE_LANGUAGE",
+          severity: "error",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} contains audience-language cues (${cueHits}).`,
+        });
+        score -= Math.min(20, cueHits * 4);
+      }
+
+      const words = body.trim().split(/\s+/).filter(Boolean).length;
+      if (words < 180) {
+        issues.push({
+          code: "SHORT_SECTION",
+          severity: "warn",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} is short (${words} words).`,
+        });
+        score -= 4;
+      }
+
+      const sectionTokens = tokenize(body);
+      const overlap = jaccard(sectionTokens, sourceTokens);
+      if (overlap < 0.035) {
+        issues.push({
+          code: "LOW_CONTENT_OVERLAP",
+          severity: "error",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} has low source overlap (${overlap.toFixed(3)}).`,
+        });
+        score -= 12;
+      }
+
+      const recapSentences = body
+        .split(/(?<=[.!?])\s+/)
+        .map((line) => line.trim())
+        .filter((line) => SERIES_RECAP_RE.test(line));
+
+      for (const sentence of recapSentences) {
+        const normalized = normalizeRecapSentence(sentence);
+        if (!normalized) continue;
+        if (seenRecapSentences.has(normalized)) {
+          issues.push({
+            code: "REDUNDANT_RECAP",
+            severity: "warn",
+            message: `Chapter ${chapter.number} section ${section.sectionNumber} repeats a prior series recap line.`,
+          });
+          score -= 3;
+          continue;
+        }
+        seenRecapSentences.add(normalized);
+      }
+    }
+  }
+
+  if (!input.frontMatter.preface.trim() || !input.frontMatter.introduction.trim() || !input.frontMatter.conclusion.trim()) {
+    issues.push({
+      code: "EMPTY_FRONTMATTER",
+      severity: "error",
+      message: "Front matter contains empty required fields.",
+    });
+    score -= 15;
+  }
+
+  const boundedScore = Math.max(0, Math.min(100, Math.round(score)));
+  const hardErrors = issues.filter((i) => i.severity === "error").length;
+  return {
+    score: boundedScore,
+    pass: boundedScore >= 70 && hardErrors === 0,
+    issues,
+  };
+}

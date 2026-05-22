@@ -7,6 +7,7 @@ import {
   getEbookJob,
   newJobId,
 } from "@/lib/ebook-job-store";
+import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
 import type {
   VoiceDNA,
   ContentMap,
@@ -57,6 +58,18 @@ const STAGE_ORDER: PipelineStage[] = [
   "assigning", "writing", "polishing", "frontmatter", "exporting", "complete",
 ];
 type SignalFilterState = "idle" | "applied" | "skipped";
+type QualityReport = { score: number; pass: boolean; issues: { severity: "warn" | "error"; message: string }[] };
+export type EbookPipelineSnapshot = {
+  stage: PipelineStage;
+  progress: { total: number; completed: number };
+  totalWords: number;
+  reviewReady: boolean;
+  qualityReport: QualityReport | null;
+  error: string | null;
+  bookTitle: string | null;
+  chapterCount: number;
+  frontMatterSections: number;
+};
 
 function routeLabel(url: string): string {
   return url.split("/").filter(Boolean).slice(-2).join("/");
@@ -398,9 +411,39 @@ function EbookStageTracker({
 
 // ─── Chapter Preview Card ─────────────────────────────────────────────────────
 
-function ChapterCard({ chapter }: { chapter: ChapterDraft }) {
+function ChapterCard({
+  chapter,
+  editable = false,
+  onChange,
+}: {
+  chapter: ChapterDraft;
+  editable?: boolean;
+  onChange?: (next: ChapterDraft) => void;
+}) {
   const [open, setOpen] = useState(false);
   const done = chapter.status === "complete";
+
+  const patchChapter = (patch: Partial<ChapterDraft>) => {
+    if (!onChange) return;
+    onChange({ ...chapter, ...patch });
+  };
+
+  const patchSection = (sectionNumber: number, patch: Partial<SectionDraft>) => {
+    if (!onChange) return;
+    onChange({
+      ...chapter,
+      sections: chapter.sections.map((section) => (
+        section.sectionNumber === sectionNumber ? { ...section, ...patch } : section
+      )),
+    });
+  };
+
+  const patchListField = (field: "keyTakeaways" | "reflectionQuestions", value: string) => {
+    if (!onChange) return;
+    const items = value.split(/\n+/).map((item) => item.trim()).filter(Boolean);
+    onChange({ ...chapter, [field]: items } as ChapterDraft);
+  };
+
   return (
     <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 overflow-hidden">
       <button
@@ -428,20 +471,86 @@ function ChapterCard({ chapter }: { chapter: ChapterDraft }) {
 
       {open && (
         <div className="border-t border-slate-700/40 px-4 pb-4 pt-3 space-y-3">
+          {editable && (
+            <div className="space-y-3 rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Chapter Title</label>
+                <input
+                  value={chapter.title}
+                  onChange={(e) => patchChapter({ title: e.target.value })}
+                  className="w-full min-h-[48px] rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none ring-0 focus:border-cyan-500/40"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Chapter Intro</label>
+                <textarea
+                  value={chapter.intro ?? ""}
+                  onChange={(e) => patchChapter({ intro: e.target.value })}
+                  rows={4}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+            </div>
+          )}
+
           {chapter.sections.map((s) => (
             <div key={s.sectionNumber}>
               <p className="text-xs font-semibold text-cyan-400/80 mb-1">{s.heading}</p>
-              <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">
-                {(s.body ?? "").slice(0, 220)}{(s.body ?? "").length > 220 ? "…" : ""}
-              </p>
+              {editable ? (
+                <textarea
+                  value={s.body ?? ""}
+                  onChange={(e) => patchSection(s.sectionNumber, { body: e.target.value, wordCount: countWords(e.target.value) })}
+                  rows={8}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              ) : (
+                <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">
+                  {(s.body ?? "").slice(0, 220)}{(s.body ?? "").length > 220 ? "…" : ""}
+                </p>
+              )}
             </div>
           ))}
-          {chapter.keyTakeaways.length > 0 && (
+
+          {editable ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Key Takeaways</label>
+                <textarea
+                  value={chapter.keyTakeaways.join("\n")}
+                  onChange={(e) => patchListField("keyTakeaways", e.target.value)}
+                  rows={5}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Reflection Questions</label>
+                <textarea
+                  value={chapter.reflectionQuestions.join("\n")}
+                  onChange={(e) => patchListField("reflectionQuestions", e.target.value)}
+                  rows={5}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+            </div>
+          ) : chapter.keyTakeaways.length > 0 && (
             <div className="mt-2 rounded-lg bg-cyan-500/8 border border-cyan-500/20 p-3">
               <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest mb-2">Key Takeaways</p>
               {chapter.keyTakeaways.map((t, i) => (
                 <p key={i} className="text-xs text-slate-300 leading-relaxed">• {t}</p>
               ))}
+            </div>
+          )}
+
+          {editable && (
+            <div>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Chapter Conclusion</label>
+              <textarea
+                value={chapter.conclusion ?? ""}
+                onChange={(e) => patchChapter({ conclusion: e.target.value })}
+                rows={4}
+                className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+              />
             </div>
           )}
         </div>
@@ -543,7 +652,15 @@ function readTextFile(file: File): Promise<string> {
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // stores jobId (for IndexedDB)
 const JOB_STATE_KEY = "nexus_ebook_job_state";    // stores full state as JSON (primary)
 
-export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest: EbookManifest) => void } = {}) {
+export function EbookPipeline({
+  ebookManifest,
+  onManifestReady,
+  onPipelineSnapshotChange,
+}: {
+  ebookManifest?: EbookManifest | null;
+  onManifestReady?: (manifest: EbookManifest) => void;
+  onPipelineSnapshotChange?: (snapshot: EbookPipelineSnapshot | null) => void;
+} = {}) {
   const [audioFiles, setAudioFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
   const [transcriptFiles, setTranscriptFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
   const [stage, setStage] = useState<PipelineStage>("idle");
@@ -552,6 +669,9 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
   const [exportUrls, setExportUrls] = useState<{ pdfUrl?: string; epubUrl?: string } | null>(null);
   const [completedManifest, setCompletedManifest] = useState<EbookManifest | null>(null);
+  const [reviewContext, setReviewContext] = useState<{ contentMap: ContentMap; frontMatter: FrontBackMatter } | null>(null);
+  const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
+  const [exportingBook, setExportingBook] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signalFilterState, setSignalFilterState] = useState<SignalFilterState>("idle");
   const [signalFilterDetail, setSignalFilterDetail] = useState<string | null>(null);
@@ -570,20 +690,146 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
     setLog([...logRef.current]);
   }, []);
 
+  const recalculateManifestTotal = useCallback((manifest: EbookManifest): EbookManifest => {
+    const frontMatterWords = countWords(manifest.frontMatter.preface ?? "")
+      + countWords(manifest.frontMatter.introduction ?? "")
+      + countWords(manifest.frontMatter.conclusion ?? "")
+      + countWords(manifest.frontMatter.aboutAuthor ?? "")
+      + countWords((manifest.frontMatter.resourcesList ?? []).join(" "));
+
+    const chapterWords = manifest.chapters.reduce((sum, chapter) => {
+      const chapterText = [
+        chapter.intro ?? "",
+        chapter.conclusion ?? "",
+        ...(chapter.keyTakeaways ?? []),
+        ...(chapter.reflectionQuestions ?? []),
+      ].join(" ");
+      const sectionWords = chapter.sections.reduce((sectionSum, section) => sectionSum + countWords(section.body ?? ""), 0);
+      return sum + sectionWords + countWords(chapterText);
+    }, 0);
+
+    return {
+      ...manifest,
+      totalWordCount: frontMatterWords + chapterWords,
+    };
+  }, []);
+
+  const syncCompletedManifest = useCallback((next: EbookManifest) => {
+    const normalized = recalculateManifestTotal(next);
+    setCompletedManifest(normalized);
+    setChapters(normalized.chapters);
+    setTotalWords(normalized.totalWordCount);
+    setExportUrls(null);
+    onManifestReady?.(normalized);
+  }, [onManifestReady, recalculateManifestTotal]);
+
+  useEffect(() => {
+  if (!ebookManifest && !completedManifest) {
+    onPipelineSnapshotChange?.(null);
+    return;
+  }
+  const manifest = completedManifest ?? ebookManifest ?? null;
+  const snapshot: EbookPipelineSnapshot | null = manifest ? {
+    stage,
+    progress,
+    totalWords,
+    reviewReady: Boolean(completedManifest && reviewContext),
+    qualityReport,
+    error,
+    bookTitle: manifest.bookTitle ?? null,
+    chapterCount: manifest.chapters.length,
+    frontMatterSections: [
+      manifest.frontMatter.preface,
+      manifest.frontMatter.introduction,
+      manifest.frontMatter.conclusion,
+    ].filter(Boolean).length,
+  } : null;
+  onPipelineSnapshotChange?.(snapshot);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ebookManifest, completedManifest, stage, progress.total, progress.completed, totalWords, reviewContext, qualityReport, error, onPipelineSnapshotChange]);
+
+  useEffect(() => {
+  if (!ebookManifest) return;
+  const normalized = recalculateManifestTotal(ebookManifest);
+  setCompletedManifest(normalized);
+  setChapters(normalized.chapters);
+  setTotalWords(normalized.totalWordCount);
+  setExportUrls(null);
+  setQualityReport(null);
+  setError(null);
+  }, [ebookManifest, recalculateManifestTotal]);
+
+  const updateCompletedManifest = useCallback((updater: (current: EbookManifest) => EbookManifest) => {
+    setCompletedManifest((current) => {
+      if (!current) return current;
+      const next = recalculateManifestTotal(updater(current));
+      setChapters(next.chapters);
+      setTotalWords(next.totalWordCount);
+      setExportUrls(null);
+      setQualityReport(null);
+      onManifestReady?.(next);
+      return next;
+    });
+  }, [onManifestReady, recalculateManifestTotal]);
+
+  const exportFinalBook = useCallback(async () => {
+    if (!completedManifest || !reviewContext) return;
+    setExportingBook(true);
+    setError(null);
+    try {
+      setStage("exporting");
+      addLog("Applying final harmonization pass…");
+      const exportManifest = recalculateManifestTotal(harmonizeBookManifest(completedManifest));
+      syncCompletedManifest(exportManifest);
+      addLog("Running export quality gate…");
+      const report = await postJson<QualityReport>("/api/ebook/quality-check", {
+        chapters: exportManifest.chapters,
+        contentMap: reviewContext.contentMap,
+        frontMatter: exportManifest.frontMatter,
+      });
+      setQualityReport(report);
+      addLog(`✓ Quality score: ${report.score}/100`);
+      if (!report.pass) {
+        const critical = report.issues.filter((i) => i.severity === "error").map((i) => i.message).slice(0, 3);
+        throw new Error(`Quality gate failed (${report.score}/100): ${critical.join(" | ") || "critical fidelity issues detected"}`);
+      }
+
+      addLog("Generating PDF and EPUB files…");
+      const urls = await postJson<{ pdfUrl?: string; epubUrl?: string }>(
+        "/api/ebook/export",
+        { manifest: exportManifest, formats: { pdf: true, epub: true } }
+      );
+      setExportUrls(urls);
+      addLog(`✓ PDF ready: ${urls.pdfUrl ? "yes" : "no"} | EPUB ready: ${urls.epubUrl ? "yes" : "no"}`);
+      addLog(`🎉 Ebook complete — ${exportManifest.totalWordCount.toLocaleString()} words across ${exportManifest.chapters.length} chapters`);
+    } catch (err) {
+      const msg = err instanceof Error && err.message.trim() ? err.message : "Export failed";
+      setError(msg);
+      addLog(`✗ Error: ${msg}`);
+      setStage("complete");
+    } finally {
+      setExportingBook(false);
+      setStage("complete");
+    }
+  }, [addLog, completedManifest, recalculateManifestTotal, reviewContext, syncCompletedManifest]);
+
   // ── Auto-download PDF when export completes ──────────────────────────────
   useEffect(() => {
-    if (exportUrls?.pdfUrl && !autoDownloadedRef.current) {
-      autoDownloadedRef.current = true;
-      try {
+    if (!exportUrls?.pdfUrl || autoDownloadedRef.current) return;
+    autoDownloadedRef.current = true;
+    try {
+      const popup = window.open(exportUrls.pdfUrl, "_blank", "noopener,noreferrer");
+      if (!popup) {
         const a = document.createElement("a");
         a.href = exportUrls.pdfUrl;
-        a.download = "";
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-      } catch {
-        // auto-download blocked — user can still click the button manually
       }
+    } catch {
+      // pop-up blocked — user can still open manually from the download button
     }
   }, [exportUrls]);
 
@@ -621,6 +867,10 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       ...cm,
       overarchingThemes: fixArrays(cm.overarchingThemes),
       teachingArc:       fixStr(cm.teachingArc),
+      coreThesis:        fixStr(cm.coreThesis),
+      targetAudience:    fixStr(cm.targetAudience),
+      uniqueVocabulary:  fixArrays(cm.uniqueVocabulary),
+      toneMap:           fixStr(cm.toneMap),
       allQuotes: fixArrays(cm.allQuotes),
       segments: fixArrays<Record<string, unknown>>(cm.segments).map((s) => ({
         ...s,
@@ -731,6 +981,21 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
           pdfUrl: job.exportUrls.pdfUrl || undefined,
           epubUrl: job.exportUrls.epubUrl || undefined,
         });
+      }
+      if (job.status === "complete" && job.architecture && job.frontMatter && job.contentMap) {
+        const manifest: EbookManifest = {
+          jobId: job.jobId,
+          bookTitle: job.architecture.bookTitle,
+          subtitle: job.architecture.subtitle,
+          authorName: job.architecture.authorName,
+          frontMatter: job.frontMatter,
+          chapters: job.chapters ?? [],
+          totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+          allQuotes: job.contentMap.allQuotes ?? [],
+          generatedAt: new Date().toISOString(),
+        };
+        setReviewContext({ contentMap: job.contentMap, frontMatter: job.frontMatter });
+        syncCompletedManifest(manifest);
       }
       const words = (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0);
       if (words > 0) setTotalWords(words);
@@ -843,6 +1108,8 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       setSignalFilterDetail(null);
       setExportUrls(null);
       setCompletedManifest(null);
+      setReviewContext(null);
+      setQualityReport(null);
       setTotalWords(0);
       autoDownloadedRef.current = false;
     }
@@ -1194,15 +1461,13 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         });
         addLog("✓ Front and back matter complete");
         acc.frontMatter = frontMatter;
-        await checkpoint("exporting");
+        await checkpoint("complete");
       } else {
         addLog("↩ Resuming — front matter available");
       }
 
-      // ── Assemble manifest ────────────────────────────────────────────────
-      const runningTotal = polishedChapters.reduce((a, c) => a + c.totalWordCount, 0);
-      setTotalWords(runningTotal);
-
+      // ── Assemble + harmonize manifest ───────────────────────────────────
+      const runningTotal = polishedChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0);
       const manifest: EbookManifest = {
         jobId,
         bookTitle: architecture.bookTitle,
@@ -1215,27 +1480,38 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         generatedAt: new Date().toISOString(),
       };
 
-      // ── Stage 9: Export ──────────────────────────────────────────────────
-      setStage("exporting");
-      addLog("Generating PDF and EPUB files…");
-      const urls = await postJson<{ pdfUrl?: string; epubUrl?: string }>(
-        "/api/ebook/export",
-        { manifest, formats: { pdf: true, epub: true } }
+      const harmonizedManifest = harmonizeBookManifest(manifest);
+      const harmonizedTotal = harmonizedManifest.chapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0);
+      harmonizedManifest.totalWordCount = harmonizedTotal;
+      setTotalWords(harmonizedTotal);
+      addLog("✓ Harmonization pass complete — removed non-book phrasing and normalized chapter flow");
+
+      // ── Quality Gate: fidelity + premium presentation checks ───────────
+      addLog("Running quality review…");
+      const quality = await postJson<QualityReport>(
+        "/api/ebook/quality-check",
+        { chapters: harmonizedManifest.chapters, contentMap, frontMatter: harmonizedManifest.frontMatter }
       );
-      setExportUrls(urls);
-      addLog(`✓ PDF ready: ${urls.pdfUrl ? "yes" : "no"} | EPUB ready: ${urls.epubUrl ? "yes" : "no"}`);
-      addLog(`🎉 Ebook complete — ${runningTotal.toLocaleString()} words across ${polishedChapters.length} chapters`);
-      acc.exportUrls = { pdfUrl: urls.pdfUrl ?? "", epubUrl: urls.epubUrl ?? "" };
-      acc.chapters = polishedChapters;
+      setQualityReport(quality);
+      if (quality.pass) {
+        addLog(`✓ Quality score: ${quality.score}/100`);
+      } else {
+        const warnings = quality.issues.slice(0, 3).map((i) => i.message).join(" | ");
+        addLog(`⚠ Draft needs review (${quality.score}/100): ${warnings || "fidelity/style issues detected"}`);
+      }
+
+      // Draft is now ready for end-of-book human review; export is manual.
+      acc.exportUrls = null;
+      acc.chapters = harmonizedManifest.chapters;
+      acc.frontMatter = harmonizedManifest.frontMatter;
       await checkpoint("complete");
       setStage("complete");
-      setCompletedManifest(manifest);
-      // Notify parent so the Nexus Assistant can take over for post-production edits
-      onManifestReady?.(manifest);
+      setReviewContext({ contentMap, frontMatter: harmonizedManifest.frontMatter });
+      syncCompletedManifest(harmonizedManifest);
+      addLog(`✓ Draft ready for review — ${harmonizedTotal.toLocaleString()} words across ${harmonizedManifest.chapters.length} chapters`);
 
     } catch (err) {
       const msg = err instanceof Error && err.message.trim() ? err.message : "Pipeline failed";
-      const failedStage = acc.currentStage || stage || "transcribing";
       // Log full stack to browser console for debugging
       console.error("[EbookPipeline] runPipeline crash:", err);
       const stackHint = err instanceof Error && err.stack
@@ -1243,10 +1519,9 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         : "";
       setError(msg + stackHint);
       acc.status = "failed";
-      acc.currentStage = failedStage;
+      acc.currentStage = "failed";
       acc.errorLog = logRef.current;
       acc.updatedAt = new Date().toISOString();
-      try { localStorage.setItem(JOB_STATE_KEY, JSON.stringify(acc)); } catch { /* ignore */ }
       try { await saveEbookJob({ ...acc }); } catch { /* ignore */ }
       // Update savedJobRef so the Resume button has the partial state
       savedJobRef.current = { ...acc };
@@ -1343,7 +1618,7 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         <div className="flex items-center justify-between gap-3 px-1">
           <div className="flex items-center gap-3">
             <span className="text-2xl font-bold text-cyan-400 tabular-nums">{totalWords.toLocaleString()}</span>
-            <span className="text-sm text-slate-400">words — ready to download</span>
+            <span className="text-sm text-slate-400">words — ready for final review</span>
           </div>
           <button
             type="button"
@@ -1368,6 +1643,102 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
         </div>
       )}
 
+        {completedManifest && reviewContext && (
+          <div className="rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-4 shadow-panel space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Final Review</p>
+                <p className="mt-1 text-sm text-slate-300">Edit chapter by chapter, then export the finished book when ready.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void exportFinalBook()}
+                disabled={exportingBook}
+                className="min-h-[48px] rounded-xl bg-gradient-to-r from-cyan-500 to-violet-500 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {exportingBook ? "Exporting…" : "Export Final Book"}
+              </button>
+            </div>
+
+            {qualityReport && (
+              <div className={`rounded-xl border px-4 py-3 ${qualityReport.pass ? "border-emerald-400/20 bg-emerald-400/5" : "border-amber-400/20 bg-amber-400/5"}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <p className={`text-sm font-semibold ${qualityReport.pass ? "text-emerald-300" : "text-amber-300"}`}>
+                    Quality score: {qualityReport.score}/100
+                  </p>
+                  <p className="text-xs text-slate-400">{qualityReport.pass ? "Pass" : "Needs review"}</p>
+                </div>
+                {qualityReport.issues.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-xs text-slate-300">
+                    {qualityReport.issues.slice(0, 4).map((issue, index) => (
+                      <li key={index} className={issue.severity === "error" ? "text-red-300" : "text-amber-200"}>
+                        • {issue.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Preface</label>
+                <textarea
+                  value={completedManifest.frontMatter.preface}
+                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, preface: e.target.value } }))}
+                  rows={5}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Introduction</label>
+                <textarea
+                  value={completedManifest.frontMatter.introduction}
+                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, introduction: e.target.value } }))}
+                  rows={5}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Conclusion</label>
+                <textarea
+                  value={completedManifest.frontMatter.conclusion}
+                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, conclusion: e.target.value } }))}
+                  rows={5}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">About Author</label>
+                <textarea
+                  value={completedManifest.frontMatter.aboutAuthor ?? ""}
+                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, aboutAuthor: e.target.value.trim() ? e.target.value : null } }))}
+                  rows={4}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Resources</label>
+                <textarea
+                  value={completedManifest.frontMatter.resourcesList.join("\n")}
+                  onChange={(e) => updateCompletedManifest((current) => ({
+                    ...current,
+                    frontMatter: {
+                      ...current.frontMatter,
+                      resourcesList: e.target.value.split(/\n+/).map((item) => item.trim()).filter(Boolean),
+                    },
+                  }))}
+                  rows={4}
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
       {/* Error */}
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/8 px-4 py-3 space-y-3">
@@ -1385,9 +1756,9 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
                 setSignalFilterState(parseSignalFilterLog(saved.errorLog ?? []).state);
                 setSignalFilterDetail(parseSignalFilterLog(saved.errorLog ?? []).detail);
                 // Determine which stage to label the resume from
-                const resumeStage = saved.currentStage || (saved.contentMap
+                const resumeStage = saved.contentMap
                   ? saved.architecture ? "writing" : "architecting"
-                  : saved.voiceDNA ? "content mapping" : "voice DNA");
+                  : saved.voiceDNA ? "content mapping" : "voice DNA";
                 addLog(`↩ Resuming from ${resumeStage}…`);
                 void runPipeline(saved);
               }}
@@ -1395,13 +1766,6 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
             >
               {(() => {
                 const saved = savedJobRef.current!;
-                if (saved.currentStage === "writing") return `Resume — continue writing (${saved.sections.length} / ${saved.sectionAssignments.length} sections done)`;
-                if (saved.currentStage === "frontmatter") return "Resume — retry from Front Matter";
-                if (saved.currentStage === "polishing") return "Resume — retry from Polish";
-                if (saved.currentStage === "assigning") return "Resume — retry from Assign Segments";
-                if (saved.currentStage === "architecting") return "Resume — retry from Chapter Design";
-                if (saved.currentStage === "mapping") return "Resume — retry from Content Map";
-                if (saved.currentStage === "analyzing") return "Resume — retry from Voice DNA";
                 if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
                 if (!saved.contentMap) return "Resume — retry from Content Map";
                 if (!saved.architecture) return "Resume — retry from Chapter Design";
@@ -1512,10 +1876,20 @@ export function EbookPipeline({ onManifestReady }: { onManifestReady?: (manifest
       {chapters.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest px-1">
-            Chapters ({chapters.length})
+            {completedManifest ? "Review Chapters" : `Chapters (${chapters.length})`}
           </p>
           {chapters.map((ch) => (
-            <ChapterCard key={ch.number} chapter={ch} />
+            <ChapterCard
+              key={ch.number}
+              chapter={ch}
+              editable={Boolean(completedManifest)}
+              onChange={(next) => {
+                updateCompletedManifest((current) => ({
+                  ...current,
+                  chapters: current.chapters.map((chapter) => (chapter.number === next.number ? next : chapter)),
+                }));
+              }}
+            />
           ))}
         </div>
       )}

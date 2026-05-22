@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import { EbookManifestSchema } from "@/lib/schemas/ebook";
+import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import type { EbookManifest } from "@/lib/schemas/ebook";
@@ -21,6 +22,7 @@ type AssistantPanelProps = {
   /** Ebook manifest — when present, enables book production control */
   ebookManifest?: EbookManifest | null;
   onEbookUpdate?: (manifest: EbookManifest, summary: string) => void;
+  ebookPipelineSnapshot?: EbookPipelineSnapshot | null;
   /** When a project is loaded, pass its saved messages + a new loadKey to restore chat */
   loadedHistory?: Message[];
   loadKey?: string;
@@ -29,7 +31,7 @@ type AssistantPanelProps = {
 
 const IDLE_HINT = "No content loaded yet. Run the pipeline first, then I can help you make changes.";
 
-export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate, ebookManifest, onEbookUpdate, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
+export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate, ebookManifest, onEbookUpdate, ebookPipelineSnapshot, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     { role: "system", content: IDLE_HINT },
   ]);
@@ -50,9 +52,12 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
   useEffect(() => {
     if (loadKey) return; // project load handles its own history
     if (ebookManifest) {
+      const pipelineStatus = ebookPipelineSnapshot
+        ? `Pipeline: ${ebookPipelineSnapshot.stage} | Review ready: ${ebookPipelineSnapshot.reviewReady ? "yes" : "no"} | Quality: ${ebookPipelineSnapshot.qualityReport ? `${ebookPipelineSnapshot.qualityReport.score}/100` : "pending"}`
+        : "Pipeline: connected";
       setMessages([{
         role: "system",
-        content: `Book loaded: "${ebookManifest.bookTitle}" by ${ebookManifest.authorName} — ${ebookManifest.chapters.length} chapters, ${ebookManifest.totalWordCount.toLocaleString()} words.\n\nYou can ask me to change the title, rename chapters, edit section headings, update takeaways, revise the preface, and more.`,
+        content: `Book loaded: "${ebookManifest.bookTitle}" by ${ebookManifest.authorName} — ${ebookManifest.chapters.length} chapters, ${ebookManifest.totalWordCount.toLocaleString()} words.\n${pipelineStatus}\n\nYou can ask me to change the title, rename chapters, edit section headings, update takeaways, revise the preface, rewrite chapter sections, and make targeted book-wide edits.`,
       }]);
     } else if (academy) {
       const lessonCount = academy.curriculum.flatMap((m) => m.lessons).length;
@@ -109,7 +114,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         const res = await fetch("/api/ebook/assistant", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ manifest: ebookManifest, instruction: text }),
+          body: JSON.stringify({ manifest: ebookManifest, instruction: text, pipeline: ebookPipelineSnapshot ?? undefined }),
         });
         const json = await res.json() as { manifest?: unknown; summary?: string; error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -192,6 +197,11 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
                 ? "Edit your book with natural language"
                 : "Edit your academy with natural language"}
             </p>
+            {ebookManifest && ebookPipelineSnapshot && (
+              <p className="mt-1 text-[10px] text-cyan-300/90">
+                {ebookPipelineSnapshot.reviewReady ? "Review ready" : "Pipeline active"} • Stage: {ebookPipelineSnapshot.stage} • Quality {ebookPipelineSnapshot.qualityReport ? `${ebookPipelineSnapshot.qualityReport.score}/100` : "pending"}
+              </p>
+            )}
           </div>
           <button
             type="button"

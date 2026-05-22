@@ -3,6 +3,8 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
+import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -29,6 +31,15 @@ function fallbackSectionBody(input: z.infer<typeof WriteSectionRequestSchema>["a
   return input.heading.trim() || "Section content unavailable.";
 }
 
+function normalizeReaderFacingProse(text: string): string {
+  return text
+    .replace(/\b(turn to your neighbor|say amen|clap your hands|lift your hands)\b/gi, "")
+    .replace(/\b(as you sit here today|in this room today|right here in this place)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const EDITORIAL_SYSTEM = `You are an editorial assistant transforming a teacher's spoken transcript into polished written prose.
 
 ════════════════════════════════════════════
@@ -52,6 +63,9 @@ YOU MAY:
 • Add paragraph breaks for readability
 • Rephrase spoken grammar into written prose while preserving exact meaning and vocabulary
 • Use simple transitional phrases ("Furthermore,", "This means that,") only to connect ideas already present in the transcript
+• Convert live-audience delivery into reader-facing prose while preserving meaning
+• Remove crowd cues and stage prompts (e.g., "say amen", "look at your neighbor", applause calls, house-response commands)
+• Rewrite direct sermon-room address ("today I want to tell you", "as you sit here") into book language for an individual reader
 
 ════════════════════════════════════════════
 VOICE DNA — MUST BE ENFORCED
@@ -95,7 +109,13 @@ FORMAT
 ════════════════════════════════════════════
 • Output clean prose only — no markdown headers, no bullet points (unless the speaker listed items)
 • Separate paragraphs with a blank line
-• Target the specified word count based on available content — do not pad to reach it`;
+• Target the specified word count based on available content — do not pad to reach it
+
+${SOURCE_LOCK_RULES}
+
+${READER_NORMALIZATION_RULES}
+
+${PREMIUM_BOOK_STYLE_RULES}`;
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
@@ -145,27 +165,58 @@ ${JSON.stringify(assignment.voiceDNA, null, 2)}
 TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
 
+Return:
+- body: polished reader-facing prose
+- claimLedger: list of major claims in body and the excerpt numbers (1-based) that support each claim.
+
 Now write the section prose:`;
+
+  const PlanSchema = z.object({
+    paragraphPlan: z.array(z.object({
+      purpose: z.string().default(""),
+      supportedExcerptNumbers: z.array(z.number().int().positive()).default([]),
+    })).default([]),
+  });
 
   const SectionBodySchema = z.object({
     body: z.string().default("").describe("The polished prose for this section, using only the provided transcript content"),
+    claimLedger: z.array(z.object({
+      claim: z.string().default(""),
+      excerptNumbers: z.array(z.number().int().positive()).default([]),
+    })).default([]),
   });
 
   try {
+    let paragraphPlan: z.infer<typeof PlanSchema>["paragraphPlan"] = [];
+    try {
+      const { object: plan } = await generateObject({
+        model: deepSeekModel,
+        schema: PlanSchema,
+        mode: "tool",
+        temperature: 0.15,
+        system: `${SOURCE_LOCK_RULES}\n${READER_NORMALIZATION_RULES}`,
+        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n\nEXCERPTS:\n${excerptBlock}`,
+      });
+      paragraphPlan = plan.paragraphPlan ?? [];
+    } catch {
+      paragraphPlan = [];
+    }
+
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: SectionBodySchema,
       mode: "tool",
       temperature: 0.25,
       system: EDITORIAL_SYSTEM,
-      prompt,
+      prompt: `${prompt}\n\nPARAGRAPH PLAN (must follow if provided):\n${JSON.stringify(paragraphPlan)}`,
     });
-    const body = (object.body ?? "").trim() || fallbackSectionBody(assignment);
-    return NextResponse.json({ body }, { status: 200 });
+    const body = stripAudienceLanguage(normalizeReaderFacingProse((object.body ?? "").trim()) || fallbackSectionBody(assignment));
+    return NextResponse.json({ body, claimLedger: object.claimLedger ?? [] }, { status: 200 });
   } catch (err) {
-    const fallbackBody = fallbackSectionBody(assignment);
+    const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(fallbackSectionBody(assignment)));
     return NextResponse.json({
       body: fallbackBody,
+      claimLedger: [],
       fallback: true,
       error: err instanceof Error && err.message.trim() ? err.message : "Section write used transcript fallback",
       details: err instanceof Error && err.stack

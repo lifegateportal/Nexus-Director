@@ -41,6 +41,10 @@ export const ContentMapSchema = z.object({
   totalEstimatedWords: z.number(),
   overarchingThemes: z.array(z.string()).default([]),
   teachingArc: z.string().default(""),            // how the full teaching flows
+  coreThesis: z.string().default(""),
+  targetAudience: z.string().default(""),
+  uniqueVocabulary: z.array(z.string()).default([]),
+  toneMap: z.string().default(""),
   segments: z.array(ContentSegmentSchema),
   allQuotes: z.array(QuoteSchema).default([]), // full quote/scripture registry
 });

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { FrontMatterRequestSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
+import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -15,8 +17,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
+  const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
+
   try {
-    const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: FrontBackMatterSchema,
@@ -28,7 +31,7 @@ ABSOLUTE CONTENT RULE: Every sentence must come from the provided transcript. Yo
 
 FRONT MATTER:
 - preface: Drawn from the opening moments of the teaching. What did the author say at the start? Use their exact tone and words. 2–4 paragraphs.
-- introduction: A written introduction to the full teaching. Synthesize the overarching theme and purpose of the teaching using ONLY what the author expressed. 3–5 paragraphs.
+- introduction: A written introduction to the full teaching. Speak in first person as the author, and write as though introducing the book directly to the reader. Focus on the book's purpose, themes, and invitation to the reader. Do not describe the author from a third-person perspective. 3–5 paragraphs.
 
 BACK MATTER:
 - conclusion: Drawn from the closing moments of the teaching. How did the author wrap up? 2–4 paragraphs.
@@ -36,7 +39,14 @@ BACK MATTER:
 - resourcesList: List any books, tools, websites, courses, or resources the author explicitly mentioned or recommended. Return as an array of strings (e.g., "The Bible, NIV translation"). If none mentioned, return [].
 
 SCRIPTURE & QUOTE FORMATTING: Apply Chicago Manual of Style rules as established in the chapter content.
-VOICE ENFORCEMENT: Match the author's tone profile and signature phrases.`,
+VOICE ENFORCEMENT: Match the author's tone profile and signature phrases.
+READER NORMALIZATION: Remove live-audience phrasing and stage cues; write as a book speaking to an individual reader.
+
+${SOURCE_LOCK_RULES}
+
+${READER_NORMALIZATION_RULES}
+
+${PREMIUM_BOOK_STYLE_RULES}`,
       prompt: `Write the front and back matter for this ebook.
 
 BOOK TITLE: ${input.architecture.bookTitle}
@@ -58,15 +68,24 @@ ${transcript.slice(0, 5000)}
 ${transcript.slice(-3000)}`,
     });
 
-    return NextResponse.json(object, { status: 200 });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Front matter generation failed";
     return NextResponse.json({
-      route: "ebook/frontmatter",
-      error: message,
-      details: err instanceof Error && err.stack
-        ? err.stack.split("\n").slice(0, 3).join(" | ")
-        : undefined,
-    }, { status: 500 });
+      ...object,
+      preface: stripAudienceLanguage(object.preface ?? ""),
+      introduction: stripAudienceLanguage(object.introduction ?? ""),
+      conclusion: stripAudienceLanguage(object.conclusion ?? ""),
+      aboutAuthor: object.aboutAuthor ? stripAudienceLanguage(object.aboutAuthor) : null,
+      resourcesList: (object.resourcesList ?? []).map((r) => stripAudienceLanguage(r)),
+    }, { status: 200 });
+  } catch (err) {
+    const opening = transcript.slice(0, 2600).trim();
+    const middle = transcript.slice(2600, 5200).trim();
+    const closing = transcript.slice(-2200).trim();
+    return NextResponse.json({
+      preface: stripAudienceLanguage(opening || "Preface unavailable."),
+      introduction: stripAudienceLanguage(middle || opening || "Introduction unavailable."),
+      conclusion: stripAudienceLanguage(closing || opening || "Conclusion unavailable."),
+      aboutAuthor: null,
+      resourcesList: [],
+    }, { status: 200 });
   }
 }

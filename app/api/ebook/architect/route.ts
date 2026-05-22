@@ -42,17 +42,17 @@ function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
   }));
 
   return {
-    bookTitle: input.contentMap.overarchingThemes[0] || input.contentMap.segments[0]?.topic || "Untitled Teaching Manuscript",
-    subtitle: input.contentMap.teachingArc || "Drawn directly from the source teaching",
+    bookTitle: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.segments[0]?.topic || "Untitled Teaching Manuscript",
+    subtitle: input.contentMap.targetAudience || input.contentMap.teachingArc || "Drawn directly from the source teaching",
     authorName: "the Author",
     estimatedTotalWords: sections.reduce((sum, section) => sum + section.targetWordCount, 0),
-    frontMatterNotes: input.contentMap.segments[0]?.topic || "",
-    backMatterNotes: input.contentMap.segments.at(-1)?.topic || "",
+    frontMatterNotes: input.contentMap.coreThesis || input.contentMap.segments[0]?.topic || "",
+    backMatterNotes: input.contentMap.teachingArc || input.contentMap.segments.at(-1)?.topic || "",
     chapters: [
       {
         number: 1,
-        title: input.contentMap.overarchingThemes[0] || "Core Teaching",
-        keyTheme: input.contentMap.overarchingThemes[0] || input.contentMap.teachingArc || "Core teaching",
+        title: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || "Core Teaching",
+        keyTheme: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.teachingArc || "Core teaching",
         sections,
       },
     ],
@@ -127,13 +127,26 @@ export async function POST(req: NextRequest) {
 RULES:
 - sourceSegmentIds must reference actual segment IDs from the segment list (e.g. "seg-1")
 - Group thematically related segments into chapters
+      - Group repeated series recaps, monthly-theme reminders, and prior-message refreshers into a single foundational treatment when they do not add new substance
+      - Arrange related ideas contiguously so the manuscript reads like a coherent book, not a week-by-week sermon archive
 - Each chapter: 3–5 sections; each section: one focused teaching point
 - targetWordCount per section = sum of that section's segments' estimatedWordCount
 - bookTitle and authorName must come from the content; use "the Author" if name is unknown
 - estimatedTotalWords = sum of all section targetWordCounts
 - Always return every required field, even if some strings are brief
 - Never leave sections empty; every chapter must include at least one section with at least one sourceSegmentId`,
-        prompt: `Design the chapter architecture.\n\nVOICE DNA TONE: ${input.voiceDNA.toneProfile}\nTEACHING ARC: ${input.contentMap.teachingArc}\nTHEMES: ${(input.contentMap.overarchingThemes ?? []).join(", ")}\n\nSEGMENTS:\n${JSON.stringify(segmentsLite)}`,
+        prompt: `Design the chapter architecture.
+
+      VOICE DNA TONE: ${input.voiceDNA.toneProfile}
+      TEACHING ARC: ${input.contentMap.teachingArc}
+      CORE THESIS: ${input.contentMap.coreThesis}
+      TARGET AUDIENCE: ${input.contentMap.targetAudience}
+      UNIQUE VOCABULARY: ${(input.contentMap.uniqueVocabulary ?? []).join(", ")}
+      TONE MAP: ${input.contentMap.toneMap}
+      THEMES: ${(input.contentMap.overarchingThemes ?? []).join(", ")}
+
+      SEGMENTS:
+      ${JSON.stringify(segmentsLite)}`,
       });
       minimal = result.object;
     } catch {

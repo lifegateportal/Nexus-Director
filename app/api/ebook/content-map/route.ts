@@ -35,6 +35,10 @@ const SynthesisSchema = z.object({
   totalEstimatedWords: z.number(),
   overarchingThemes: z.array(z.string()).default([]),
   teachingArc: z.string().default(""),
+  coreThesis: z.string().default(""),
+  targetAudience: z.string().default(""),
+  uniqueVocabulary: z.array(z.string()).default([]),
+  toneMap: z.string().default(""),
 });
 
 const SEGMENT_SYSTEM = `You are a content analyst extracting teaching segments from a single sermon/teaching recording.
@@ -62,6 +66,7 @@ Do NOT create segments from:
   - "Good morning", "welcome", "turn to your neighbor" instructions
   - Altar calls or sinner's prayer recitations
   - Technical interruptions (mic check, applause breaks)
+  - Repeated monthly-theme or previous-message recap lines that add no new teaching substance
   - Jokes or stories with no direct teaching application
   - Any content already stripped by the signal filter
 
@@ -188,8 +193,20 @@ export async function POST(req: NextRequest) {
       schema: SynthesisSchema,
       mode: "tool",
       temperature: 0.2,
-      system: `You are a senior editor identifying the overarching message of a multi-part teaching series.\nBase your synthesis ONLY on what the speaker explicitly taught — do not add external theological context.`,
-      prompt: `Based on these teaching segment topics, identify the overall themes and teaching arc.\n\n${topicSummary}`,
+      system: `You are a senior editor identifying the overarching message of a multi-part teaching series.
+    Base your synthesis ONLY on what the speaker explicitly taught — do not add external theological context.
+
+    Your job is to perform the sermon-to-book "Narrative North Star" pass:
+    - Extract the core thesis that governs the whole manuscript.
+    - Identify the target audience the speaker is actually addressing in substance, not the live room.
+    - Capture the speaker's unique vocabulary, metaphors, and repeated conceptual language.
+    - Describe the tone map for the eventual book.
+    - Organize recurring ideas into a coherent flow, treating repeated series recaps or monthly-theme refreshers as support material rather than fresh chapters.`,
+      prompt: `Based on these teaching segment topics, identify the overall themes, teaching arc, core thesis, target audience, unique vocabulary, and tone map.
+
+    Group repeated themes together conceptually so the eventual book reads contiguously instead of repeating sermon-series refreshers.
+
+    ${topicSummary}`,
     });
 
     const contentMap = {

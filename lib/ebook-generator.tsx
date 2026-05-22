@@ -5,7 +5,63 @@
  * EPUB: epub-gen-memory
  */
 
-import type { EbookManifest, ChapterDraft, FrontBackMatter } from "@/lib/schemas/ebook";
+import type { EbookManifest, ChapterDraft, FrontBackMatter, Quote } from "@/lib/schemas/ebook";
+import { existsSync } from "node:fs";
+
+type PdfFontSet = {
+  serif: string;
+  serifItalic: string;
+  serifBold: string;
+  sans: string;
+  sansBold: string;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolvePdfFonts(doc: any): PdfFontSet {
+  const georgiaPaths = {
+    regular: [
+      "/usr/share/fonts/truetype/msttcorefonts/Georgia.ttf",
+      "/usr/share/fonts/truetype/msttcorefonts/georgia.ttf",
+      "/usr/share/fonts/truetype/microsoft/Georgia.ttf",
+    ],
+    italic: [
+      "/usr/share/fonts/truetype/msttcorefonts/Georgia_Italic.ttf",
+      "/usr/share/fonts/truetype/msttcorefonts/georgiai.ttf",
+      "/usr/share/fonts/truetype/microsoft/Georgia Italic.ttf",
+    ],
+    bold: [
+      "/usr/share/fonts/truetype/msttcorefonts/Georgia_Bold.ttf",
+      "/usr/share/fonts/truetype/msttcorefonts/georgiab.ttf",
+      "/usr/share/fonts/truetype/microsoft/Georgia Bold.ttf",
+    ],
+  };
+
+  const pickPath = (paths: string[]) => paths.find((path) => existsSync(path));
+  const regular = pickPath(georgiaPaths.regular);
+  const italic = pickPath(georgiaPaths.italic);
+  const bold = pickPath(georgiaPaths.bold);
+
+  if (regular && italic && bold) {
+    doc.registerFont("BookGeorgia", regular);
+    doc.registerFont("BookGeorgiaItalic", italic);
+    doc.registerFont("BookGeorgiaBold", bold);
+    return {
+      serif: "BookGeorgia",
+      serifItalic: "BookGeorgiaItalic",
+      serifBold: "BookGeorgiaBold",
+      sans: "Helvetica",
+      sansBold: "Helvetica-Bold",
+    };
+  }
+
+  return {
+    serif: "Times-Roman",
+    serifItalic: "Times-Italic",
+    serifBold: "Times-Bold",
+    sans: "Helvetica",
+    sansBold: "Helvetica-Bold",
+  };
+}
 
 // ─── PDF Generator (pdfkit) ───────────────────────────────────────────────────
 
@@ -15,6 +71,7 @@ export async function generatePdfBuffer(manifest: EbookManifest): Promise<Buffer
 
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ margin: 72, size: "A4", autoFirstPage: true });
+    const fonts = resolvePdfFonts(doc);
     const chunks: Buffer[] = [];
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
@@ -23,28 +80,28 @@ export async function generatePdfBuffer(manifest: EbookManifest): Promise<Buffer
     // ── Title page ────────────────────────────────────────────────────────────
     doc
       .moveDown(6)
-      .fontSize(28).font("Helvetica-Bold").fillColor("#111111")
+      .fontSize(28).font(fonts.serifBold).fillColor("#111111")
       .text(manifest.bookTitle, { align: "center" });
 
     if (manifest.subtitle) {
       doc
         .moveDown(0.8)
-        .fontSize(14).font("Helvetica").fillColor("#555555")
+        .fontSize(14).font(fonts.serif).fillColor("#555555")
         .text(manifest.subtitle, { align: "center" });
     }
 
     doc
       .moveDown(2)
-      .fontSize(13).font("Helvetica").fillColor("#333333")
+      .fontSize(13).font(fonts.serif).fillColor("#333333")
       .text(manifest.authorName, { align: "center" });
 
-    writeFrontMatter(doc, manifest.frontMatter);
+    writeFrontMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts);
 
     for (const chapter of manifest.chapters) {
-      writeChapter(doc, chapter);
+      writeChapter(doc, chapter, manifest.allQuotes ?? [], fonts);
     }
 
-    writeBackMatter(doc, manifest.frontMatter);
+    writeBackMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts);
     doc.end();
   });
 }
@@ -59,82 +116,161 @@ function writeDivider(doc: any) {
   doc.moveDown(0.5);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeFrontMatter(doc: any, fm: FrontBackMatter) {
-  doc.addPage();
-  doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Preface");
-  writeDivider(doc);
-  doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.preface, { lineGap: 4 });
+function normalizeText(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[“”"'.,;:!?()[\]{}-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  doc.addPage();
-  doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Introduction");
-  writeDivider(doc);
-  doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.introduction, { lineGap: 4 });
+function findMatchingBlockQuote(paragraph: string, quotes: Quote[]): Quote | null {
+  const normalizedParagraph = normalizeText(paragraph);
+  return quotes.find((quote) => {
+    if (!quote.isBlockQuote || !quote.text) return false;
+    const normalizedQuote = normalizeText(quote.text);
+    const lead = normalizedQuote.split(" ").slice(0, 8).join(" ");
+    return lead.length > 20 && normalizedParagraph.includes(lead);
+  }) ?? null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeChapter(doc: any, chapter: ChapterDraft) {
+function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet) {
+  doc.moveDown(0.25);
+  doc
+    .fontSize(13)
+    .font(fonts.serifItalic)
+    .fillColor("#202020")
+    .text(quote.text, {
+      lineGap: 6,
+      indent: 18,
+      width: doc.page.width - doc.page.margins.left - doc.page.margins.right - 46,
+      align: "justify",
+    });
+
+  const reference = quote.reference
+    ? `${quote.reference}${quote.translation ? ` (${quote.translation})` : ""}`
+    : "";
+
+  if (reference) {
+    doc
+      .moveDown(0.15)
+      .fontSize(11.5)
+      .font(fonts.serifBold)
+      .fillColor("#111111")
+      .text(`— ${reference}`, {
+        align: "right",
+        width: doc.page.width - doc.page.margins.left - doc.page.margins.right - 28,
+      });
+  }
+
+  doc.moveDown(0.8);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }) {
+  const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  paragraphs.forEach((paragraph, index) => {
+    const matchingQuote = findMatchingBlockQuote(paragraph, quotes);
+    if (matchingQuote) {
+      writeScriptureBlock(doc, matchingQuote, fonts);
+      return;
+    }
+
+    const font = options?.italicFirstParagraph && index === 0 ? fonts.serifItalic : fonts.serif;
+    const color = options?.italicFirstParagraph && index === 0 ? "#333333" : "#1a1a1a";
+    const noIndentFirst = options?.noIndentFirstParagraph !== false;
+    const indent = noIndentFirst && index === 0 ? 0 : 20;
+    doc
+      .fontSize(11.5)
+      .font(font)
+      .fillColor(color)
+      .text(paragraph, {
+        lineGap: 5,
+        indent,
+        paragraphGap: 0,
+        align: "justify",
+      });
+    doc.moveDown(0.08);
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeFrontMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet) {
   doc.addPage();
-  doc.fontSize(10).font("Helvetica").fillColor("#888888").text(`CHAPTER ${chapter.number}`);
-  doc.moveDown(0.3).fontSize(22).font("Helvetica-Bold").fillColor("#111111").text(chapter.title);
+  doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Preface");
+  writeDivider(doc);
+  writeRichBody(doc, fm.preface, quotes, fonts, { noIndentFirstParagraph: true });
+
+  doc.addPage();
+  doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Introduction");
+  writeDivider(doc);
+  writeRichBody(doc, fm.introduction, quotes, fonts, { noIndentFirstParagraph: true });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: PdfFontSet) {
+  doc.addPage();
+  doc.moveDown(1.1);
+  doc.fontSize(10).font(fonts.sans).fillColor("#888888").text(`CHAPTER ${chapter.number}`);
+  doc.moveDown(0.3).fontSize(22).font(fonts.serifBold).fillColor("#111111").text(chapter.title);
   writeDivider(doc);
 
   if (chapter.intro) {
-    doc.fontSize(11).font("Helvetica-Oblique").fillColor("#333333").text(chapter.intro, { lineGap: 4 });
-    doc.moveDown();
+    writeRichBody(doc, chapter.intro, quotes, fonts, { italicFirstParagraph: true, noIndentFirstParagraph: true });
   }
 
   for (const section of chapter.sections) {
-    doc.fontSize(13).font("Helvetica-Bold").fillColor("#222222").text(section.heading);
-    doc.moveDown(0.4).fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(section.body, { lineGap: 4 });
-    doc.moveDown();
+    doc.moveDown(0.35);
+    doc.fontSize(13).font(fonts.serifBold).fillColor("#222222").text(section.heading);
+    doc.moveDown(0.2);
+    writeRichBody(doc, section.body, quotes, fonts, { noIndentFirstParagraph: true });
   }
 
   if (chapter.conclusion) {
     writeDivider(doc);
-    doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(chapter.conclusion, { lineGap: 4 });
-    doc.moveDown();
+    writeRichBody(doc, chapter.conclusion, quotes, fonts, { noIndentFirstParagraph: true });
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
-    doc.fontSize(9).font("Helvetica-Bold").fillColor("#888888").text("KEY TAKEAWAYS");
+    doc.fontSize(9).font(fonts.sansBold).fillColor("#888888").text("KEY TAKEAWAYS");
     doc.moveDown(0.3);
     for (const t of (chapter.keyTakeaways ?? [])) {
-      doc.fontSize(10).font("Helvetica").fillColor("#222222").text(`• ${t}`, { lineGap: 3 });
+      doc.fontSize(10.5).font(fonts.serif).fillColor("#222222").text(`• ${t}`, { lineGap: 3.5 });
     }
     doc.moveDown();
   }
 
   if ((chapter.reflectionQuestions ?? []).length > 0) {
-    doc.fontSize(9).font("Helvetica-Bold").fillColor("#888888").text("REFLECTION QUESTIONS");
+    doc.fontSize(9).font(fonts.sansBold).fillColor("#888888").text("REFLECTION QUESTIONS");
     doc.moveDown(0.3);
     (chapter.reflectionQuestions ?? []).forEach((q, i) => {
-      doc.fontSize(10).font("Helvetica").fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: 3 });
+      doc.fontSize(10.5).font(fonts.serif).fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: 3.5 });
     });
     doc.moveDown();
   }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeBackMatter(doc: any, fm: FrontBackMatter) {
+function writeBackMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet) {
   doc.addPage();
-  doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Conclusion");
+  doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Conclusion");
   writeDivider(doc);
-  doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.conclusion, { lineGap: 4 });
+  writeRichBody(doc, fm.conclusion, quotes, fonts, { noIndentFirstParagraph: true });
 
   if (fm.aboutAuthor) {
     doc.addPage();
-    doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("About the Author");
+    doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("About the Author");
     writeDivider(doc);
-    doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(fm.aboutAuthor, { lineGap: 4 });
+    writeRichBody(doc, fm.aboutAuthor, quotes, fonts, { noIndentFirstParagraph: true });
   }
 
   if ((fm.resourcesList ?? []).length > 0) {
     doc.addPage();
-    doc.fontSize(20).font("Helvetica-Bold").fillColor("#111111").text("Resources");
+    doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Resources");
     writeDivider(doc);
     for (const r of (fm.resourcesList ?? [])) {
-      doc.fontSize(11).font("Helvetica").fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3 });
+      doc.fontSize(11.5).font(fonts.serif).fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3.5 });
     }
   }
 }
@@ -384,35 +520,52 @@ function paragraphsToHtml(text: string): string {
     .join("\n");
 }
 
-function frontMatterChapters(fm: FrontBackMatter): Array<{ title: string; content: string }> {
+function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italicFirstParagraph?: boolean }): string {
+  const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  return paragraphs.map((paragraph, index) => {
+    const matchingQuote = findMatchingBlockQuote(paragraph, quotes);
+    if (matchingQuote) {
+      const reference = matchingQuote.reference
+        ? `&mdash; ${escapeHtml(matchingQuote.reference)}${matchingQuote.translation ? ` (${escapeHtml(matchingQuote.translation)})` : ""}`
+        : "";
+      return `<blockquote class="scripture-block"><p>${escapeHtml(matchingQuote.text)}</p>${reference ? `<div class="scripture-ref">${reference}</div>` : ""}</blockquote>`;
+    }
+    const classes = ["book-paragraph"];
+    if (index === 0) classes.push("no-indent");
+    if (options?.italicFirstParagraph && index === 0) classes.push("chapter-intro");
+    return `<p class="${classes.join(" ")}">${escapeHtml(paragraph)}</p>`;
+  }).join("\n");
+}
+
+function frontMatterChapters(fm: FrontBackMatter, quotes: Quote[]): Array<{ title: string; content: string }> {
   const chapters = [
     {
       title: "Preface",
-      content: paragraphsToHtml(fm.preface),
+      content: quoteParagraphsToHtml(fm.preface, quotes),
     },
     {
       title: "Introduction",
-      content: paragraphsToHtml(fm.introduction),
+      content: quoteParagraphsToHtml(fm.introduction, quotes),
     },
   ];
   return chapters;
 }
 
-function chapterToHtml(chapter: ChapterDraft): string {
+function chapterToHtml(chapter: ChapterDraft, quotes: Quote[]): string {
   const parts: string[] = [];
 
   if (chapter.intro) {
-    parts.push(`<p><em>${escapeHtml(chapter.intro)}</em></p>`);
+    parts.push(quoteParagraphsToHtml(chapter.intro, quotes, { italicFirstParagraph: true }));
   }
 
   for (const section of chapter.sections) {
     parts.push(`<h2>${escapeHtml(section.heading)}</h2>`);
-    parts.push(paragraphsToHtml(section.body ?? ""));
+    parts.push(quoteParagraphsToHtml(section.body ?? "", quotes));
   }
 
   if (chapter.conclusion) {
     parts.push("<hr />");
-    parts.push(paragraphsToHtml(chapter.conclusion));
+    parts.push(quoteParagraphsToHtml(chapter.conclusion, quotes));
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
@@ -434,18 +587,18 @@ function chapterToHtml(chapter: ChapterDraft): string {
   return parts.join("\n");
 }
 
-function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; content: string }> {
+function backMatterChapters(fm: FrontBackMatter, quotes: Quote[]): Array<{ title: string; content: string }> {
   const chapters: Array<{ title: string; content: string }> = [
     {
       title: "Conclusion",
-      content: paragraphsToHtml(fm.conclusion),
+      content: quoteParagraphsToHtml(fm.conclusion, quotes),
     },
   ];
 
   if (fm.aboutAuthor) {
     chapters.push({
       title: "About the Author",
-      content: paragraphsToHtml(fm.aboutAuthor),
+      content: quoteParagraphsToHtml(fm.aboutAuthor, quotes),
     });
   }
 
@@ -459,6 +612,73 @@ function backMatterChapters(fm: FrontBackMatter): Array<{ title: string; content
   return chapters;
 }
 
+const EPUB_CSS = `
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  color: #111111;
+  line-height: 1.62;
+  font-size: 1em;
+  margin: 6% 8%;
+  text-align: justify;
+}
+p.book-paragraph {
+  margin: 0;
+  text-indent: 1.35em;
+}
+p.book-paragraph.no-indent {
+  text-indent: 0;
+}
+p.book-paragraph.chapter-intro {
+  font-style: italic;
+  color: #333333;
+}
+h2 {
+  margin-top: 1.55em;
+  margin-bottom: 0.55em;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 1.1em;
+  text-align: left;
+}
+h3 {
+  margin-top: 1.25em;
+  margin-bottom: 0.45em;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.92em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+hr {
+  border: 0;
+  border-top: 1px solid #d7d7d7;
+  margin: 1.4em 0 1.1em;
+}
+ul, ol {
+  margin: 0.35em 0 0.9em 1.2em;
+  padding: 0;
+}
+li {
+  margin: 0.2em 0;
+}
+blockquote.scripture-block {
+  margin: 1.35em 1.75em;
+  padding: 0;
+  border: 0;
+}
+blockquote.scripture-block p {
+  font-style: italic;
+  font-size: 1.07em;
+  line-height: 1.85;
+  margin: 0;
+  text-indent: 0;
+}
+.scripture-ref {
+  margin-top: 0.45em;
+  text-align: right;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+`;
+
 // ─── EPUB Generator ───────────────────────────────────────────────────────────
 
 export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffer> {
@@ -466,12 +686,12 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
   const epub = (await import("epub-gen-memory") as any).default;
 
   const chapters = [
-    ...frontMatterChapters(manifest.frontMatter),
+    ...frontMatterChapters(manifest.frontMatter, manifest.allQuotes ?? []),
     ...manifest.chapters.map((ch) => ({
       title: `Chapter ${ch.number}: ${ch.title}`,
-      content: chapterToHtml(ch),
+      content: chapterToHtml(ch, manifest.allQuotes ?? []),
     })),
-    ...backMatterChapters(manifest.frontMatter),
+    ...backMatterChapters(manifest.frontMatter, manifest.allQuotes ?? []),
   ];
 
   const epubBuffer = await epub(
@@ -483,6 +703,7 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
       date: new Date(manifest.generatedAt).getFullYear().toString(),
       lang: "en",
       tocTitle: "Table of Contents",
+      css: EPUB_CSS,
     },
     chapters
   );

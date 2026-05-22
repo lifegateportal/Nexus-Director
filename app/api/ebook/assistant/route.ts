@@ -8,6 +8,7 @@ import {
   ChapterDraftSchema,
   FrontBackMatterSchema,
 } from "@/lib/schemas/ebook";
+import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -15,6 +16,21 @@ export const maxDuration = 120;
 const RequestSchema = z.object({
   manifest: EbookManifestSchema,
   instruction: z.string().min(1).max(4000),
+  pipeline: z.object({
+    stage: z.string(),
+    progress: z.object({ total: z.number().int().nonnegative(), completed: z.number().int().nonnegative() }),
+    totalWords: z.number().int().nonnegative(),
+    reviewReady: z.boolean(),
+    qualityReport: z.object({
+      score: z.number(),
+      pass: z.boolean(),
+      issues: z.array(z.object({ severity: z.enum(["warn", "error"]), message: z.string() })),
+    }).nullable(),
+    error: z.string().nullable(),
+    bookTitle: z.string().nullable(),
+    chapterCount: z.number().int().nonnegative(),
+    frontMatterSections: z.number().int().nonnegative(),
+  }).optional(),
 });
 
 // The agent returns only what changed — undefined fields = no change
@@ -40,7 +56,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { manifest, instruction } = input;
+  const { manifest, instruction, pipeline } = input;
+
+  const safeExcerpt = (value: string | null | undefined, max = 300) => (value ?? "").slice(0, max);
 
   // Build a compact book summary to give the LLM context without the full prose
   const bookSummary = {
@@ -49,8 +67,8 @@ export async function POST(req: NextRequest) {
     authorName: manifest.authorName,
     totalWordCount: manifest.totalWordCount,
     frontMatter: {
-      prefaceExcerpt: manifest.frontMatter.preface.slice(0, 300),
-      introductionExcerpt: manifest.frontMatter.introduction.slice(0, 300),
+      prefaceExcerpt: safeExcerpt(manifest.frontMatter.preface),
+      introductionExcerpt: safeExcerpt(manifest.frontMatter.introduction),
     },
     chapters: manifest.chapters.map((ch) => ({
       number: ch.number,
@@ -61,11 +79,25 @@ export async function POST(req: NextRequest) {
       sections: ch.sections.map((s) => ({
         sectionNumber: s.sectionNumber,
         heading: s.heading,
-        bodyExcerpt: s.body.slice(0, 300),
+        bodyExcerpt: safeExcerpt(s.body),
         wordCount: s.wordCount,
       })),
     })),
   };
+
+  const pipelineSummary = pipeline
+    ? {
+        stage: pipeline.stage,
+        progress: pipeline.progress,
+        totalWords: pipeline.totalWords,
+        reviewReady: pipeline.reviewReady,
+        qualityReport: pipeline.qualityReport,
+        error: pipeline.error,
+        bookTitle: pipeline.bookTitle,
+        chapterCount: pipeline.chapterCount,
+        frontMatterSections: pipeline.frontMatterSections,
+      }
+    : null;
 
   try {
     const { object } = await generateObject({
@@ -83,6 +115,10 @@ This book was produced strictly from a speaker's transcripts. You MUST:
 - When rewriting or editing, work ONLY with content already in the book
 - Preserve the speaker's voice, vocabulary, and teaching style exactly
 - If asked to "improve" or "expand" content, do so by reorganizing or clarifying existing text — not by adding new content
+
+BOOK-SAFETY RULE — ALWAYS APPLY
+- Remove or avoid church-room chatter that does not belong in a book: greetings to congregation, thanking attendees/teams, service-flow remarks, crowd-response prompts, and stage directions.
+- Keep only reader-appropriate teaching prose.
 
 ════════════════════════════════════════════
 WHAT YOU CAN DO
@@ -121,6 +157,7 @@ OUTPUT RULES
       prompt: [
         "CURRENT BOOK STRUCTURE:",
         JSON.stringify(bookSummary, null, 2),
+        pipelineSummary ? ["CURRENT PIPELINE STATE:", JSON.stringify(pipelineSummary, null, 2)].join("\n") : "",
         "",
         "USER INSTRUCTION:",
         instruction,
@@ -155,7 +192,9 @@ OUTPUT RULES
       chapters: mergedChapters,
     };
 
-    const validated = EbookManifestSchema.safeParse(updatedManifest);
+    const harmonized = harmonizeBookManifest(updatedManifest);
+
+    const validated = EbookManifestSchema.safeParse(harmonized);
     if (!validated.success) {
       return NextResponse.json(
         { error: `Manifest validation failed: ${validated.error.issues[0]?.message}` },

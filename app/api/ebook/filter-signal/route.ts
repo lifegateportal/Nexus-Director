@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
+import { pruneRedundantSeriesRecaps, stripNonBookLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -19,6 +20,7 @@ const MarkersSchema = z.object({
     z.enum([
       "opening-prayer", "closing-prayer", "announcement", "housekeeping",
       "altar-call", "offering-appeal", "greeting-pleasantries",
+      "gratitude-and-acknowledgements", "live-audience-address",
       "off-topic-tangent", "technical-break",
     ])
   ).default([]),
@@ -74,6 +76,9 @@ NON-TEACHING content (identify and skip):
 - Opening/closing prayers and benedictions
 - Church announcements and event notices
 - Greetings: "Good morning", "how is everyone", banter before teaching
+- Greetings and acknowledgements to the room/church family
+- Thank-you lines directed to attendees, leaders, choir, workers, or guests
+- Repeated monthly-theme/series recap lines that do not add new teaching substance
 - Housekeeping: "turn to your neighbor", stand/sit cues, phone reminders
 - Altar calls and salvation appeals
 - Offering/tithing appeals
@@ -110,10 +115,11 @@ If no closing non-teaching is found, set teachingEndPhrase to the last teaching 
       }
     }
 
+    const cleanedTranscript = pruneRedundantSeriesRecaps(stripNonBookLanguage(cleaned || transcript));
     const removedSegments = object.removedCategories.map((reason) => ({ reason, excerpt: "" }));
 
     return NextResponse.json({
-      cleanedTranscript: cleaned || transcript,
+      cleanedTranscript,
       removedSegments,
       summary: object.summary ||
         (removedSegments.length > 0 ? `Removed: ${object.removedCategories.join(", ")}` : "No non-teaching content detected"),
