@@ -60,6 +60,9 @@ export async function POST(req: NextRequest) {
 
   const safeExcerpt = (value: string | null | undefined, max = 600) => (value ?? "").slice(0, max);
 
+  // Track which sections are truncated so we can restore original content if the AI loses words
+  const truncatedSections = new Set<string>();
+
   // Build a rich book context — front matter in full, section bodies as excerpts
   // (full body sent for short sections; excerpted for long ones to stay within token budget)
   const bookSummary = {
@@ -82,14 +85,23 @@ export async function POST(req: NextRequest) {
       keyTakeaways: ch.keyTakeaways,
       reflectionQuestions: ch.reflectionQuestions,
       totalWordCount: ch.totalWordCount,
-      sections: ch.sections.map((s) => ({
-        sectionNumber: s.sectionNumber,
-        chapterNumber: ch.number,
-        heading: s.heading,
-        // Send full body for short sections; excerpt for long ones to manage token budget
-        body: (s.body ?? "").length <= 1200 ? s.body : safeExcerpt(s.body, 800) + "\n…[truncated for context — rewrite using existing content and instruction]",
-        wordCount: s.wordCount,
-      })),
+      sections: ch.sections.map((s) => {
+        const fullBody = s.body ?? "";
+        const isTruncated = fullBody.length > 1200;
+        if (isTruncated) {
+          truncatedSections.add(`${ch.number}:${s.sectionNumber}`);
+        }
+        return {
+          sectionNumber: s.sectionNumber,
+          chapterNumber: ch.number,
+          heading: s.heading,
+          // Send full body for short sections; excerpt for long ones with a NO-EDIT marker
+          body: isTruncated
+            ? safeExcerpt(fullBody, 800) + "\n…[TRUNCATED — DO NOT MODIFY THIS SECTION. Return its body field as an empty string so the original is preserved]"
+            : fullBody,
+          wordCount: s.wordCount,
+        };
+      }),
     })),
   };
 
@@ -167,6 +179,17 @@ BOOK-WIDE OPERATIONS:
   "add takeaways to all chapters"     → return full chapters array with keyTakeaways filled in
 
 ════════════════════════════════════════════
+CONTENT PRESERVATION — CRITICAL
+════════════════════════════════════════════
+Some section bodies end with "…[TRUNCATED — DO NOT MODIFY THIS SECTION...]".
+This means the full content was too long to include in this prompt.
+YOU MUST:
+- Return those sections' body field as an EMPTY STRING "" — the client will restore the original automatically
+- NEVER attempt to rewrite, summarise, or fill in a truncated section
+- ONLY modify a truncated section if the user's instruction EXPLICITLY names it by section number (e.g., "rewrite section 2.3")
+- This rule prevents catastrophic word count loss across the book
+
+════════════════════════════════════════════
 OUTPUT RULES
 ════════════════════════════════════════════
 - Return ONLY fields that ACTUALLY changed — leave others as undefined
@@ -196,14 +219,46 @@ OUTPUT RULES
           const updated = object.updatedSections!.find(
             (u) => u.chapterNumber === ch.number && u.sectionNumber === s.sectionNumber
           );
-          return updated ?? s;
+          if (!updated) return s;
+          // Safety guard: if the returned body is empty or drastically shorter than original,
+          // restore the original body to prevent content loss on truncated sections
+          const originalWords = (s.body ?? "").split(/\s+/).filter(Boolean).length;
+          const returnedWords = (updated.body ?? "").split(/\s+/).filter(Boolean).length;
+          const bodyToUse =
+            !updated.body || (truncatedSections.has(`${ch.number}:${s.sectionNumber}`) && returnedWords < originalWords * 0.75)
+              ? s.body
+              : updated.body;
+          return { ...updated, body: bodyToUse };
         }),
       }));
     }
 
-    // If chapters array was explicitly returned, use that instead
+    // If chapters array was explicitly returned, use that instead,
+    // but restore original bodies for any truncated sections where content was lost
     if (object.chapters) {
-      mergedChapters = object.chapters;
+      mergedChapters = object.chapters.map((returnedCh) => {
+        const originalCh = manifest.chapters.find((c) => c.number === returnedCh.number);
+        if (!originalCh) return returnedCh;
+        return {
+          ...returnedCh,
+          sections: (returnedCh.sections ?? []).map((returnedSection) => {
+            const originalSection = originalCh.sections.find(
+              (s) => s.sectionNumber === returnedSection.sectionNumber
+            );
+            if (!originalSection) return returnedSection;
+            const key = `${returnedCh.number}:${returnedSection.sectionNumber}`;
+            const wasTruncated = truncatedSections.has(key);
+            const originalWords = (originalSection.body ?? "").split(/\s+/).filter(Boolean).length;
+            const returnedWords = (returnedSection.body ?? "").split(/\s+/).filter(Boolean).length;
+            // Restore original body if: section was truncated AND returned body is empty or lossy
+            const bodyToUse =
+              wasTruncated && (!returnedSection.body || returnedWords < originalWords * 0.75)
+                ? originalSection.body
+                : returnedSection.body;
+            return { ...returnedSection, body: bodyToUse };
+          }),
+        };
+      });
     }
 
     const updatedManifest = {
