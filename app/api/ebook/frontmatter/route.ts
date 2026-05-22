@@ -29,18 +29,48 @@ export async function POST(req: NextRequest) {
 
 ABSOLUTE CONTENT RULE: Every sentence must come from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript.
 
-FRONT MATTER:
-- preface: Drawn from the opening moments of the teaching. What did the author say at the start? Use their exact tone and words. 2–4 paragraphs.
-- introduction: A written introduction to the full teaching. Speak in first person as the author, and write as though introducing the book directly to the reader. Focus on the book's purpose, themes, and invitation to the reader. Do not describe the author from a third-person perspective. 3–5 paragraphs.
+════════════════════════════════════════════
+PREFACE — STRICT GUARDRAILS
+════════════════════════════════════════════
+The preface is an author's note to a reader holding the book — not an address to a congregation.
 
-BACK MATTER:
-- conclusion: Drawn from the closing moments of the teaching. How did the author wrap up? 2–4 paragraphs.
-- aboutAuthor: ONLY write this if the author spoke about themselves, their background, or their story in the transcript. If they did not, return null.
-- resourcesList: List any books, tools, websites, courses, or resources the author explicitly mentioned or recommended. Return as an array of strings (e.g., "The Bible, NIV translation"). If none mentioned, return [].
+WHAT THE PREFACE MUST BE:
+- Written in first person as the author speaking directly to an individual reader.
+- Grounded in what the author said about why this teaching matters, what prompted it, or what they hope it accomplishes.
+- Warm, personal, and purposeful — the author's own voice explaining what the reader is about to receive.
+
+HARD PROHIBITIONS — delete or rewrite every instance:
+- Any greeting to a crowd: "Good morning," "Welcome everyone," "Thank you for being here," "It's good to see you all."
+- Any acknowledgement of staff, choir, church workers, guests, or attendees.
+- Any room/stage reference: "as we gather today," "in this house," "this morning as you sit here," "those of you in the room."
+- Any sermon-opener command: "Turn with me to," "Open your Bibles to," "Let's pray," "Say amen."
+- Any plural-crowd address: "you all," "each of you here today," "everyone in this room," "those of you joining us."
+- Any live-event framing: "this series," "today's message," "last week we covered," "part 2 of our series."
+
+REWRITE RULES FOR THE PREFACE:
+- "You all" / "everyone here" → "you" (singular reader)
+- "This morning's message" → "this book" or "these pages"
+- "Those of you in the room" → "you, the reader"
+- "We as a church" → omit or rephrase as the author's own conviction
+- First-person plural "we" (as a congregation) → first-person singular "I" (as the author)
+
+════════════════════════════════════════════
+INTRODUCTION
+════════════════════════════════════════════
+- Speak in first person as the author introducing the book directly to the reader.
+- Focus on the book's purpose, core themes, and invitation to the reader.
+- Do not describe the author from a third-person perspective.
+- 3–5 paragraphs. Apply all preface guardrails above.
+
+════════════════════════════════════════════
+BACK MATTER
+════════════════════════════════════════════
+- conclusion: Drawn from the closing moments of the teaching, rewritten as a book closing — not an altar call or dismissal. 2–4 paragraphs.
+- aboutAuthor: ONLY write if the author spoke about themselves, their background, or their story. Return null if not.
+- resourcesList: Books, tools, websites, or resources the author explicitly recommended. Return [] if none mentioned.
 
 SCRIPTURE & QUOTE FORMATTING: Apply Chicago Manual of Style rules as established in the chapter content.
 VOICE ENFORCEMENT: Match the author's tone profile and signature phrases.
-READER NORMALIZATION: Remove live-audience phrasing and stage cues; write as a book speaking to an individual reader.
 
 ${SOURCE_LOCK_RULES}
 
