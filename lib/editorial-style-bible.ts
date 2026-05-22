@@ -11,11 +11,28 @@ export const SOURCE_LOCK_RULES = `SOURCE-LOCK FIDELITY:
 - You may improve clarity, order, and transitions only when they preserve original meaning.
 - If support is weak for a sentence, simplify or remove it.`;
 
-export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE:
-- Prefer concise, high-signal paragraphs over spoken repetition.
-- Keep rhetorical force while trimming filler and repeated stage phrasing.
-- Maintain dignified cadence suitable for publication.
-- Prioritize coherence between sections with clean transitions.`;
+export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
+
+PARAGRAPH CRAFT:
+- No paragraph should exceed 5 sentences. Short paragraphs (1–2 sentences) are not weakness — they are emphasis.
+- Vary opening words across consecutive paragraphs. Never start two adjacent paragraphs with the same word or phrase.
+- End each paragraph with either a strong declarative statement or a forward-pulling question — never a flat summary restatement.
+
+SENTENCE RHYTHM:
+- Mix sentence lengths deliberately: long sentences explain, short sentences land the blow.
+- No three consecutive sentences should be the same approximate length.
+- Avoid passive constructions. Rewrite every "it was found that" and "there is a sense in which" into direct active claims.
+
+FORBIDDEN PHRASES (hard ban — delete or rewrite every instance):
+"In conclusion" | "It's important to note" | "It is crucial to remember" | "Let's delve into" | "A tapestry of" | "Navigating the landscape" | "In today's fast-paced world" | "Furthermore" | "Moreover" | "It is worth noting" | "At the end of the day" | "Game-changer" | "Paradigm shift" | "Deep dive" | "Unpack" | "Moving forward" | "Robust" | "Leverage" | "Synergy" | "It goes without saying" | "The truth is," | "The fact of the matter is"
+
+OPENING SENTENCES:
+- Never open a paragraph with a direct re-statement of the section heading just used.
+- Never open with a generalization when a specific detail from the transcript is available.
+
+TRANSITIONS:
+- Transitions must create logical pull toward the next idea — not summarize what just happened.
+- Mid-chapter summary transitions ("So, as we have seen...", "To summarize...") are forbidden.`;
 
 const AUDIENCE_PATTERNS = [
 	/\blook at your neighbor\b/gi,

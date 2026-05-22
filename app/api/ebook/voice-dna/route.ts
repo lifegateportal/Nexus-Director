@@ -15,13 +15,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
-  // Voice DNA only needs a representative sample — truncate to ~5 000 words
-  // to stay well within model context limits and avoid partial JSON output.
-  const WORDS = 5_000;
-  const sampleTranscript = input.masterTranscript
-    .split(/\s+/)
-    .slice(0, WORDS)
-    .join(" ");
+  // Distributed sample: start + middle + end captures the author's full voice range
+  // rather than only the opening 20 minutes of a long teaching.
+  const words = input.masterTranscript.split(/\s+/);
+  const total = words.length;
+  const startSample = words.slice(0, 2000).join(" ");
+  const midStart = Math.max(2000, Math.floor(total / 2) - 750);
+  const midSample = words.slice(midStart, midStart + 1500).join(" ");
+  const endSample = words.slice(Math.max(0, total - 1500)).join(" ");
+  const sampleTranscript = [
+    "[TRANSCRIPT START]\n" + startSample,
+    "[TRANSCRIPT MIDDLE]\n" + midSample,
+    "[TRANSCRIPT END]\n" + endSample,
+  ].join("\n\n---\n\n");
 
   try {
     const { object } = await generateObject({
@@ -42,7 +48,9 @@ Focus on:
 - sentencePattern: short-punchy | long-explanatory | mixed.
 - rhetoricalPatterns: teaching devices (e.g. "repeats key point three times", "uses rhetorical questions").
 - teachingStyle: how the author opens topics, develops arguments, and lands points.
-- avoidWords: words demonstrably absent (be conservative).`,
+- avoidWords: Always start with this mandatory baseline of forbidden AI writing clichés, then add any words the author demonstrably never uses on top:
+  BASELINE (always include all of these): ["In conclusion", "delve into", "tapestry", "navigating", "It's important to note", "Furthermore", "Moreover", "In today's fast-paced world", "It is crucial", "It is worth noting", "At the end of the day", "Game-changer", "Paradigm shift", "Deep dive", "Unpack", "Moving forward", "Robust", "Leverage", "Synergy", "It goes without saying", "The truth is,", "The fact of the matter is"]
+  Then append author-specific words genuinely absent from their speech.`,
       prompt: `Extract the author's Voice DNA from this transcript sample:\n\n${sampleTranscript}`,
     });
 

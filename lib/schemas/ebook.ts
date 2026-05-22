@@ -95,6 +95,7 @@ export const SectionAssignmentSchema = z.object({
   keyPoints: z.array(z.string()).default([]),
   voiceDNA: VoiceDNASchema,
   previousSectionEnding: z.string(),           // last 2 paragraphs of previous section
+  nextSectionHeading: z.string().optional(),   // heading of the next section for forward bridge
   targetWordCount: z.number(),
 });
 

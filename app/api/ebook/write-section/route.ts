@@ -64,6 +64,11 @@ Before generating the final output, follow this internal sequence:
 2. Filter out all conversational redundancies and off-topic tangents.
 3. Group related concepts logically so the narrative builds momentum.
 4. Draft the text using varied sentence lengths (short punches for emphasis, longer sentences for explanation).
+5. Before returning, silently review your draft against all four of these criteria and revise inline:
+   - RHYTHM: No two consecutive sentences should be the same length. Break monotony with short, punchy sentences after long explanatory ones.
+   - CLICHÉS: Scan every sentence for robotic phrasing — "It is crucial to remember," "A tapestry of," "Navigating the complexities," "It is worth noting," or any overly neat paragraph-ending summary. Delete or rewrite every instance found.
+   - SHOW, DON'T TELL: Where the draft states a fact, check whether the transcript contains an example, story, or specific detail that illustrates it instead. If so, use the illustration.
+   - TONE: Confirm the final prose is authoritative, premium, and sophisticated — never passive, never academic, never motivational-poster flat.
 
 ════════════════════════════════════════════
 VOICE DNA — MUST BE ENFORCED
@@ -147,6 +152,14 @@ export async function POST(req: NextRequest) {
     ? `\nPREVIOUS SECTION ENDING (for prose continuity — do NOT repeat this):\n${assignment.previousSectionEnding}`
     : "";
 
+  const nextSectionBlock = assignment.nextSectionHeading
+    ? `\nFORWARD BRIDGE: Close this section with a sentence or short paragraph that creates natural narrative pull toward the next section: "${assignment.nextSectionHeading}". Do not name the next section directly or use meta-language like "in the next section." Build logical momentum that makes the reader want to continue.`
+    : "";
+
+  const hookBlock = assignment.sectionNumber === 1
+    ? `\nCHAPTER OPENER REQUIREMENT: This is the FIRST section of the chapter. The very first sentence must be a compelling hook — a bold provocative claim, a pointed question, or an immersive specific detail drawn directly from the transcript. Do not open with a general context-setting statement. Drop the reader immediately into the argument.`
+    : "";
+
   const prompt = `Write the prose for this section of the ebook. Transform the transcript excerpts into polished written prose.
 
 CHAPTER ${assignment.chapterNumber}: ${assignment.chapterTitle}
@@ -157,6 +170,8 @@ KEY POINTS TO COVER (all from the transcript — include every one):
 ${assignment.keyPoints.map((kp) => `• ${kp}`).join("\n")}
 ${quoteBlock}
 ${continuityBlock}
+${nextSectionBlock}
+${hookBlock}
 
 AUTHOR VOICE DNA:
 ${JSON.stringify(assignment.voiceDNA, null, 2)}
@@ -193,7 +208,18 @@ Now write the section prose:`;
         schema: PlanSchema,
         mode: "tool",
         temperature: 0.15,
-        system: `${SOURCE_LOCK_RULES}\n${READER_NORMALIZATION_RULES}`,
+        system: `You are a structural editor planning the paragraph-level architecture for a single book section.
+
+BESTSELLER ARC — apply within this section where the content supports it:
+- HOOK: Open with a grabbing claim, question, or specific detail drawn directly from the transcript
+- CONTEXT: Establish why this matters (drawn only from what the speaker said)
+- MECHANISM: Develop the core argument or framework the speaker presented
+- APPLICATION: Close with how the reader applies or internalizes this
+
+Each paragraph in your plan must have a clear narrative purpose and be supported by specific transcript excerpt numbers. Do not plan paragraphs with no excerpt support.
+
+${SOURCE_LOCK_RULES}
+${READER_NORMALIZATION_RULES}`,
         prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n\nEXCERPTS:\n${excerptBlock}`,
       });
       paragraphPlan = plan.paragraphPlan ?? [];

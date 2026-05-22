@@ -1324,11 +1324,12 @@ export function EbookPipeline({
         setProgress({ total: totalSections, completed: completedCount });
       }
 
-      for (const assignment of assignments) {
+      for (const [sectionIdx, assignment] of assignments.entries()) {
         const key = `${assignment.chapterNumber}-${assignment.sectionNumber}`;
         if (completedSectionKeys.has(key)) continue; // already done
 
-        const augmented: SectionAssignment = { ...assignment, previousSectionEnding: previousEnding };
+        const nextSectionHeading = assignments[sectionIdx + 1]?.heading;
+        const augmented: SectionAssignment = { ...assignment, previousSectionEnding: previousEnding, nextSectionHeading };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
         // Update section status to "writing"

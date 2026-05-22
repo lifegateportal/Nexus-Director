@@ -34,28 +34,52 @@ const MinimalArchitectureSchema = z.object({
 });
 
 function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
-  const sections = input.contentMap.segments.map((segment, index) => ({
-    sectionNumber: index + 1,
-    heading: segment.topic || `Section ${index + 1}`,
-    sourceSegmentIds: [segment.id],
-    targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
-  }));
+  // Group segments by sourceAudio to produce one chapter per message in series order
+  const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6"];
+  const segmentsByAudio = new Map<string, typeof input.contentMap.segments>();
+  for (const seg of input.contentMap.segments) {
+    const bucket = segmentsByAudio.get(seg.sourceAudio) ?? [];
+    bucket.push(seg);
+    segmentsByAudio.set(seg.sourceAudio, bucket);
+  }
+
+  const audioKeys = audioOrder.filter((k) => segmentsByAudio.has(k));
+  const chapters = audioKeys.map((audioKey, chapterIndex) => {
+    const segs = segmentsByAudio.get(audioKey)!;
+    const sections = segs.map((segment, sectionIndex) => ({
+      sectionNumber: sectionIndex + 1,
+      heading: segment.topic || `Section ${sectionIndex + 1}`,
+      sourceSegmentIds: [segment.id],
+      targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
+    }));
+    return {
+      number: chapterIndex + 1,
+      title: segs[0]?.topic || `Chapter ${chapterIndex + 1}`,
+      keyTheme: segs[0]?.topic || input.contentMap.overarchingThemes[chapterIndex] || "Core teaching",
+      sections,
+    };
+  });
+
+  const fallbackChapters = chapters.length > 0 ? chapters : [{
+    number: 1,
+    title: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || "Core Teaching",
+    keyTheme: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.teachingArc || "Core teaching",
+    sections: input.contentMap.segments.map((segment, index) => ({
+      sectionNumber: index + 1,
+      heading: segment.topic || `Section ${index + 1}`,
+      sourceSegmentIds: [segment.id],
+      targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
+    })),
+  }];
 
   return {
     bookTitle: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.segments[0]?.topic || "Untitled Teaching Manuscript",
     subtitle: input.contentMap.targetAudience || input.contentMap.teachingArc || "Drawn directly from the source teaching",
     authorName: "the Author",
-    estimatedTotalWords: sections.reduce((sum, section) => sum + section.targetWordCount, 0),
+    estimatedTotalWords: fallbackChapters.flatMap((c) => c.sections).reduce((sum, s) => sum + s.targetWordCount, 0),
     frontMatterNotes: input.contentMap.coreThesis || input.contentMap.segments[0]?.topic || "",
     backMatterNotes: input.contentMap.teachingArc || input.contentMap.segments.at(-1)?.topic || "",
-    chapters: [
-      {
-        number: 1,
-        title: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || "Core Teaching",
-        keyTheme: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.teachingArc || "Core teaching",
-        sections,
-      },
-    ],
+    chapters: fallbackChapters,
   };
 }
 
@@ -122,19 +146,31 @@ export async function POST(req: NextRequest) {
         schema: MinimalArchitectureSchema,
         mode: "tool",
         temperature: 0.2,
-        system: `You are a book architect designing the chapter structure of a published teaching book.
+        system: `# ROLE
+You are an elite structural editor for a top-tier publishing house. Your job is to map raw, sanitized audio transcript segments into a clean chapter architecture for a published book series.
 
-RULES:
-- sourceSegmentIds must reference actual segment IDs from the segment list (e.g. "seg-1")
-- Group thematically related segments into chapters
-      - Group repeated series recaps, monthly-theme reminders, and prior-message refreshers into a single foundational treatment when they do not add new substance
-      - Arrange related ideas contiguously so the manuscript reads like a coherent book, not a week-by-week sermon archive
-- Each chapter: 3–5 sections; each section: one focused teaching point
-- targetWordCount per section = sum of that section's segments' estimatedWordCount
-- bookTitle and authorName must come from the content; use "the Author" if name is unknown
-- estimatedTotalWords = sum of all section targetWordCounts
-- Always return every required field, even if some strings are brief
-- Never leave sections empty; every chapter must include at least one section with at least one sourceSegmentId`,
+# OBJECTIVE
+This content is a sermon series. The author's preaching sequence IS the book's sequence. Your job is to give each message a strong chapter structure — not to reorganize which ideas belong in which message.
+
+# STRICT EDITORIAL INSTRUCTIONS
+1. SEQUENCE PRESERVATION — NON-NEGOTIABLE: Chapters must follow the source audio order (audio-1 before audio-2 before audio-3, etc.). A single audio source may produce more than one chapter if the content depth warrants it — but all chapters from audio-1 must appear consecutively before any chapter from audio-2. Never interleave chapters from different audio sources. Never place a segment from audio-2 into a chapter that also contains segments from audio-1.
+2. WITHIN-CHAPTER SYNTHESIS ONLY: Within a single message (single sourceAudio), you may group scattered thoughts on the same topic into unified sections. If the speaker revisits a point within the same message, consolidate it into one section. Do not synthesize across messages.
+3. WITHIN-CHAPTER ARC: Within each chapter, structure the sections to reflect the message's natural teaching progression. Where the content supports it, apply the arc below — but never at the cost of distorting the speaker's own sequence:
+   - The Hook: The core problem or provocative claim that opens the message
+   - The Context: Why this matters (as the speaker framed it)
+   - The Mechanism: The core argument or framework the speaker taught
+   - The Application: How the speaker called the listener to respond
+4. WITHIN-CHAPTER DEDUPLICATION ONLY: Within a single message, pure title-restatement recap lines (e.g., "our series this month is...") with zero new substance may be collapsed. Do not discard content that transitions the series narrative forward.
+
+# PIPELINE RULES — REQUIRED FOR OUTPUT VALIDITY
+- sourceSegmentIds MUST reference actual segment IDs from the provided segment list (e.g. "seg-1"). Never invent IDs.
+- Each chapter must draw segments from only one sourceAudio. A single sourceAudio may produce multiple consecutive chapters if the content depth warrants it.
+- Each chapter: 3–5 sections; each section covers one focused teaching point.
+- targetWordCount per section = sum of that section's segments' estimatedWordCount.
+- bookTitle and authorName must come from the content; use "the Author" if name is unknown.
+- estimatedTotalWords = sum of all section targetWordCounts.
+- Always return every required field, even if some strings are brief.
+- Never leave sections empty; every chapter must have at least one section with at least one sourceSegmentId.`,
         prompt: `Design the chapter architecture.
 
       VOICE DNA TONE: ${input.voiceDNA.toneProfile}
