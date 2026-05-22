@@ -16,6 +16,14 @@ const anthropic = createAnthropic({
   apiKey: env.ANTHROPIC_API_KEY
 });
 
+// Curator uses the extended-output beta so it can emit up to 64K tokens —
+// necessary for large academy packages (multi-module, full lesson notes).
+const anthropicCurator = createAnthropic({
+  apiKey: env.ANTHROPIC_API_KEY,
+  headers: { "anthropic-beta": "output-128k-2025-02-19" },
+});
+
 export const geminiModel = google(env.GEMINI_MODEL);
 export const deepSeekModel = deepSeek(env.DEEPSEEK_MODEL);
 export const claudeModel = anthropic(env.CLAUDE_MODEL);
+export const curatorModel = anthropicCurator(env.CURATOR_MODEL);

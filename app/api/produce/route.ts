@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { generateObject } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
-import { ProduceInputSchema, AcademyPackageSchema } from "@/lib/schemas/academy";
+import { ProduceInputSchema, AcademyPackageSchema, AcademyShellSchema, ModuleLessonsSchema } from "@/lib/schemas/academy";
 
 export const runtime = "nodejs";
 
@@ -26,167 +26,132 @@ export async function POST(req: NextRequest) {
       }, 15_000);
 
       try {
-        const transcriptSection = input.rawTranscript
-          ? `\n\nRAW TRANSCRIPT (use this as the primary source for lesson notes and quiz questions):\n${input.rawTranscript}`
+        // Truncate transcript to prevent input token overflow for large PDFs/videos.
+        // 15,000 chars ≈ 4,000–5,000 tokens, well within context limits.
+        const MAX_TRANSCRIPT_CHARS = 15_000;
+        const rawTranscript = input.rawTranscript && input.rawTranscript.length > MAX_TRANSCRIPT_CHARS
+          ? input.rawTranscript.slice(0, MAX_TRANSCRIPT_CHARS) + "\n\n[Transcript truncated]"
+          : input.rawTranscript;
+
+        const transcriptSection = rawTranscript
+          ? `\n\nRAW TRANSCRIPT (primary source — ground all content in this):\n${rawTranscript}`
           : "";
         const deliverySection = input.deliveryInstructions
           ? `\n\nDELIVERY INSTRUCTIONS:\n${input.deliveryInstructions}`
           : "";
 
-        const { object } = await generateObject({
+        const basePrompt = JSON.stringify({
+          title: input.title,
+          summary: input.summary,
+          assets: input.assets,
+          workflow: input.workflow,
+          executionPlan: input.executionPlan,
+          entities: input.entities,
+          visualDirection: input.visualDirection,
+        });
+
+        // ── Phase 1: Academy shell ─────────────────────────────────────────────
+        // Generates all metadata, landing page, pricing, SEO, and module outlines
+        // with lightweight lesson stubs only. Stays well under the 8K output limit.
+        const { object: shell } = await generateObject({
           model: deepSeekModel,
-          schema: AcademyPackageSchema,
+          schema: AcademyShellSchema,
           mode: "json",
+          maxTokens: 6_000,
           temperature: 0.3,
-          system: `You are the Curator — a world-class educational content architect who transforms raw source material into premium, deeply educational online academy packages.
+          system: `You are the Curator — a world-class educational content architect. Transform source material into an online academy structure.
 
-Your output must be grounded entirely in what was actually said in the source transcript. No generic filler. No invented content. Every field must reflect the real material.
+OUTPUT ALL ACADEMY FIELDS. For curriculum, produce 3–5 modules each with 2–4 lesson OUTLINES (stub only: title, type, durationMinutes, description). Do NOT write notes, quiz, keyTakeaways, or actionItems in this phase.
 
-═══════════════════════════════════════════
-ROOT ACADEMY FIELDS
-═══════════════════════════════════════════
-- academyName: Compelling, market-ready title derived from the core subject matter
-- tagline: One punchy line that captures the transformation the student will experience
-- targetAudience: Precise one-sentence description of the ideal student persona
-- difficultyLevel: Assess from the content — "beginner" | "intermediate" | "advanced"
-- totalEstimatedHours: Realistic total study time (sum of all lesson durations / 60, rounded to 1dp)
-- certificateTitle: Name of the completion certificate (e.g. "Certificate in [Topic]")
-- themeVariant: Choose the visual theme that best fits the content subject matter:
-    "midnight" — default dark/tech tone
-    "amber" — business, finance, wealth, leadership, faith/spiritual
-    "emerald" — health, wellness, nature, sustainability, growth
-    "rose" — personal development, lifestyle, relationships, creativity
-    "violet" — technology, programming, design, data science
-    "solar" — warm light theme for beginner-friendly, broad-appeal content
-- layoutVariant: "centered" (default) | "split" (bold side-by-side hero) | "minimal" (clean, content-first)
+FIELD GUIDE:
+- academyName: Compelling, market-ready title from the core subject matter
+- tagline: One punchy line capturing the student transformation
+- targetAudience: Precise one-sentence ideal student persona
+- difficultyLevel: "beginner" | "intermediate" | "advanced"
+- totalEstimatedHours: Sum of lesson durations ÷ 60, rounded to 1dp
+- certificateTitle: e.g. "Certificate in [Topic]"
+- themeVariant: midnight (tech) | amber (business/faith) | emerald (health/nature) | rose (personal dev) | violet (design/code) | solar (beginner/broad)
+- layoutVariant: "centered" | "split" | "minimal"
 
-═══════════════════════════════════════════
-LANDING PAGE
-═══════════════════════════════════════════
-- headline: Powerful outcome-focused headline (max 12 words)
-- subheadline: Expand on the promise (1–2 sentences)
-- problemStatement: The pain point this course solves (2–3 sentences, specific to the content)
-- features: 4–6 feature bullets — specific capabilities/outcomes from this content, NOT generic ("lifetime access")
-- cta: Strong call-to-action button text (e.g. "Start Learning Today")
+LANDING PAGE: headline (max 12 words), subheadline (1–2 sentences), problemStatement (2–3 sentences), features (4–6 specific outcome bullets, NOT "lifetime access"), cta (button text)
 
-═══════════════════════════════════════════
-PRICING
-═══════════════════════════════════════════
-Exactly 3 tiers:
-1. Free — priceUsd: 0, period: "once" — limited preview (first module only, 2–3 feature bullets)
-2. Pro — priceUsd: 47–97, period: "monthly" — full access (5–7 feature bullets)
-3. Lifetime — priceUsd: 197–497, period: "once" — everything + extras (6–8 feature bullets)
+PRICING — exactly 3 tiers:
+1. Free — priceUsd: 0, period: "once", 2–3 bullets
+2. Pro — priceUsd: 47–97, period: "monthly", 5–7 bullets
+3. Lifetime — priceUsd: 197–497, period: "once", 6–8 bullets
 
-Price realistically based on content depth and topic (technical/professional content = higher prices).
+CURRICULUM — each module: moduleTitle, moduleDescription (2–3 sentences), learningObjectives (3–5), keyTerms (4–8 entries with term + definition), lessonOutlines (2–4 stubs)
 
-═══════════════════════════════════════════
-CURRICULUM — MODULE LEVEL
-═══════════════════════════════════════════
-Divide the content into 3–6 logical thematic modules.
+SEO: title (50–60 chars), description (140–155 chars), keywords (8–12)
+onboardingSteps: 4–6 steps from signup → first lesson`,
+          prompt: basePrompt + transcriptSection + deliverySection,
+        });
 
-For EACH module provide:
-- moduleTitle: Clear, specific title for this thematic block
-- moduleDescription: 2–3 sentence overview of what this module covers and why it matters
-- learningObjectives: 3–5 measurable outcomes (start with action verbs: "Understand", "Apply", "Identify", "Demonstrate", "Analyse")
-- keyTerms: 4–8 glossary entries — domain-specific terms that appeared in THIS module's content. Each entry:
-    • term: The exact term/concept
-    • definition: Clear, precise 1–2 sentence definition grounded in how the source used it
+        // ── Phase 2: Full lesson content per module ────────────────────────────
+        // Each module is a separate DeepSeek call (~3,500 tokens) to stay under
+        // the 8K output limit. Runs sequentially to avoid rate-limit issues.
+        type FullLesson = {
+          title: string;
+          type: "video" | "reading" | "quiz" | "exercise";
+          durationMinutes: number;
+          description: string;
+          notes: string;
+          keyTakeaways: string[];
+          actionItems: string[];
+          quiz: Array<{ q: string; options: string[]; correct: number }>;
+        };
+        type FullModule = {
+          moduleTitle: string;
+          moduleDescription: string;
+          learningObjectives: string[];
+          keyTerms: Array<{ term: string; definition: string }>;
+          lessons: FullLesson[];
+        };
 
-═══════════════════════════════════════════
-CURRICULUM — LESSON LEVEL
-═══════════════════════════════════════════
-For EVERY lesson you MUST provide ALL of these fields:
+        const fullCurriculum: FullModule[] = [];
 
-title:
-  Specific to the exact content covered in that segment. Not generic ("Introduction to X") — use the actual subject matter.
+        for (const mod of shell.curriculum) {
+          const { object: lessonData } = await generateObject({
+            model: deepSeekModel,
+            schema: ModuleLessonsSchema,
+            mode: "json",
+            maxTokens: 7_000,
+            temperature: 0.3,
+            system: `You are the Curator. Write full lesson content for one academy module. You receive lesson outlines — expand each into the complete lesson.
 
-type:
-  "video" for main content delivery segments
-  "reading" for deep-dive supplementary material
-  "quiz" for knowledge-check segments
-  "exercise" for practical application tasks
+For EVERY lesson provide:
+- title / type / durationMinutes / description: match the outline exactly
+- notes: 300–600 words of dense educational prose grounded in the transcript.
+  Structure: # [Title] → framing para → ## [Concept 1] → ## [Concept 2] → ## Key Principles
+  Rules: min 2 H2 sections, **bold** key terms, > blockquotes for direct quotes, no invented content.
+- keyTakeaways: 5–7 complete sentences — specific insights from THIS lesson
+- actionItems: 3–4 steps starting with action verbs (Write down..., Identify..., Practice...)
+- quiz: EXACTLY 3 questions, each with EXACTLY 4 options, correct is 0–3
 
-durationMinutes:
-  Realistic estimate proportional to transcript coverage
+Ground every claim in the transcript. Be specific to this module's content.`,
+            prompt: `MODULE: ${mod.moduleTitle}
+DESCRIPTION: ${mod.moduleDescription}
+LESSON OUTLINES:
+${JSON.stringify(mod.lessonOutlines, null, 2)}${transcriptSection}`,
+          });
 
-description:
-  One sentence on what the student learns and why it matters
+          fullCurriculum.push({
+            moduleTitle: mod.moduleTitle,
+            moduleDescription: mod.moduleDescription,
+            learningObjectives: mod.learningObjectives,
+            keyTerms: mod.keyTerms,
+            lessons: lessonData.lessons,
+          });
+        }
 
-notes:
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  THE MOST IMPORTANT FIELD. This is the student's primary study document.
-  Write 600–1200 words of dense, analytical educational prose. Structure it as:
-
-  # [Lesson Title]
-  A 2–3 sentence framing paragraph on why this topic matters.
-
-  ## [First Major Concept from the Transcript]
-  Full explanation drawing on what was actually said. Use concrete examples
-  and frameworks from the source. Integrate direct insights and key phrases.
-
-  ## [Second Major Concept]
-  Continue. Go deep. Every paragraph should teach something specific.
-
-  ### [Sub-concept or Example if needed]
-  Use H3 for detailed breakdowns or case studies within a section.
-
-  > "Direct quote or paraphrase from the source material"
-
-  ## Key Principles
-  Synthesise the practical framework or principles established in this lesson.
-
-  ---
-  End with a connecting paragraph linking this lesson to the broader curriculum.
-
-  Rules for notes:
-  - MINIMUM 4 H2 sections, each with 2–4 paragraphs
-  - Ground every claim in what was actually said — do not invent
-  - Use **bold** for key terms on first use
-  - Use *italics* for titles, scripture references, or technical names
-  - Use > blockquotes for direct quotes or powerful statements from the source
-  - Use numbered lists for sequences, frameworks, or ranked principles
-  - Use bullet lists for non-sequential supporting points
-  - Use --- to separate major thematic breaks
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-keyTakeaways:
-  5–7 bullet-point insights drawn DIRECTLY from this lesson's content.
-  Each takeaway is a complete, standalone sentence that captures a key insight.
-  Not headers — full sentences a student could remember and act on.
-
-actionItems:
-  3–4 concrete, practical steps the student can take RIGHT NOW based on this lesson.
-  Start each with a strong verb: "Write down...", "Identify...", "Create...", "Practice..."
-
-quiz:
-  EXACTLY 3 multiple-choice questions.
-  - Questions must test specific comprehension of THIS lesson's content
-  - Each question must have EXACTLY 4 options
-  - correct index must be 0, 1, 2, or 3
-  - Questions should range from recall → application → analysis
-
-═══════════════════════════════════════════
-SEO + ONBOARDING
-═══════════════════════════════════════════
-- seoMeta.title: SEO-optimised page title (50–60 chars)
-- seoMeta.description: Compelling meta description (140–155 chars)
-- seoMeta.keywords: 8–12 specific keywords from the actual content
-- onboardingSteps: 4–6 steps from signup through first lesson completion
-
-QUALITY STANDARD: Every field must justify its existence. If a lesson's notes could belong to any other lesson, rewrite it. Be specific. Be concrete. Stay true to the source.`,
-          prompt: JSON.stringify({
-            title: input.title,
-            summary: input.summary,
-            assets: input.assets,
-            workflow: input.workflow,
-            executionPlan: input.executionPlan,
-            entities: input.entities,
-            visualDirection: input.visualDirection,
-          }) + transcriptSection + deliverySection,
+        // ── Phase 3: Merge and validate ────────────────────────────────────────
+        const academy = AcademyPackageSchema.parse({
+          ...shell,
+          curriculum: fullCurriculum,
         });
 
         clearInterval(ping);
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(object)}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(academy)}\n\n`));
       } catch (error) {
         clearInterval(ping);
         const message = error instanceof Error ? error.message : "Produce stage failed";

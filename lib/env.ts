@@ -9,6 +9,7 @@ const EnvironmentSchema = z.object({
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
   DEEPSEEK_MODEL: z.string().default("deepseek-chat"),
   CLAUDE_MODEL: z.string().default("claude-haiku-4-5"),
+  CURATOR_MODEL: z.string().default("claude-sonnet-4-5"),
   // Cloudflare R2 — optional, enables cloud video storage
   R2_ACCOUNT_ID:       z.string().optional(),
   R2_ACCESS_KEY_ID:    z.string().optional(),
