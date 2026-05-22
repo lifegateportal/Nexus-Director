@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { PolishChapterRequestSchema } from "@/lib/schemas/ebook";
@@ -72,10 +72,8 @@ export async function POST(req: NextRequest) {
 
     let object: z.infer<typeof PolishOutputSchema>;
     try {
-      ({ object } = await generateObject({
+      const { text } = await generateText({
         model: deepSeekModel,
-        schema: PolishOutputSchema,
-        mode: "json",
         temperature: 0.2,
         system: `You are an editorial assistant finalizing a chapter of a published teaching book.
 
@@ -99,11 +97,20 @@ ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
 
-${PREMIUM_BOOK_STYLE_RULES}`,
+${PREMIUM_BOOK_STYLE_RULES}
+
+Respond with ONLY a valid JSON object — no markdown, no code blocks, no explanation:
+{"intro":"...","conclusion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."]}`,
         prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}`,
-      }));
+      });
+      const _jsonMatch = text.match(/\{[\s\S]*\}/);
+      object = PolishOutputSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
     } catch {
-      object = fallbackPolishOutput(chapter);
+      try {
+        object = fallbackPolishOutput(chapter);
+      } catch {
+        object = { intro: "", conclusion: "", keyTakeaways: [], reflectionQuestions: [] };
+      }
     }
 
     // Merge: preserve section bodies that were already written

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { pruneRedundantSeriesRecaps, stripNonBookLanguage } from "@/lib/editorial-style-bible";
@@ -14,8 +14,8 @@ const RequestSchema = z.object({
 // Tiny schema — only extract start/end markers, NEVER the full transcript.
 // Server reconstructs the cleaned transcript via string matching.
 const MarkersSchema = z.object({
-  teachingStartPhrase: z.string().describe("First 80-120 chars of the sentence where core teaching begins (verbatim)"),
-  teachingEndPhrase: z.string().describe("Last 80-120 chars of the final teaching sentence before closing prayer/altar call (verbatim)"),
+  teachingStartPhrase: z.string().default("").describe("First 80-120 chars of the sentence where core teaching begins (verbatim)"),
+  teachingEndPhrase: z.string().default("").describe("Last 80-120 chars of the final teaching sentence before closing prayer/altar call (verbatim)"),
   removedCategories: z.array(
     z.enum([
       "opening-prayer", "closing-prayer", "announcement", "housekeeping",
@@ -63,10 +63,8 @@ export async function POST(req: NextRequest) {
     : headSample;
 
   try {
-    const { object } = await generateObject({
+    const { text } = await generateText({
       model: deepSeekModel,
-      schema: MarkersSchema,
-      mode: "json",
       temperature: 0.1,
       system: `You are a content signal filter for a book production pipeline.
 
@@ -92,9 +90,14 @@ TEACHING content (preserve everything else):
 
 Return VERBATIM phrases (exact words from the transcript) so the server can locate them.
 If teaching starts at the very beginning, set teachingStartPhrase to the first sentence.
-If no closing non-teaching is found, set teachingEndPhrase to the last teaching sentence.`,
+If no closing non-teaching is found, set teachingEndPhrase to the last teaching sentence.
+
+Respond with ONLY a valid JSON object — no markdown, no code blocks, no explanation:
+{"teachingStartPhrase":"...","teachingEndPhrase":"...","removedCategories":[],"summary":"..."}`,
       prompt: `Identify the teaching start and end markers:\n\n${sample}`,
     });
+    const _jsonMatch = text.match(/\{[\s\S]*\}/);
+    const object = MarkersSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
 
     // Reconstruct cleaned transcript using the markers (string-match, no LLM output of full text)
     let cleaned = transcript;
