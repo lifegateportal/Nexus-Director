@@ -652,6 +652,7 @@ function readTextFile(file: File): Promise<string> {
 
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // stores jobId (for IndexedDB)
 const JOB_STATE_KEY = "nexus_ebook_job_state";    // stores full state as JSON (primary)
+const MANIFEST_PERSIST_KEY = "nexus_ebook_manifest"; // stores final manifest including post-pipeline edits
 
 export function EbookPipeline({
   ebookManifest,
@@ -767,17 +768,6 @@ export function EbookPipeline({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ebookManifest, completedManifest, stage, progress.total, progress.completed, totalWords, reviewContext, qualityReport, error, onPipelineSnapshotChange]);
 
-  useEffect(() => {
-  if (!ebookManifest) return;
-  const normalized = recalculateManifestTotal(ebookManifest);
-  setCompletedManifest(normalized);
-  setChapters(normalized.chapters);
-  setTotalWords(normalized.totalWordCount);
-  setExportUrls(null);
-  setQualityReport(null);
-  setError(null);
-  }, [ebookManifest, recalculateManifestTotal]);
-
   const updateCompletedManifest = useCallback((updater: (current: EbookManifest) => EbookManifest) => {
     setCompletedManifest((current) => {
       if (!current) return current;
@@ -790,6 +780,16 @@ export function EbookPipeline({
       return next;
     });
   }, [onManifestReady, recalculateManifestTotal]);
+
+  // ── Persist completedManifest on every change ─────────────────────────────
+  // This covers all post-pipeline edits: Review UI textareas, AI assistant changes,
+  // and the final assembled manifest — so a page refresh restores the latest version.
+  useEffect(() => {
+    if (!completedManifest) return;
+    try {
+      localStorage.setItem(MANIFEST_PERSIST_KEY, JSON.stringify(completedManifest));
+    } catch { /* storage quota exceeded — fail silently */ }
+  }, [completedManifest]);
 
   const exportFinalBook = useCallback(async () => {
     if (!completedManifest || !reviewContext) return;
@@ -1015,6 +1015,18 @@ export function EbookPipeline({
         };
         setReviewContext({ contentMap: job.contentMap, frontMatter: job.frontMatter });
         syncCompletedManifest(manifest);
+        // If the user edited the manifest after the pipeline (via Review UI or AI assistant),
+        // prefer that saved version over the reconstructed one from raw job fields.
+        try {
+          const savedRaw = localStorage.getItem(MANIFEST_PERSIST_KEY);
+          if (savedRaw) {
+            const saved = JSON.parse(savedRaw) as EbookManifest;
+            // Only apply when the saved manifest belongs to this exact job run.
+            if (!saved.jobId || saved.jobId === job.jobId) {
+              syncCompletedManifest(saved);
+            }
+          }
+        } catch { /* malformed saved data — fall back to reconstructed manifest */ }
       }
       const words = (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0);
       if (words > 0) setTotalWords(words);
@@ -1655,6 +1667,7 @@ export function EbookPipeline({
               autoDownloadedRef.current = false;
               localStorage.removeItem(JOB_STORAGE_KEY);
               localStorage.removeItem(JOB_STATE_KEY);
+              localStorage.removeItem(MANIFEST_PERSIST_KEY);
             }}
             className="text-xs text-slate-500 underline min-h-[44px] px-2"
           >
@@ -1844,6 +1857,7 @@ export function EbookPipeline({
               autoDownloadedRef.current = false;
               localStorage.removeItem(JOB_STORAGE_KEY);
               localStorage.removeItem(JOB_STATE_KEY);
+              localStorage.removeItem(MANIFEST_PERSIST_KEY);
             }}
             className="text-xs text-slate-500 underline min-h-[44px] flex items-center"
           >
