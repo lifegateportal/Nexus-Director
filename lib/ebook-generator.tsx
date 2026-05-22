@@ -128,6 +128,25 @@ function writeDivider(doc: any, tmpl: BookTemplateConfig) {
   doc.moveDown(0.5);
 }
 
+// ─── Inline Markdown Parser ───────────────────────────────────────────────────
+// Splits a paragraph string into segments of normal / bold / italic text so
+// PDFKit can render each segment with the correct font face.
+
+interface InlineSegment { text: string; style: "normal" | "bold" | "italic" }
+
+function parseInlineMarkdown(text: string): InlineSegment[] {
+  const segments: InlineSegment[] = [];
+  // Order matters: match **bold** before *italic* to avoid partial matches.
+  const re = /\*\*([^*]+?)\*\*|\*([^*]+?)\*|([^*]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m[1] !== undefined) segments.push({ text: m[1], style: "bold" });
+    else if (m[2] !== undefined) segments.push({ text: m[2], style: "italic" });
+    else if (m[3] !== undefined) segments.push({ text: m[3], style: "normal" });
+  }
+  return segments.filter((s) => s.text.length > 0);
+}
+
 function normalizeText(input: string): string {
   return input
     .toLowerCase()
@@ -209,40 +228,82 @@ function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet, tmpl: Bo
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tmpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }) {
-  const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
-  paragraphs.forEach((paragraph, index) => {
+  // Pre-normalise: ensure markdown heading lines are surrounded by double
+  // newlines so they become isolated "paragraphs" after the split below.
+  // This handles the case where the AI writes "## Heading\nBody text" with
+  // only a single newline separator.
+  const normalised = text
+    .replace(/([^\n])\n(#{1,3} )/g, "$1\n\n$2")   // inject blank line BEFORE heading
+    .replace(/(#{1,3} [^\n]+)\n([^\n#])/g, "$1\n\n$2"); // inject blank line AFTER heading
+
+  const paragraphs = normalised.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+
+  // bodyParaIndex tracks only non-heading paragraphs so the
+  // noIndentFirstParagraph option applies to the first body paragraph even
+  // when a heading precedes it.
+  let bodyParaIndex = 0;
+
+  paragraphs.forEach((paragraph) => {
+    // ── Markdown headings (##, ###) ──────────────────────────────────────────
+    const headingMatch = paragraph.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].trim();
+      // ## → section size, ### → slightly smaller
+      const fontSize = level <= 2 ? tmpl.sectionSize : tmpl.sectionSize - 1.5;
+      doc
+        .moveDown(0.45)
+        .fontSize(fontSize)
+        .font(f(fonts, "serifBold"))
+        .fillColor(tmpl.sectionColor)
+        .text(headingText, { align: "left" });
+      doc.moveDown(0.2);
+      bodyParaIndex = 0; // reset so the next body para has no indent
+      return;
+    }
+
+    // ── Scripture / block-quote detection ───────────────────────────────────
     const matchingQuote = findMatchingBlockQuote(paragraph, quotes);
     if (matchingQuote) {
       writeScriptureBlock(doc, matchingQuote, fonts, tmpl);
       return;
     }
-    // Fallback: detect the "body text\n— Reference (Translation)" pattern directly
     const inlineScripture = detectInlineScripture(paragraph);
     if (inlineScripture) {
       writeScriptureBlock(doc, inlineScripture, fonts, tmpl);
       return;
     }
 
-    const font = options?.italicFirstParagraph && index === 0 ? fonts.serifItalic : fonts.serif;
+    // ── Body paragraph with inline **bold** / *italic* ───────────────────────
+    const index = bodyParaIndex++;
+    const baseFont = options?.italicFirstParagraph && index === 0 ? fonts.serifItalic : fonts.serif;
     const color = options?.italicFirstParagraph && index === 0 ? "#444444" : "#1a1a1a";
-    // For indent-style templates: no indent on first paragraph after a heading/page break;
-    // for gap-style templates: indent is always 0.
     const isFirstAfterBreak = (options?.noIndentFirstParagraph !== false) && index === 0;
-    const indent = tmpl.paragraphIndent > 0
-      ? (isFirstAfterBreak ? 0 : tmpl.paragraphIndent)
-      : 0;
-    const paragraphGap = tmpl.paragraphGap;
-    doc
-      .fontSize(tmpl.bodyFontSize)
-      .font(font)
-      .fillColor(color)
-      .text(paragraph, {
-        lineGap: tmpl.bodyLineGap,
-        indent,
-        paragraphGap,
-        align: tmpl.bodyAlign,
-      });
-    // Extra inter-paragraph spacing for indent-style templates (gap-style uses paragraphGap natively)
+    const indent = tmpl.paragraphIndent > 0 ? (isFirstAfterBreak ? 0 : tmpl.paragraphIndent) : 0;
+
+    doc.fontSize(tmpl.bodyFontSize).fillColor(color);
+
+    const segments = parseInlineMarkdown(paragraph);
+    segments.forEach((seg, i) => {
+      const isFirst = i === 0;
+      const isLast  = i === segments.length - 1;
+      const continued = !isLast;
+      const font = seg.style === "bold" ? fonts.serifBold
+                 : seg.style === "italic" ? fonts.serifItalic
+                 : baseFont;
+      // Layout options only on the first segment; paragraphGap on the last.
+      const opts: Record<string, unknown> = { continued };
+      if (isFirst) {
+        opts.lineGap      = tmpl.bodyLineGap;
+        opts.indent       = indent;
+        opts.align        = tmpl.bodyAlign;
+      }
+      if (isLast) {
+        opts.paragraphGap = tmpl.paragraphGap;
+      }
+      doc.font(font).text(seg.text, opts);
+    });
+
     if (tmpl.paragraphIndent > 0 && tmpl.paragraphGap === 0) {
       doc.moveDown(0.05);
     }
