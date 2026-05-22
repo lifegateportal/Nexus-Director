@@ -170,8 +170,8 @@ function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet, tmpl: Bo
       .moveDown(0.15)
       .fontSize(tmpl.scriptureFontSize - 0.5)
       .font(fonts.serifBold)
-      .fillColor(tmpl.accentColor)
-      .text(`— ${reference}`, {
+      .fillColor("#1a1a1a")
+      .text(`\u2014 ${reference}`, {
         align: "right",
         width: bodyWidth - 16,
       });
@@ -731,7 +731,9 @@ blockquote.scripture-block p {
 .scripture-ref {
   margin-top: 0.45em;
   text-align: right;
+  font-style: normal;
   font-weight: 700;
+  color: #1a1a1a;
   letter-spacing: 0.01em;
 }
 `;
