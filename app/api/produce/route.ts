@@ -59,19 +59,39 @@ export async function POST(req: NextRequest) {
           visualDirection: input.visualDirection,
         });
 
+        // ── Scale: calibrate module/theme count to source length ─────────────
+        // Spoken-word transcripts run ~800 chars/min with Deepgram formatting.
+        // Text files scale similarly by content density.
+        const transcriptChars = (input.rawTranscript ?? "").length;
+        const estMinutes      = Math.max(1, Math.round(transcriptChars / 800));
+        const scale = estMinutes < 5
+          ? { minThemes: 1, maxThemes: 2, minMods: 1, maxMods: 1, maxIdx: 1 }
+          : estMinutes < 15
+          ? { minThemes: 2, maxThemes: 2, minMods: 2, maxMods: 2, maxIdx: 1 }
+          : estMinutes < 40
+          ? { minThemes: 3, maxThemes: 3, minMods: 3, maxMods: 3, maxIdx: 2 }
+          : { minThemes: 3, maxThemes: 4, minMods: 3, maxMods: 4, maxIdx: 3 };
+
+        const themeCountLabel = scale.minThemes === scale.maxThemes
+          ? `exactly ${scale.minThemes}`
+          : `${scale.minThemes}\u2013${scale.maxThemes}`;
+        const modCountLabel = scale.minMods === scale.maxMods
+          ? `exactly ${scale.minMods}`
+          : `${scale.minMods}\u2013${scale.maxMods}`;
+
         // ── Phase 0: Content map ────────────────────────────────────────
         // Force DeepSeek to READ and MAP the source's distinct themes BEFORE
         // designing the curriculum. Each theme gets direct source passages so
         // every module is anchored to real, non-overlapping content.
         const ThemeEntrySchema = z.object({
-          index:        z.number().int().min(0).max(3),
+          index:        z.number().int().min(0).max(scale.maxIdx),
           title:        z.string(),
           summary:      z.string(),
           keyPassages:  z.array(z.string()).min(1).max(3),
           sourceRegion: z.enum(["beginning", "early-middle", "late-middle", "end"]),
         });
         const ContentMapSchema = z.object({
-          themes: z.array(ThemeEntrySchema).min(3).max(4),
+          themes: z.array(ThemeEntrySchema).min(scale.minThemes).max(scale.maxThemes),
         });
         type ContentMap = z.infer<typeof ContentMapSchema>;
 
@@ -84,7 +104,7 @@ export async function POST(req: NextRequest) {
             mode: "json",
             maxTokens: 1_200,
             temperature: 0.1,
-            system: `You are a source analyst. Read the material and identify 3–4 completely DISTINCT major themes or sections. Cover the FULL arc of the document.
+            system: `You are a source analyst. Read the material and identify ${themeCountLabel} completely DISTINCT major theme${scale.maxThemes === 1 ? "" : "s"} or sections. Cover the FULL arc of the document.
 
 For each theme:
 - index: 0-based (0 = first theme in the source)
@@ -123,7 +143,7 @@ RULES — non-negotiable:
 
 OUTPUT ALL ACADEMY FIELDS. TOKEN BUDGET IS TIGHT — be concise in every field.
 
-FOR THE CURRICULUM: produce exactly 3–4 modules (HARD MAX 4). Each module gets exactly 2–3 lesson outlines (HARD MAX 3). Lesson outline = title + type + durationMinutes only.
+FOR THE CURRICULUM: produce ${modCountLabel} module${scale.maxMods === 1 ? "" : "s"} (HARD MAX ${scale.maxMods}). Each module gets exactly 2–3 lesson outlines (HARD MAX 3). Lesson outline = title + type + durationMinutes only.
 DO NOT write notes, quiz, keyTakeaways, or actionItems in this phase.
 
 CURRICULUM RULE — the content map below defines exactly what each module covers:
