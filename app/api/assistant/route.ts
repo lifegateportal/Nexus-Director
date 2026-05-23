@@ -1,8 +1,10 @@
 import { generateObject } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { claudeModel } from "@/lib/ai-providers";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
+import type { AcademyPackage } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
+import type { SiteConfig } from "@/lib/schemas/site-config";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -14,11 +16,112 @@ const RequestSchema = z.object({
   siteConfig:  SiteConfigSchema.optional(),
 });
 
-const ResponseSchema = z.object({
-  academy:    AcademyPackageSchema.optional(),
-  siteConfig: SiteConfigSchema.optional(),
-  summary:    z.string(),
+// ── Patch schemas — AI returns ONLY changed fields, never the full academy. ──
+// This keeps output well under DeepSeek's 8K token limit regardless of academy size.
+
+const LessonPatchSchema = z.object({
+  lessonIndex:    z.number().int().min(0),
+  title:          z.string().optional(),
+  type:           z.enum(["video", "reading", "quiz", "exercise"]).optional(),
+  durationMinutes:z.number().optional(),
+  description:    z.string().optional(),
+  notes:          z.string().optional(),
+  keyTakeaways:   z.array(z.string()).optional(),
+  actionItems:    z.array(z.string()).optional(),
+  quiz: z.array(z.object({
+    q:       z.string(),
+    options: z.array(z.string()),
+    correct: z.number().int().min(0).max(3),
+  })).optional(),
 });
+
+const ModulePatchSchema = z.object({
+  moduleIndex:       z.number().int().min(0),
+  moduleTitle:       z.string().optional(),
+  moduleDescription: z.string().optional(),
+  learningObjectives:z.array(z.string()).optional(),
+  keyTerms: z.array(z.object({ term: z.string(), definition: z.string() })).optional(),
+  lessonPatches: z.array(LessonPatchSchema).optional(),
+});
+
+const AcademyPatchSchema = z.object({
+  academyName:         z.string().optional(),
+  tagline:             z.string().optional(),
+  targetAudience:      z.string().optional(),
+  difficultyLevel:     z.enum(["beginner", "intermediate", "advanced"]).optional(),
+  totalEstimatedHours: z.number().optional(),
+  certificateTitle:    z.string().optional(),
+  themeVariant:  z.enum(["midnight", "amber", "emerald", "rose", "violet", "solar"]).optional(),
+  layoutVariant: z.enum(["centered", "split", "minimal"]).optional(),
+  landingPage: z.object({
+    headline:         z.string().optional(),
+    subheadline:      z.string().optional(),
+    problemStatement: z.string().optional(),
+    features: z.array(z.object({ title: z.string(), description: z.string() })).optional(),
+    cta: z.string().optional(),
+  }).optional(),
+  pricing: z.array(z.object({
+    name:     z.string(),
+    priceUsd: z.number(),
+    period:   z.enum(["once", "monthly", "yearly"]),
+    features: z.array(z.string()),
+  })).optional(),
+  seoMeta: z.object({
+    title:       z.string().optional(),
+    description: z.string().optional(),
+    keywords:    z.array(z.string()).optional(),
+  }).optional(),
+  onboardingSteps:  z.array(z.string()).optional(),
+  curriculumPatches:z.array(ModulePatchSchema).optional(),
+});
+
+const PatchResponseSchema = z.object({
+  academyPatch:    AcademyPatchSchema.optional(),
+  siteConfigPatch: SiteConfigSchema.partial().optional(),
+  summary:         z.string(),
+});
+
+// ── Server-side merge helpers ────────────────────────────────────────────────
+
+function applyAcademyPatch(
+  academy: AcademyPackage,
+  patch: z.infer<typeof AcademyPatchSchema>,
+): AcademyPackage {
+  const { curriculumPatches, landingPage, seoMeta, pricing, onboardingSteps, ...topLevel } = patch;
+  const updated: AcademyPackage = { ...academy, ...topLevel };
+
+  if (landingPage)     updated.landingPage    = { ...academy.landingPage,    ...landingPage };
+  if (pricing)         updated.pricing        = pricing;
+  if (onboardingSteps) updated.onboardingSteps = onboardingSteps;
+  if (seoMeta)         updated.seoMeta        = { ...academy.seoMeta, ...seoMeta };
+
+  if (curriculumPatches?.length) {
+    const curriculum = academy.curriculum.map((m) => ({ ...m, lessons: m.lessons.map((l) => ({ ...l })) }));
+    for (const mp of curriculumPatches) {
+      const { moduleIndex, lessonPatches, ...modFields } = mp;
+      if (moduleIndex < 0 || moduleIndex >= curriculum.length) continue;
+      Object.assign(curriculum[moduleIndex], modFields);
+      if (lessonPatches) {
+        for (const lp of lessonPatches) {
+          const { lessonIndex, ...lessonFields } = lp;
+          if (lessonIndex < 0 || lessonIndex >= curriculum[moduleIndex].lessons.length) continue;
+          Object.assign(curriculum[moduleIndex].lessons[lessonIndex], lessonFields);
+        }
+      }
+    }
+    updated.curriculum = curriculum;
+  }
+
+  return AcademyPackageSchema.parse(updated);
+}
+
+function applySiteConfigPatch(
+  base: SiteConfig,
+  patch: Partial<SiteConfig>,
+): SiteConfig {
+  const merged = { ...base, ...patch };
+  return SiteConfigSchema.parse(merged);
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -26,9 +129,10 @@ export async function POST(req: NextRequest) {
     const { academy, instruction, siteConfig } = RequestSchema.parse(body);
 
     const { object } = await generateObject({
-      model: deepSeekModel,
-      schema: ResponseSchema,
-      mode: "json",
+      model: claudeModel,
+      schema: PatchResponseSchema,
+      mode: "tool",
+      maxTokens: 4000,
       temperature: 0.1,
       system: `You are the Nexus Director AI — a precise, powerful academy editor with full control over every aspect of the academy content, visual presentation, and website configuration.
 
@@ -113,7 +217,20 @@ OUTPUT RULES
 - Preserve ALL unchanged fields EXACTLY — do not drop modules, lessons, or config sections
 - Always write a concise one-sentence "summary" of exactly what you changed
 - Never invent facts not grounded in the existing academy content or explicit user instruction
-- If the instruction is ambiguous, make the most useful interpretation and describe what you did in the summary`,
+- If the instruction is ambiguous, make the most useful interpretation and describe what you did in the summary
+
+════════════════════════════════════════════
+OUTPUT FORMAT — patch only what changes
+════════════════════════════════════════════
+Return "academyPatch" with ONLY the top-level academy fields that need to change:
+- Scalar fields (academyName, themeVariant, etc.) — include only if changing
+- curriculumPatches: array of { moduleIndex (0-based), ...only changed module fields, lessonPatches: [{ lessonIndex (0-based), ...only changed lesson fields }] }
+  Do NOT echo unchanged lesson or module data — include only what changes.
+- pricing / onboardingSteps / seoMeta: include the full replacement array/object ONLY if changing
+
+Return "siteConfigPatch" with ONLY the site config keys that need to change.
+
+Always write a concise one-sentence "summary" of exactly what changed.`,
       prompt: [
         "CURRENT ACADEMY:",
         JSON.stringify(academy),
@@ -126,7 +243,26 @@ OUTPUT RULES
       ].join("\n"),
     });
 
-    return NextResponse.json(object);
+    // Merge patches server-side and return full objects to the client
+    let updatedAcademy: AcademyPackage | undefined;
+    let updatedSiteConfig: SiteConfig | undefined;
+
+    if (object.academyPatch) {
+      updatedAcademy = applyAcademyPatch(academy, object.academyPatch);
+    }
+
+    if (object.siteConfigPatch) {
+      updatedSiteConfig = applySiteConfigPatch(
+        siteConfig ?? SiteConfigSchema.parse({}),
+        object.siteConfigPatch,
+      );
+    }
+
+    return NextResponse.json({
+      academy:    updatedAcademy,
+      siteConfig: updatedSiteConfig,
+      summary:    object.summary,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Assistant failed";
     return NextResponse.json({ error: message }, { status: 500 });
