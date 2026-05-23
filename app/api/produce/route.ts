@@ -41,12 +41,6 @@ export async function POST(req: NextRequest) {
           ? rawTranscript.slice(0, MAX_LESSON_TRANSCRIPT_CHARS) + (rawTranscript.length > MAX_LESSON_TRANSCRIPT_CHARS ? "\n[…truncated]" : "")
           : "";
 
-        const transcriptSection = rawTranscript
-          ? `\n\nRAW TRANSCRIPT (primary source — ground all content in this):\n${rawTranscript}`
-          : "";
-        const lessonTranscriptSection = lessonTranscriptExcerpt
-          ? `\n\nSOURCE EXCERPT:\n${lessonTranscriptExcerpt}`
-          : "";
         const deliverySection = input.deliveryInstructions
           ? `\n\nDELIVERY INSTRUCTIONS:\n${input.deliveryInstructions}`
           : "";
@@ -97,7 +91,13 @@ PRICING — exactly 3 tiers:
 CURRICULUM: moduleTitle, moduleDescription (1–2 sentences), lessonOutlines (max 3 stubs)
 
 SEO: title (50–60 chars), description (140–155 chars), keywords (6–8)
-onboardingSteps: 3–4 steps`,
+onboardingSteps: 3–4 steps
+
+DIVERSITY & PROGRESSION — mandatory:
+- Every module covers a DISTINCT topic. Zero content overlap between modules.
+- Sequence: Module 1 = Foundation/Overview, Module 2 = Core Concepts, Module 3 = Application/Practice, Module 4 = Mastery/Integration.
+- Lessons within a module cover DIFFERENT sub-topics that together complete that module's scope.
+- No two lessons anywhere in the curriculum should share the same key point.`,
           prompt: basePrompt + deliverySection,
         });
 
@@ -125,12 +125,34 @@ onboardingSteps: 3–4 steps`,
           lessons: FullLesson[];
         };
 
+        // ── Transcript segmentation ────────────────────────────────────────
+        // Each module draws from a UNIQUE slice of the transcript so later
+        // modules don't rehash the same opening content. Capped at
+        // MAX_LESSON_TRANSCRIPT_CHARS per slice to keep inputs small.
+        const numModules = shell.curriculum.length;
+        const fullTranscriptLen = rawTranscript ? rawTranscript.length : 0;
+        const segSize = fullTranscriptLen > 0
+          ? Math.ceil(fullTranscriptLen / numModules)
+          : 0;
+        const allModuleTitles = shell.curriculum.map(m => m.moduleTitle);
+
         const fullCurriculum: FullModule[] = [];
 
-        for (const mod of shell.curriculum) {
+        for (let modIdx = 0; modIdx < shell.curriculum.length; modIdx++) {
+          const mod = shell.curriculum[modIdx];
+
+          // Unique transcript window for this module
+          const segStart  = modIdx * segSize;
+          const segEnd    = Math.min(segStart + MAX_LESSON_TRANSCRIPT_CHARS, fullTranscriptLen);
+          const modSource = rawTranscript ? rawTranscript.slice(segStart, segEnd) : "";
+          const modSourceSection = modSource
+            ? `\n\nSOURCE MATERIAL (section ${modIdx + 1}/${numModules}):\n${modSource}`
+            : "";
+
+          // Sibling module titles — threaded into every call to enforce zero overlap
+          const siblingTitles = allModuleTitles.filter((_, i) => i !== modIdx);
+
           // ── 2a: Module metadata ──────────────────────────────────────────────
-          // Small call: only learningObjectives (3 items) + keyTerms (4 items).
-          // Expected output: ~200 tokens. Max capped at 600 for safety.
           const { object: meta } = await generateObject({
             model: deepSeekModel,
             schema: ModuleMetaSchema,
@@ -139,20 +161,35 @@ onboardingSteps: 3–4 steps`,
             temperature: 0.3,
             system: `You are the Curator. Write metadata for ONE academy module.
 Output ONLY:
-- learningObjectives: exactly 3 outcomes (begin with: Understand / Apply / Identify)
-- keyTerms: exactly 4 domain-specific terms, each with a 1-sentence definition.
-No extra fields. No padding.`,
-            prompt: `MODULE: ${mod.moduleTitle}\nDESCRIPTION: ${mod.moduleDescription}${lessonTranscriptSection}`,
+- learningObjectives: exactly 3 outcomes starting with Understand / Apply / Identify.
+- keyTerms: exactly 4 domain-specific terms EXCLUSIVE to this module — not covered by sibling modules. Each: term + 1-sentence definition.
+UNIQUENESS RULE: every objective and term must be unique to this module.`,
+            prompt: `MODULE: ${mod.moduleTitle}
+DESCRIPTION: ${mod.moduleDescription}
+SIBLING MODULES (do NOT repeat their topics): ${siblingTitles.join(" | ")}${modSourceSection}`,
           });
 
           const fullLessons: FullLesson[] = [];
 
-          for (const outline of mod.lessonOutlines) {
-            const lessonContext = `MODULE: ${mod.moduleTitle}\nLESSON: ${outline.title} (${outline.type}, ${outline.durationMinutes} min)${lessonTranscriptSection}`;
+          for (let lessonIdx = 0; lessonIdx < mod.lessonOutlines.length; lessonIdx++) {
+            const outline = mod.lessonOutlines[lessonIdx];
+
+            // Sibling lesson awareness — prevents intra-module repetition
+            const coveredLessons  = mod.lessonOutlines.slice(0, lessonIdx).map(l => l.title);
+            const upcomingLessons = mod.lessonOutlines.slice(lessonIdx + 1).map(l => l.title);
+
+            const lessonContext = [
+              `ACADEMY: ${shell.academyName}`,
+              `MODULE ${modIdx + 1}/${numModules}: ${mod.moduleTitle}`,
+              `LESSON ${lessonIdx + 1}/${mod.lessonOutlines.length}: ${outline.title} (${outline.type}, ${outline.durationMinutes} min)`,
+              `MODULE OBJECTIVES: ${meta.learningObjectives.join(" | ")}`,
+              `MODULE KEY TERMS: ${meta.keyTerms.map(kt => kt.term).join(", ")}`,
+              coveredLessons.length  > 0 ? `ALREADY COVERED THIS MODULE: ${coveredLessons.join(", ")} — do NOT revisit` : "",
+              upcomingLessons.length > 0 ? `RESERVED FOR LATER: ${upcomingLessons.join(", ")} — leave for subsequent lessons` : "",
+              modSourceSection,
+            ].filter(Boolean).join("\n");
 
             // ── 2b-structure: Structured lesson fields (NO notes) ────────────
-            // description + keyTakeaways + actionItems + quiz ≈ 300-400 tokens.
-            // Capped at 800 — impossible to overflow.
             const { object: structured } = await generateObject({
               model: deepSeekModel,
               schema: LessonStructuredSchema,
@@ -161,25 +198,27 @@ No extra fields. No padding.`,
               temperature: 0.3,
               system: `You are the Curator. Write structured content for ONE lesson.
 Output ONLY:
-- description: 1 sentence — what the student will learn
-- keyTakeaways: exactly 3 sentences — key insights
-- actionItems: exactly 2 steps starting with action verbs
-- quiz: EXACTLY 2 questions, each with EXACTLY 4 options, correct is 0–3
-No notes field. No padding.`,
+- description: 1 sentence — the UNIQUE learning outcome of THIS specific lesson
+- keyTakeaways: exactly 3 sentences — specific insights NOT repeated from covered lessons
+- actionItems: exactly 2 practical steps unique to this lesson's content
+- quiz: EXACTLY 2 questions testing ONLY this lesson's content, each with EXACTLY 4 options, correct is 0–3
+No padding. No repetition of already-covered content.`,
               prompt: lessonContext,
             });
 
             // ── 2b-notes: Lesson notes via generateText ──────────────────────
-            // Plain text — no JSON serialisation, no JSON parse error possible.
-            // If DeepSeek goes long, the text simply continues — never truncates JSON.
+            // Plain text — no JSON, no parse error possible regardless of length.
             const { text: notes } = await generateText({
               model: deepSeekModel,
               maxTokens: 1_000,
               temperature: 0.4,
               system: `You are the Curator. Write educational notes for ONE lesson.
-Format: 1 short intro paragraph (2–3 sentences), then 2 sections each starting with "## Heading".
+Format: 1 intro paragraph (2–3 sentences on THIS lesson's unique angle), then 2 sections starting with "## Heading".
 Length: 150–220 words MAXIMUM.
-Rules: **bold** 1–2 key terms per section. No invented content. No markdown outside of ## and **.`,
+Rules:
+- **bold** 1–2 key terms per section.
+- Every sentence must add NEW information — do not restate content from covered lessons.
+- No invented content. No markdown outside ## and **.`,
               prompt: lessonContext,
             });
 
