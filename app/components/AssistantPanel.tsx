@@ -137,9 +137,25 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         body: JSON.stringify({ academy, instruction: text, siteConfig }),
       });
 
-      const json = await res.json() as { academy?: unknown; siteConfig?: unknown; summary?: string; error?: string };
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+      // Read SSE stream — the route sends keep-alive pings then one data event
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let json: { academy?: unknown; siteConfig?: unknown; summary?: string; error?: string } | null = null;
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value).split("\n")) {
+          if (line.startsWith("data: ")) {
+            json = JSON.parse(line.slice(6)) as typeof json;
+            break outer;
+          }
+        }
+      }
+
+      if (!json) throw new Error("No response from assistant");
+      if (json.error) throw new Error(json.error);
 
       let changed = false;
 
@@ -160,7 +176,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
       if (!changed) throw new Error("Assistant returned no changes");
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: json.summary ?? "Done." },
+        { role: "assistant", content: json!.summary ?? "Done." },
       ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Something went wrong";

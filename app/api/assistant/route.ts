@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { claudeModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
@@ -124,17 +124,54 @@ function applySiteConfigPatch(
 }
 
 export async function POST(req: NextRequest) {
+  const encoder = new TextEncoder();
+
+  let parsedInput: { academy: AcademyPackage; instruction: string; siteConfig?: SiteConfig } | undefined;
   try {
     const body = await req.json() as unknown;
-    const { academy, instruction, siteConfig } = RequestSchema.parse(body);
+    parsedInput = RequestSchema.parse(body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request";
+    return new Response(JSON.stringify({ error: message }), { status: 400, headers: { "Content-Type": "application/json" } });
+  }
+
+  const { academy, instruction, siteConfig } = parsedInput;
+
+  // Wrap in SSE stream so keep-alive pings prevent EpicGlobal / nginx from
+  // closing the connection while DeepSeek is generating the response.
+  const stream = new ReadableStream({
+    async start(controller) {
+      const ping = setInterval(() => {
+        try { controller.enqueue(encoder.encode(": ping\n\n")); } catch { /* closed */ }
+      }, 15_000);
+
+      try {
+
+    // Trim lesson notes to a short stub before serialising — the model doesn't
+    // need to read 500-word prose to write a patch, and sending it bloats the
+    // prompt beyond DeepSeek's reliable JSON-generation threshold in production.
+    const academyContext = {
+      ...academy,
+      curriculum: academy.curriculum.map((mod) => ({
+        ...mod,
+        lessons: mod.lessons.map((l) => ({
+          ...l,
+          notes: l.notes ? l.notes.slice(0, 120) + (l.notes.length > 120 ? "…" : "") : "",
+        })),
+      })),
+    };
 
     const { object } = await generateObject({
-      model: claudeModel,
+      model: deepSeekModel,
       schema: PatchResponseSchema,
-      mode: "tool",
-      maxTokens: 4000,
+      schemaName: "AcademyPatch",
+      schemaDescription: "Patch object describing only the fields that need to change in the academy and/or site config.",
+      mode: "json",
+      maxTokens: 6000,
       temperature: 0.1,
-      system: `You are the Nexus Director AI — a precise, powerful academy editor with full control over every aspect of the academy content, visual presentation, and website configuration.
+      system: `IMPORTANT: Output ONLY a raw JSON object. No code fences, no markdown, no commentary before or after the JSON.
+
+You are the Nexus Director AI — a precise, powerful academy editor with full control over every aspect of the academy content, visual presentation, and website configuration.
 
 Analyse the user's instruction carefully, determine what needs to change, then return only the updated objects.
 
@@ -213,7 +250,7 @@ Triggers: anything about the landing page, website, social, footer, banner, inst
 ════════════════════════════════════════════
 OUTPUT RULES
 ════════════════════════════════════════════
-- Return "academy" field if academy content changed, "siteConfig" if site config changed, or BOTH if both changed
+- Return "academyPatch" field if academy content changed, "siteConfigPatch" if site config changed, or BOTH if both changed
 - Preserve ALL unchanged fields EXACTLY — do not drop modules, lessons, or config sections
 - Always write a concise one-sentence "summary" of exactly what you changed
 - Never invent facts not grounded in the existing academy content or explicit user instruction
@@ -232,8 +269,8 @@ Return "siteConfigPatch" with ONLY the site config keys that need to change.
 
 Always write a concise one-sentence "summary" of exactly what changed.`,
       prompt: [
-        "CURRENT ACADEMY:",
-        JSON.stringify(academy),
+        "CURRENT ACADEMY (notes trimmed for brevity — you have full write access when patching):",
+        JSON.stringify(academyContext),
         "",
         "CURRENT SITE CONFIG:",
         JSON.stringify(siteConfig ?? {}),
@@ -258,13 +295,28 @@ Always write a concise one-sentence "summary" of exactly what changed.`,
       );
     }
 
-    return NextResponse.json({
-      academy:    updatedAcademy,
-      siteConfig: updatedSiteConfig,
-      summary:    object.summary,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Assistant failed";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+        clearInterval(ping);
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+          academy:    updatedAcademy,
+          siteConfig: updatedSiteConfig,
+          summary:    object.summary,
+        })}\n\n`));
+      } catch (error) {
+        clearInterval(ping);
+        const message = error instanceof Error ? error.message : "Assistant failed";
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
