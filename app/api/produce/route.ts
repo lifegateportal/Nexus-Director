@@ -229,7 +229,7 @@ PER LESSON output:
 - actionItems: exactly 2 practical steps grounded in the source
 - quiz: exactly 3 questions, each with exactly 4 options, correct index 0–3
 
-GROUNDING — every sentence must be traceable to the source material or theme passages provided. No invented content.`,`
+GROUNDING — every sentence must be traceable to the source material or theme passages provided. No invented content.`,
           prompt: [
             "CURRICULUM OUTLINE (write content for all of these):",
             curriculumOutline,
