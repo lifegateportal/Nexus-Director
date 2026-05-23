@@ -27,16 +27,6 @@ export async function POST(req: NextRequest) {
       }, 15_000);
 
       try {
-        // Phase 1 samples beginning+middle+end of the FULL transcript for curriculum planning.
-        // Phase 2 segments the FULL transcript so each module reads its own unique section.
-        // Per-module window is 8,000 chars (~2,000 words) — enough for rich notes.
-        const MAX_TRANSCRIPT_CHARS = 15_000;
-        const MAX_MODULE_TRANSCRIPT_CHARS = 8_000;
-        // Truncated version used ONLY for Phase 1 context window safety
-        const rawTranscript = input.rawTranscript && input.rawTranscript.length > MAX_TRANSCRIPT_CHARS
-          ? input.rawTranscript.slice(0, MAX_TRANSCRIPT_CHARS) + "\n\n[Transcript truncated]"
-          : input.rawTranscript;
-
         // Phase 1 source: sample beginning + middle + end of the FULL raw input
         // so the curriculum reflects the entire book, not just the opening pages.
         // Uses input.rawTranscript (pre-truncation) to capture the full range.
@@ -192,7 +182,7 @@ GROUNDING — non-negotiable:
                 q:       z.string(),
                 options: z.array(z.string()).length(4),
                 correct: z.number().int().min(0).max(3),
-              })).min(1).max(3),
+              })).min(3).max(3),
             })),
           })),
         });
@@ -213,7 +203,7 @@ GROUNDING — non-negotiable:
           model: deepSeekModel,
           schema: AllModulesContentSchema,
           mode: "json",
-          maxTokens: 7_500,
+          maxTokens: 14_000,
           temperature: 0.3,
           system: `You are the Curator — a world-class educational content writer. You will receive a complete academy curriculum outline and must write ALL content for every module and lesson in ONE response.
 
@@ -228,12 +218,18 @@ PER MODULE output:
 
 PER LESSON output:
 - description: 1 sentence stating the specific learning outcome for THIS lesson
-- notes: 100–150 words. Format: 1 intro paragraph then 2 "## Heading" sections. **bold** 1–2 key terms. Grounded in source passages.
+- notes: 350–500 words. This is the core teaching content — make it rich, substantive, and practical.
+  Format:
+  1. Opening paragraph (3–4 sentences): frame the lesson topic and why it matters, grounded in the source.
+  2. "## [Section Title]" — first concept block (2–3 paragraphs): explain the core idea in depth using specific language, examples, or frameworks from the source material. **bold** key terms where introduced.
+  3. "## [Section Title]" — second concept block (2–3 paragraphs): a distinct sub-topic or application angle from the source. No overlap with the first section.
+  4. "## Key Insight" — closing paragraph (2–3 sentences): distil the single most important idea from THIS lesson into a memorable takeaway statement.
+  Rules: every claim must come from the source. Use **bold** for 2–4 terms per lesson. Vary sentence length for rhythm. Do NOT use bullet lists inside notes — prose only.
 - keyTakeaways: exactly 3 — specific, distinct insights from THIS lesson only
 - actionItems: exactly 2 practical steps grounded in the source
-- quiz: exactly 2 questions, each with exactly 4 options, correct index 0–3
+- quiz: exactly 3 questions, each with exactly 4 options, correct index 0–3
 
-GROUNDING — every sentence must be traceable to the source material or theme passages provided. No invented content.`,
+GROUNDING — every sentence must be traceable to the source material or theme passages provided. No invented content.`,`
           prompt: [
             "CURRICULUM OUTLINE (write content for all of these):",
             curriculumOutline,
