@@ -36,9 +36,22 @@ export async function POST(req: NextRequest) {
           ? input.rawTranscript.slice(0, MAX_TRANSCRIPT_CHARS) + "\n\n[Transcript truncated]"
           : input.rawTranscript;
 
-        // Short excerpt used for per-lesson/module calls to keep inputs small.
-        const lessonTranscriptExcerpt = rawTranscript
-          ? rawTranscript.slice(0, MAX_LESSON_TRANSCRIPT_CHARS) + (rawTranscript.length > MAX_LESSON_TRANSCRIPT_CHARS ? "\n[…truncated]" : "")
+        // Phase 1 source: sample beginning + middle + end of the FULL raw input
+        // so the curriculum reflects the entire book, not just the opening pages.
+        // Uses input.rawTranscript (pre-truncation) to capture the full range.
+        const buildPhase1Source = (text: string | undefined): string => {
+          if (!text) return "";
+          const SAMPLE = 4_500; // chars per sample point (~1,200 tokens)
+          const len = text.length;
+          const beginning = text.slice(0, SAMPLE);
+          const midStart  = Math.max(SAMPLE, Math.floor(len / 2) - Math.floor(SAMPLE / 2));
+          const middle    = len > SAMPLE * 2 ? text.slice(midStart, midStart + SAMPLE) : "";
+          const ending    = len > SAMPLE     ? text.slice(Math.max(0, len - SAMPLE))   : "";
+          return [beginning, middle, ending].filter(Boolean).join("\n\n[…]\n\n");
+        };
+        const phase1Source = buildPhase1Source(input.rawTranscript);
+        const phase1SourceSection = phase1Source
+          ? `\n\nSOURCE MATERIAL (sampled: beginning · middle · end of the full document):\n${phase1Source}`
           : "";
 
         const deliverySection = input.deliveryInstructions
@@ -93,12 +106,19 @@ CURRICULUM: moduleTitle, moduleDescription (1–2 sentences), lessonOutlines (ma
 SEO: title (50–60 chars), description (140–155 chars), keywords (6–8)
 onboardingSteps: 3–4 steps
 
+GROUNDING — non-negotiable:
+- The ENTIRE curriculum must be extracted from the source material below.
+- Module titles must reflect actual chapters, themes, or major sections of the source.
+- Lesson titles must name specific concepts, arguments, or passages found in the source.
+- If the source is a book on meekness, every module and lesson comes from THAT book — not generic educational content.
+- Do NOT invent topics absent from the source material.
+
 DIVERSITY & PROGRESSION — mandatory:
 - Every module covers a DISTINCT topic. Zero content overlap between modules.
 - Sequence: Module 1 = Foundation/Overview, Module 2 = Core Concepts, Module 3 = Application/Practice, Module 4 = Mastery/Integration.
 - Lessons within a module cover DIFFERENT sub-topics that together complete that module's scope.
 - No two lessons anywhere in the curriculum should share the same key point.`,
-          prompt: basePrompt + deliverySection,
+          prompt: basePrompt + phase1SourceSection + deliverySection,
         });
 
         // ── Phase 2: Per-module metadata + per-lesson content ─────────────────
@@ -159,10 +179,11 @@ DIVERSITY & PROGRESSION — mandatory:
             mode: "json",
             maxTokens: 600,
             temperature: 0.3,
-            system: `You are the Curator. Write metadata for ONE academy module.
+            system: `You are the Curator. Write metadata for ONE academy module grounded in the source material.
 Output ONLY:
-- learningObjectives: exactly 3 outcomes starting with Understand / Apply / Identify.
-- keyTerms: exactly 4 domain-specific terms EXCLUSIVE to this module — not covered by sibling modules. Each: term + 1-sentence definition.
+- learningObjectives: exactly 3 outcomes (Understand / Apply / Identify) drawn from what the source actually teaches in this module.
+- keyTerms: exactly 4 terms that APPEAR in the source material and are exclusive to this module. Each: term + definition using the source’s own language where possible.
+GROUNDING RULE: extract objectives and terms directly from the source — do NOT invent.
 UNIQUENESS RULE: every objective and term must be unique to this module.`,
             prompt: `MODULE: ${mod.moduleTitle}
 DESCRIPTION: ${mod.moduleDescription}
@@ -196,13 +217,14 @@ SIBLING MODULES (do NOT repeat their topics): ${siblingTitles.join(" | ")}${modS
               mode: "json",
               maxTokens: 800,
               temperature: 0.3,
-              system: `You are the Curator. Write structured content for ONE lesson.
+              system: `You are the Curator. Write structured content for ONE lesson grounded in the source material.
 Output ONLY:
-- description: 1 sentence — the UNIQUE learning outcome of THIS specific lesson
-- keyTakeaways: exactly 3 sentences — specific insights NOT repeated from covered lessons
-- actionItems: exactly 2 practical steps unique to this lesson's content
-- quiz: EXACTLY 2 questions testing ONLY this lesson's content, each with EXACTLY 4 options, correct is 0–3
-No padding. No repetition of already-covered content.`,
+- description: 1 sentence — what the student learns from THIS lesson’s source content
+- keyTakeaways: exactly 3 sentences — specific teachings extracted from the source for this lesson
+- actionItems: exactly 2 practical steps based on what the source actually instructs or implies
+- quiz: EXACTLY 2 questions testing concepts from the source material, each with EXACTLY 4 options, correct is 0–3
+GROUNDING RULE: every field reflects actual content from the source. No invented content.
+No repetition of already-covered lessons.`,
               prompt: lessonContext,
             });
 
@@ -213,12 +235,13 @@ No padding. No repetition of already-covered content.`,
               maxTokens: 1_000,
               temperature: 0.4,
               system: `You are the Curator. Write educational notes for ONE lesson.
-Format: 1 intro paragraph (2–3 sentences on THIS lesson's unique angle), then 2 sections starting with "## Heading".
+Base notes DIRECTLY on the source material excerpt provided. Paraphrase or quote the source’s actual language and examples.
+Format: 1 intro paragraph (2–3 sentences), then 2 sections starting with "## Heading".
 Length: 150–220 words MAXIMUM.
 Rules:
-- **bold** 1–2 key terms per section.
-- Every sentence must add NEW information — do not restate content from covered lessons.
-- No invented content. No markdown outside ## and **.`,
+- **bold** 1–2 key terms per section that appear in the source.
+- Every sentence must come from or be directly supported by the source material.
+- Do NOT add information absent from the source. No markdown outside ## and **.`,
               prompt: lessonContext,
             });
 
