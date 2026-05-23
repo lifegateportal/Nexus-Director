@@ -145,11 +145,12 @@ export const AcademyShellSchema = z.object({
   })),
   // learningObjectives and keyTerms are deferred to Phase 2 to keep this
   // call well under DeepSeek's 8K output limit.
+  // Hard caps: max 4 modules, max 3 lesson stubs per module.
   curriculum: z.array(z.object({
     moduleTitle: z.string(),
     moduleDescription: z.string(),
-    lessonOutlines: z.array(LessonOutlineSchema),
-  })),
+    lessonOutlines: z.array(LessonOutlineSchema).max(3),
+  })).max(4),
   seoMeta: z.object({
     title: z.string(),
     description: z.string(),
@@ -180,5 +181,41 @@ export const ModuleLessonsSchema = z.object({
   })),
 });
 
+// Phase 2a: per-module metadata only (no prose → tiny output).
+export const ModuleMetaSchema = z.object({
+  learningObjectives: z.array(z.string()),
+  keyTerms: z.array(z.object({ term: z.string(), definition: z.string() })),
+});
+
+// Phase 2b: one lesson at a time — guaranteed < 800 tokens output.
+export const SingleLessonSchema = z.object({
+  description: z.string(),
+  notes: z.string(),
+  keyTakeaways: z.array(z.string()),
+  actionItems: z.array(z.string()),
+  quiz: z.array(z.object({
+    q: z.string(),
+    options: z.array(z.string()),
+    correct: z.number().int().min(0).max(3),
+  })),
+});
+
+// Phase 2b-structured: lesson fields WITHOUT notes.
+// Used with generateObject so only small, countable tokens are in JSON.
+// Notes are generated separately via generateText to avoid JSON parse errors.
+export const LessonStructuredSchema = z.object({
+  description: z.string(),
+  keyTakeaways: z.array(z.string()),
+  actionItems: z.array(z.string()),
+  quiz: z.array(z.object({
+    q: z.string(),
+    options: z.array(z.string()),
+    correct: z.number().int().min(0).max(3),
+  })),
+});
+
 export type AcademyShell = z.infer<typeof AcademyShellSchema>;
 export type ModuleLessons = z.infer<typeof ModuleLessonsSchema>;
+export type ModuleMeta = z.infer<typeof ModuleMetaSchema>;
+export type SingleLesson = z.infer<typeof SingleLessonSchema>;
+export type LessonStructured = z.infer<typeof LessonStructuredSchema>;
