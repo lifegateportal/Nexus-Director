@@ -291,20 +291,31 @@ export default function HomePage() {
         throw new Error(e.detail ?? e.error ?? `Produce stage: HTTP ${produceRes.status}`);
       }
 
-      // Read SSE stream — route sends ": ping" comments to keep the connection
-      // alive through reverse-proxy timeouts, then one "data: {...}" with the result.
+      // Read SSE stream — route sends ": ping\n\n" comments to keep alive,
+      // then one "data: {...}\n\n" with the final result.
+      // IMPORTANT: the academy JSON can be 15–20 KB, so it arrives split
+      // across multiple TCP chunks. We must buffer until we see a full SSE
+      // event (terminated by "\n\n") before trying JSON.parse.
       const reader = produceRes.body.getReader();
       const decoder = new TextDecoder();
       let academyRaw: unknown = null;
+      let sseBuffer = "";
       outer: while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        for (const line of decoder.decode(value).split("\n")) {
-          if (!line.startsWith("data: ")) continue;
-          const parsed = JSON.parse(line.slice(6)) as { error?: string } & Record<string, unknown>;
-          if (parsed.error) throw new Error(parsed.error);
-          academyRaw = parsed;
-          break outer;
+        sseBuffer += decoder.decode(value, { stream: true });
+        // Split on SSE event boundaries (blank line between events)
+        const events = sseBuffer.split("\n\n");
+        // Last element is an incomplete event — keep it in the buffer
+        sseBuffer = events.pop() ?? "";
+        for (const event of events) {
+          for (const line of event.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const parsed = JSON.parse(line.slice(6)) as { error?: string } & Record<string, unknown>;
+            if (parsed.error) throw new Error(parsed.error);
+            academyRaw = parsed;
+            break outer;
+          }
         }
       }
 
