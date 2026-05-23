@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { generateObject, generateText } from "ai";
+import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ProduceInputSchema, AcademyPackageSchema, AcademyShellSchema, ModuleMetaSchema, LessonStructuredSchema } from "@/lib/schemas/academy";
 
@@ -26,12 +27,12 @@ export async function POST(req: NextRequest) {
       }, 15_000);
 
       try {
-        // Truncate transcript to prevent input token overflow for large PDFs/videos.
-        // 15,000 chars ≈ 4,000–5,000 tokens used as Phase 1 context.
-        // Per-lesson calls use a much tighter 3,000-char window to keep each
-        // call small and well within DeepSeek's 8K output limit.
+        // Phase 1 samples beginning+middle+end of the FULL transcript for curriculum planning.
+        // Phase 2 segments the FULL transcript so each module reads its own unique section.
+        // Per-module window is 8,000 chars (~2,000 words) — enough for rich notes.
         const MAX_TRANSCRIPT_CHARS = 15_000;
-        const MAX_LESSON_TRANSCRIPT_CHARS = 3_000;
+        const MAX_MODULE_TRANSCRIPT_CHARS = 8_000;
+        // Truncated version used ONLY for Phase 1 context window safety
         const rawTranscript = input.rawTranscript && input.rawTranscript.length > MAX_TRANSCRIPT_CHARS
           ? input.rawTranscript.slice(0, MAX_TRANSCRIPT_CHARS) + "\n\n[Transcript truncated]"
           : input.rawTranscript;
@@ -68,6 +69,57 @@ export async function POST(req: NextRequest) {
           visualDirection: input.visualDirection,
         });
 
+        // ── Phase 0: Content map ────────────────────────────────────────
+        // Force DeepSeek to READ and MAP the source's distinct themes BEFORE
+        // designing the curriculum. Each theme gets direct source passages so
+        // every module is anchored to real, non-overlapping content.
+        const ThemeEntrySchema = z.object({
+          index:        z.number().int().min(0).max(3),
+          title:        z.string(),
+          summary:      z.string(),
+          keyPassages:  z.array(z.string()).min(1).max(3),
+          sourceRegion: z.enum(["beginning", "early-middle", "late-middle", "end"]),
+        });
+        const ContentMapSchema = z.object({
+          themes: z.array(ThemeEntrySchema).min(3).max(4),
+        });
+        type ContentMap = z.infer<typeof ContentMapSchema>;
+
+        const phase0Source = phase1Source || input.rawTranscript?.slice(0, 12_000) || "";
+        let contentMap: ContentMap = { themes: [] };
+        if (phase0Source) {
+          const { object: map } = await generateObject({
+            model: deepSeekModel,
+            schema: ContentMapSchema,
+            mode: "json",
+            maxTokens: 1_200,
+            temperature: 0.1,
+            system: `You are a source analyst. Read the material and identify 3–4 completely DISTINCT major themes or sections. Cover the FULL arc of the document.
+
+For each theme:
+- index: 0-based (0 = first theme in the source)
+- title: 4–7 words, the theme name using the source's own language
+- summary: exactly 2 sentences — what the source specifically says about this theme
+- keyPassages: 2–3 short verbatim or near-verbatim quotes (10–30 words each) taken directly from the source for this theme
+- sourceRegion: where this theme appears in the document: "beginning" | "early-middle" | "late-middle" | "end"
+
+RULES — non-negotiable:
+- Every theme must be DISTINCT — zero conceptual overlap between themes
+- keyPassages must be actual text from the source, not paraphrases
+- Assign themes across the full document — themes must span beginning to end, not cluster in one region
+- Do NOT invent content absent from the source`,
+            prompt: `SOURCE MATERIAL:\n${phase0Source}`,
+          });
+          contentMap = map;
+        }
+
+        // Build a content map string for Phase 1 injection
+        const contentMapSection = contentMap.themes.length > 0
+          ? `\n\nCONTENT MAP — your curriculum MUST map exactly to these themes (one theme per module):\n${contentMap.themes.map((t) =>
+              `MODULE ${t.index + 1}: "${t.title}"\n  What the source says: ${t.summary}\n  Source passages: ${t.keyPassages.map(p => `"${p}"`).join(" | ")}`
+            ).join("\n\n")}`
+          : "";
+
         // ── Phase 1: Academy shell ─────────────────────────────────────────────
         // Generates all metadata, landing page, pricing, SEO, and module outlines
         // with lightweight lesson stubs only. Stays well under the 8K output limit.
@@ -83,6 +135,12 @@ OUTPUT ALL ACADEMY FIELDS. TOKEN BUDGET IS TIGHT — be concise in every field.
 
 FOR THE CURRICULUM: produce exactly 3–4 modules (HARD MAX 4). Each module gets exactly 2–3 lesson outlines (HARD MAX 3). Lesson outline = title + type + durationMinutes only.
 DO NOT write notes, quiz, keyTakeaways, or actionItems in this phase.
+
+CURRICULUM RULE — the content map below defines exactly what each module covers:
+- Module 1 covers ONLY the content of Theme 1. Module 2 covers ONLY Theme 2. Etc.
+- Module title = the theme title (you may rephrase for marketing but must stay on that theme)
+- Lesson titles must name SPECIFIC sub-concepts from that theme's source passages ONLY
+- Zero topic overlap between any two modules — each module owns its theme exclusively
 
 FIELD GUIDE:
 - academyName: Market-ready title from the core subject matter
@@ -107,18 +165,9 @@ SEO: title (50–60 chars), description (140–155 chars), keywords (6–8)
 onboardingSteps: 3–4 steps
 
 GROUNDING — non-negotiable:
-- The ENTIRE curriculum must be extracted from the source material below.
-- Module titles must reflect actual chapters, themes, or major sections of the source.
-- Lesson titles must name specific concepts, arguments, or passages found in the source.
-- If the source is a book on meekness, every module and lesson comes from THAT book — not generic educational content.
-- Do NOT invent topics absent from the source material.
-
-DIVERSITY & PROGRESSION — mandatory:
-- Every module covers a DISTINCT topic. Zero content overlap between modules.
-- Sequence: Module 1 = Foundation/Overview, Module 2 = Core Concepts, Module 3 = Application/Practice, Module 4 = Mastery/Integration.
-- Lessons within a module cover DIFFERENT sub-topics that together complete that module's scope.
-- No two lessons anywhere in the curriculum should share the same key point.`,
-          prompt: basePrompt + phase1SourceSection + deliverySection,
+- Every module and lesson title must reflect actual content from the source material or the content map below
+- Do NOT invent topics absent from the source`,
+          prompt: basePrompt + contentMapSection + phase1SourceSection + deliverySection,
         });
 
         // ── Phase 2: Per-module metadata + per-lesson content ─────────────────
@@ -146,31 +195,53 @@ DIVERSITY & PROGRESSION — mandatory:
         };
 
         // ── Transcript segmentation ────────────────────────────────────────
-        // Each module draws from a UNIQUE slice of the transcript so later
-        // modules don't rehash the same opening content. Capped at
-        // MAX_LESSON_TRANSCRIPT_CHARS per slice to keep inputs small.
+        // Uses the content map's sourceRegion to center each module's window
+        // on where its theme actually lives in the transcript, rather than
+        // equal-division which can put all modules in the same opening section.
+        const regionCenterFrac: Record<string, number> = {
+          "beginning":    0.125,
+          "early-middle": 0.375,
+          "late-middle":  0.625,
+          "end":          0.875,
+        };
         const numModules = shell.curriculum.length;
-        const fullTranscriptLen = rawTranscript ? rawTranscript.length : 0;
-        const segSize = fullTranscriptLen > 0
-          ? Math.ceil(fullTranscriptLen / numModules)
-          : 0;
+        const fullTranscriptLen = input.rawTranscript?.length ?? 0;
+        const halfWindow = Math.floor(MAX_MODULE_TRANSCRIPT_CHARS / 2);
         const allModuleTitles = shell.curriculum.map(m => m.moduleTitle);
+
+        // Running log of what previous modules have covered — fed into each
+        // subsequent module to prevent content overlap across the academy.
+        const coveredModuleSummaries: string[] = [];
 
         const fullCurriculum: FullModule[] = [];
 
         for (let modIdx = 0; modIdx < shell.curriculum.length; modIdx++) {
           const mod = shell.curriculum[modIdx];
 
-          // Unique transcript window for this module
-          const segStart  = modIdx * segSize;
-          const segEnd    = Math.min(segStart + MAX_LESSON_TRANSCRIPT_CHARS, fullTranscriptLen);
-          const modSource = rawTranscript ? rawTranscript.slice(segStart, segEnd) : "";
+          // Region-aware transcript window: center on where this module's
+          // theme actually appears in the source per the content map.
+          const theme = contentMap.themes[modIdx] ?? contentMap.themes[contentMap.themes.length - 1];
+          const fallbackFrac = numModules > 1 ? modIdx / (numModules - 1) : 0;
+          const regionFrac = theme
+            ? (regionCenterFrac[theme.sourceRegion] ?? fallbackFrac)
+            : fallbackFrac;
+          const centerChar = Math.floor(fullTranscriptLen * regionFrac);
+          const segStart = Math.max(0, centerChar - halfWindow);
+          const segEnd   = Math.min(fullTranscriptLen, segStart + MAX_MODULE_TRANSCRIPT_CHARS);
+          const modSource = input.rawTranscript ? input.rawTranscript.slice(segStart, segEnd) : "";
           const modSourceSection = modSource
             ? `\n\nSOURCE MATERIAL (section ${modIdx + 1}/${numModules}):\n${modSource}`
             : "";
 
-          // Sibling module titles — threaded into every call to enforce zero overlap
+          // Sibling module titles + cumulative coverage — prevent all content overlap
           const siblingTitles = allModuleTitles.filter((_, i) => i !== modIdx);
+          const priorCoverageSection = coveredModuleSummaries.length > 0
+            ? `\nALREADY COVERED IN PREVIOUS MODULES (do NOT repeat any of this):\n${coveredModuleSummaries.join("\n")}`
+            : "";
+          // Theme anchor — explicit source passages this module must cover
+          const themeAnchorSection = theme?.keyPassages?.length
+            ? `\nTHIS MODULE'S ASSIGNED SOURCE PASSAGES (ground all content in these):\n${theme.keyPassages.map(p => `"${p}"`).join("\n")}`
+            : "";
 
           // ── 2a: Module metadata ──────────────────────────────────────────────
           const { object: meta } = await generateObject({
@@ -187,7 +258,7 @@ GROUNDING RULE: extract objectives and terms directly from the source — do NOT
 UNIQUENESS RULE: every objective and term must be unique to this module.`,
             prompt: `MODULE: ${mod.moduleTitle}
 DESCRIPTION: ${mod.moduleDescription}
-SIBLING MODULES (do NOT repeat their topics): ${siblingTitles.join(" | ")}${modSourceSection}`,
+SIBLING MODULES (do NOT repeat their topics): ${siblingTitles.join(" | ")}${priorCoverageSection}${themeAnchorSection}${modSourceSection}`,
           });
 
           const fullLessons: FullLesson[] = [];
@@ -205,8 +276,10 @@ SIBLING MODULES (do NOT repeat their topics): ${siblingTitles.join(" | ")}${modS
               `LESSON ${lessonIdx + 1}/${mod.lessonOutlines.length}: ${outline.title} (${outline.type}, ${outline.durationMinutes} min)`,
               `MODULE OBJECTIVES: ${meta.learningObjectives.join(" | ")}`,
               `MODULE KEY TERMS: ${meta.keyTerms.map(kt => kt.term).join(", ")}`,
+              theme?.keyPassages?.length ? `THIS LESSON'S THEME PASSAGES — write notes grounded in these:\n${theme.keyPassages.map(p => `"${p}"`).join("\n")}` : "",
               coveredLessons.length  > 0 ? `ALREADY COVERED THIS MODULE: ${coveredLessons.join(", ")} — do NOT revisit` : "",
               upcomingLessons.length > 0 ? `RESERVED FOR LATER: ${upcomingLessons.join(", ")} — leave for subsequent lessons` : "",
+              coveredModuleSummaries.length > 0 ? `ALREADY COVERED IN EARLIER MODULES — do NOT repeat: ${coveredModuleSummaries.join(" | ")}` : "",
               modSourceSection,
             ].filter(Boolean).join("\n");
 
@@ -230,9 +303,11 @@ No repetition of already-covered lessons.`,
 
             // ── 2b-notes: Lesson notes via generateText ──────────────────────
             // Plain text — no JSON, no parse error possible regardless of length.
+            // DeepSeek V3 is used here: fast, reliable, produces rich prose
+            // from source material without token-hungry reasoning overhead.
             const { text: notes } = await generateText({
               model: deepSeekModel,
-              maxTokens: 1_000,
+              maxTokens: 2_000,
               temperature: 0.4,
               system: `You are the Curator. Write educational notes for ONE lesson.
 Base notes DIRECTLY on the source material excerpt provided. Paraphrase or quote the source’s actual language and examples.
@@ -257,13 +332,19 @@ Rules:
             });
           }
 
-          fullCurriculum.push({
+          const pushedModule = {
             moduleTitle: mod.moduleTitle,
             moduleDescription: mod.moduleDescription,
             learningObjectives: meta.learningObjectives,
             keyTerms: meta.keyTerms,
             lessons: fullLessons,
-          });
+          };
+          fullCurriculum.push(pushedModule);
+
+          // Record what this module covered so subsequent modules can avoid it
+          coveredModuleSummaries.push(
+            `Module ${modIdx + 1} "${mod.moduleTitle}": ${meta.learningObjectives.join("; ")} | Terms: ${meta.keyTerms.map(kt => kt.term).join(", ")} | Lessons: ${fullLessons.map(l => l.title).join(", ")}`
+          );
         }
 
         // ── Phase 3: Merge and validate ────────────────────────────────────────
