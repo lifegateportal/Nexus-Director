@@ -288,23 +288,19 @@ export default function HomePage() {
 
       const reader = produceRes.body.getReader();
       const decoder = new TextDecoder();
-      let academyRaw: unknown = null;
-      let sseBuffer = "";
-      outer: while (true) {
+      let fullBuffer = "";
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-        const events = sseBuffer.split("\n\n");
-        sseBuffer = events.pop() ?? "";
-        for (const event of events) {
-          for (const line of event.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            const parsed = JSON.parse(line.slice(6)) as { error?: string } & Record<string, unknown>;
-            if (parsed.error) throw new Error(parsed.error);
-            academyRaw = parsed;
-            break outer;
-          }
-        }
+        fullBuffer += decoder.decode(value, { stream: true });
+      }
+      let academyRaw: unknown = null;
+      for (const line of fullBuffer.split("\n")) {
+        if (!line.startsWith("data: ")) continue;
+        const parsed = JSON.parse(line.slice(6)) as { error?: string } & Record<string, unknown>;
+        if (parsed.error) throw new Error(parsed.error);
+        academyRaw = parsed;
+        break;
       }
 
       if (!academyRaw) throw new Error("Produce stage: empty response from server");
