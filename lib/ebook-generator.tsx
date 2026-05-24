@@ -7,7 +7,6 @@
 
 import type { EbookManifest, ChapterDraft, FrontBackMatter, Quote } from "@/lib/schemas/ebook";
 import { existsSync } from "node:fs";
-import { type BookTemplateConfig, getTemplate } from "@/lib/book-templates";
 
 type PdfFontSet = {
   serif: string;
@@ -64,24 +63,14 @@ function resolvePdfFonts(doc: any): PdfFontSet {
   };
 }
 
-// ─── Font key resolver ────────────────────────────────────────────────────────
-function f(fonts: PdfFontSet, key: "serif" | "serifBold" | "sans" | "sansBold" | "serifItalic"): string {
-  return fonts[key];
-}
-
 // ─── PDF Generator (pdfkit) ───────────────────────────────────────────────────
 
-export async function generatePdfBuffer(manifest: EbookManifest, templateId?: string | null): Promise<Buffer> {
+export async function generatePdfBuffer(manifest: EbookManifest): Promise<Buffer> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const PDFDocument = (await import("pdfkit")).default as any;
-  const tmpl = getTemplate(templateId);
 
   return new Promise<Buffer>((resolve, reject) => {
-    const doc = new PDFDocument({
-      size: tmpl.pageSize,
-      margins: tmpl.margins,
-      autoFirstPage: true,
-    });
+    const doc = new PDFDocument({ margin: 72, size: "A4", autoFirstPage: true });
     const fonts = resolvePdfFonts(doc);
     const chunks: Buffer[] = [];
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -90,61 +79,41 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
 
     // ── Title page ────────────────────────────────────────────────────────────
     doc
-      .moveDown(tmpl.titlePageTopGap)
-      .fontSize(tmpl.titlePageTitleSize).font(f(fonts, "serifBold")).fillColor("#111111")
-      .text(manifest.bookTitle, { align: tmpl.titlePageAlign });
+      .moveDown(6)
+      .fontSize(28).font(fonts.serifBold).fillColor("#111111")
+      .text(manifest.bookTitle, { align: "center" });
 
     if (manifest.subtitle) {
       doc
         .moveDown(0.8)
-        .fontSize(tmpl.titlePageSubtitleSize).font(f(fonts, "serifItalic")).fillColor("#555555")
-        .text(manifest.subtitle, { align: tmpl.titlePageAlign });
+        .fontSize(14).font(fonts.serif).fillColor("#555555")
+        .text(manifest.subtitle, { align: "center" });
     }
 
     doc
       .moveDown(2)
-      .fontSize(tmpl.titlePageAuthorSize).font(f(fonts, "serif")).fillColor("#444444")
-      .text(manifest.authorName, { align: tmpl.titlePageAlign });
+      .fontSize(13).font(fonts.serif).fillColor("#333333")
+      .text(manifest.authorName, { align: "center" });
 
-    writeFrontMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tmpl);
+    writeFrontMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts);
 
     for (const chapter of manifest.chapters) {
-      writeChapter(doc, chapter, manifest.allQuotes ?? [], fonts, tmpl);
+      writeChapter(doc, chapter, manifest.allQuotes ?? [], fonts);
     }
 
-    writeBackMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tmpl);
+    writeBackMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts);
     doc.end();
   });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeDivider(doc: any, tmpl: BookTemplateConfig) {
-  if (!tmpl.showDivider) { doc.moveDown(0.6); return; }
+function writeDivider(doc: any) {
   doc.moveDown(0.5);
   doc
     .moveTo(doc.page.margins.left, doc.y)
     .lineTo(doc.page.width - doc.page.margins.right, doc.y)
-    .strokeColor(tmpl.dividerColor).lineWidth(0.5).stroke();
+    .strokeColor("#e0e0e0").lineWidth(0.5).stroke();
   doc.moveDown(0.5);
-}
-
-// ─── Inline Markdown Parser ───────────────────────────────────────────────────
-// Splits a paragraph string into segments of normal / bold / italic text so
-// PDFKit can render each segment with the correct font face.
-
-interface InlineSegment { text: string; style: "normal" | "bold" | "italic" }
-
-function parseInlineMarkdown(text: string): InlineSegment[] {
-  const segments: InlineSegment[] = [];
-  // Order matters: match **bold** before *italic* to avoid partial matches.
-  const re = /\*\*([^*]+?)\*\*|\*([^*]+?)\*|([^*]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (m[1] !== undefined) segments.push({ text: m[1], style: "bold" });
-    else if (m[2] !== undefined) segments.push({ text: m[2], style: "italic" });
-    else if (m[3] !== undefined) segments.push({ text: m[3], style: "normal" });
-  }
-  return segments.filter((s) => s.text.length > 0);
 }
 
 function normalizeText(input: string): string {
@@ -165,46 +134,18 @@ function findMatchingBlockQuote(paragraph: string, quotes: Quote[]): Quote | nul
   }) ?? null;
 }
 
-/**
- * Detects AI-formatted inline scripture blocks where the section writer could not
- * be matched against allQuotes. Looks for:
- *   <body text>\n— Book Chapter:Verse (Translation)
- * Returns null when the paragraph doesn't match this pattern.
- */
-function detectInlineScripture(paragraph: string): Quote | null {
-  // Must contain an internal newline followed by an em/en-dash (reference line)
-  const match = paragraph.match(/^([\s\S]+?)\n[\u2014\u2013-]\s*(.+?)\s*$/);
-  if (!match) return null;
-  // Reference must contain a digit (chapter:verse or year) to avoid false positives on
-  // plain attribution lines like "— Author Name"
-  const refFull = match[2].trim();
-  if (!/\d/.test(refFull)) return null;
-  const text = match[1].trim();
-  // Parse optional translation in parentheses: "Jeremiah 29:11 (NIV)" → ref + translation
-  const transMatch = refFull.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-  return {
-    id: "",
-    text,
-    reference: transMatch ? transMatch[1].trim() : refFull,
-    translation: transMatch ? transMatch[2].trim() : "",
-    type: "scripture",
-    isBlockQuote: true,
-  };
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet, tmpl: BookTemplateConfig) {
-  const bodyWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-  doc.moveDown(0.4);
+function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet) {
+  doc.moveDown(0.25);
   doc
-    .fontSize(tmpl.scriptureFontSize)
+    .fontSize(13)
     .font(fonts.serifItalic)
     .fillColor("#202020")
     .text(quote.text, {
-      lineGap: 5,
-      indent: tmpl.scriptureIndent,
-      width: bodyWidth - tmpl.scriptureIndent - 8,
-      align: "left",
+      lineGap: 6,
+      indent: 18,
+      width: doc.page.width - doc.page.margins.left - doc.page.margins.right - 46,
+      align: "justify",
     });
 
   const reference = quote.reference
@@ -214,12 +155,12 @@ function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet, tmpl: Bo
   if (reference) {
     doc
       .moveDown(0.15)
-      .fontSize(tmpl.scriptureFontSize - 0.5)
+      .fontSize(11.5)
       .font(fonts.serifBold)
-      .fillColor("#1a1a1a")
-      .text(`\u2014 ${reference}`, {
+      .fillColor("#111111")
+      .text(`— ${reference}`, {
         align: "right",
-        width: bodyWidth - 16,
+        width: doc.page.width - doc.page.margins.left - doc.page.margins.right - 28,
       });
   }
 
@@ -227,201 +168,109 @@ function writeScriptureBlock(doc: any, quote: Quote, fonts: PdfFontSet, tmpl: Bo
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tmpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }) {
-  // Pre-normalise: ensure markdown heading lines are surrounded by double
-  // newlines so they become isolated "paragraphs" after the split below.
-  // This handles the case where the AI writes "## Heading\nBody text" with
-  // only a single newline separator.
-  const normalised = text
-    .replace(/([^\n])\n(#{1,3} )/g, "$1\n\n$2")   // inject blank line BEFORE heading
-    .replace(/(#{1,3} [^\n]+)\n([^\n#])/g, "$1\n\n$2"); // inject blank line AFTER heading
-
-  const paragraphs = normalised.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-
-  // bodyParaIndex tracks only non-heading paragraphs so the
-  // noIndentFirstParagraph option applies to the first body paragraph even
-  // when a heading precedes it.
-  let bodyParaIndex = 0;
-
-  paragraphs.forEach((paragraph) => {
-    // ── Markdown headings (##, ###) ──────────────────────────────────────────
-    const headingMatch = paragraph.match(/^(#{1,3})\s+(.+)$/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const headingText = headingMatch[2].trim();
-      // ## → section size, ### → slightly smaller
-      const fontSize = level <= 2 ? tmpl.sectionSize : tmpl.sectionSize - 1.5;
-      doc
-        .moveDown(0.45)
-        .fontSize(fontSize)
-        .font(f(fonts, "serifBold"))
-        .fillColor(tmpl.sectionColor)
-        .text(headingText, { align: "left" });
-      doc.moveDown(0.2);
-      bodyParaIndex = 0; // reset so the next body para has no indent
-      return;
-    }
-
-    // ── Scripture / block-quote detection ───────────────────────────────────
+function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }) {
+  const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  paragraphs.forEach((paragraph, index) => {
     const matchingQuote = findMatchingBlockQuote(paragraph, quotes);
     if (matchingQuote) {
-      writeScriptureBlock(doc, matchingQuote, fonts, tmpl);
-      return;
-    }
-    const inlineScripture = detectInlineScripture(paragraph);
-    if (inlineScripture) {
-      writeScriptureBlock(doc, inlineScripture, fonts, tmpl);
+      writeScriptureBlock(doc, matchingQuote, fonts);
       return;
     }
 
-    // ── Body paragraph with inline **bold** / *italic* ───────────────────────
-    const index = bodyParaIndex++;
-    const baseFont = options?.italicFirstParagraph && index === 0 ? fonts.serifItalic : fonts.serif;
-    const color = options?.italicFirstParagraph && index === 0 ? "#444444" : "#1a1a1a";
-    const isFirstAfterBreak = (options?.noIndentFirstParagraph !== false) && index === 0;
-    const indent = tmpl.paragraphIndent > 0 ? (isFirstAfterBreak ? 0 : tmpl.paragraphIndent) : 0;
-
-    doc.fontSize(tmpl.bodyFontSize).fillColor(color);
-
-    const segments = parseInlineMarkdown(paragraph);
-    segments.forEach((seg, i) => {
-      const isFirst = i === 0;
-      const isLast  = i === segments.length - 1;
-      const continued = !isLast;
-      const font = seg.style === "bold" ? fonts.serifBold
-                 : seg.style === "italic" ? fonts.serifItalic
-                 : baseFont;
-      // Layout options only on the first segment; paragraphGap on the last.
-      const opts: Record<string, unknown> = { continued };
-      if (isFirst) {
-        opts.lineGap      = tmpl.bodyLineGap;
-        opts.indent       = indent;
-        opts.align        = tmpl.bodyAlign;
-      }
-      if (isLast) {
-        opts.paragraphGap = tmpl.paragraphGap;
-      }
-      doc.font(font).text(seg.text, opts);
-    });
-
-    if (tmpl.paragraphIndent > 0 && tmpl.paragraphGap === 0) {
-      doc.moveDown(0.05);
-    }
+    const font = options?.italicFirstParagraph && index === 0 ? fonts.serifItalic : fonts.serif;
+    const color = options?.italicFirstParagraph && index === 0 ? "#333333" : "#1a1a1a";
+    const noIndentFirst = options?.noIndentFirstParagraph !== false;
+    const indent = noIndentFirst && index === 0 ? 0 : 20;
+    doc
+      .fontSize(11.5)
+      .font(font)
+      .fillColor(color)
+      .text(paragraph, {
+        lineGap: 5,
+        indent,
+        paragraphGap: 0,
+        align: "justify",
+      });
+    doc.moveDown(0.08);
   });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeMatterTitle(doc: any, title: string, fonts: PdfFontSet, tmpl: BookTemplateConfig) {
-  doc
-    .moveDown(tmpl.chapterPreGap)
-    .fontSize(tmpl.matterTitleSize)
-    .font(f(fonts, "serifBold"))
-    .fillColor(tmpl.chapterTitleColor)
-    .text(title, { align: tmpl.matterTitleAlign });
+function writeFrontMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet) {
+  doc.addPage();
+  doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Preface");
+  writeDivider(doc);
+  writeRichBody(doc, fm.preface, quotes, fonts, { noIndentFirstParagraph: true });
+
+  doc.addPage();
+  doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Introduction");
+  writeDivider(doc);
+  writeRichBody(doc, fm.introduction, quotes, fonts, { noIndentFirstParagraph: true });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeFrontMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tmpl: BookTemplateConfig) {
+function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: PdfFontSet) {
   doc.addPage();
-  writeMatterTitle(doc, "Preface", fonts, tmpl);
-  writeDivider(doc, tmpl);
-  writeRichBody(doc, fm.preface, quotes, fonts, tmpl, { noIndentFirstParagraph: true });
-
-  doc.addPage();
-  writeMatterTitle(doc, "Introduction", fonts, tmpl);
-  writeDivider(doc, tmpl);
-  writeRichBody(doc, fm.introduction, quotes, fonts, tmpl, { noIndentFirstParagraph: true });
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: PdfFontSet, tmpl: BookTemplateConfig) {
-  doc.addPage();
-  doc.moveDown(tmpl.chapterPreGap);
-
-  // Chapter label (e.g. "CHAPTER 1" / "01" / "I")
-  const labelText = tmpl.chapterLabel(chapter.number);
-  doc
-    .fontSize(tmpl.chapterLabelSize)
-    .font(f(fonts, tmpl.chapterLabelFont))
-    .fillColor(tmpl.chapterLabelColor)
-    .text(labelText, { align: tmpl.chapterLabelAlign });
-
-  doc.moveDown(0.35)
-    .fontSize(tmpl.chapterTitleSize)
-    .font(f(fonts, tmpl.chapterTitleFont))
-    .fillColor(tmpl.chapterTitleColor)
-    .text(chapter.title, { align: tmpl.chapterTitleAlign });
-
-  writeDivider(doc, tmpl);
+  doc.moveDown(1.1);
+  doc.fontSize(10).font(fonts.sans).fillColor("#888888").text(`CHAPTER ${chapter.number}`);
+  doc.moveDown(0.3).fontSize(22).font(fonts.serifBold).fillColor("#111111").text(chapter.title);
+  writeDivider(doc);
 
   if (chapter.intro) {
-    writeRichBody(doc, chapter.intro, quotes, fonts, tmpl, { italicFirstParagraph: true, noIndentFirstParagraph: true });
+    writeRichBody(doc, chapter.intro, quotes, fonts, { italicFirstParagraph: true, noIndentFirstParagraph: true });
   }
 
   for (const section of chapter.sections) {
-    doc.moveDown(0.5);
-    doc
-      .fontSize(tmpl.sectionSize)
-      .font(f(fonts, tmpl.sectionFont))
-      .fillColor(tmpl.sectionColor)
-      .text(section.heading, { align: tmpl.sectionAlign });
-    if (tmpl.sectionRule) {
-      const y = doc.y + 2;
-      doc
-        .moveTo(doc.page.margins.left, y)
-        .lineTo(doc.page.width - doc.page.margins.right, y)
-        .strokeColor(tmpl.accentColor).lineWidth(0.4).stroke();
-    }
+    doc.moveDown(0.35);
+    doc.fontSize(13).font(fonts.serifBold).fillColor("#222222").text(section.heading);
     doc.moveDown(0.2);
-    writeRichBody(doc, section.body, quotes, fonts, tmpl, { noIndentFirstParagraph: true });
+    writeRichBody(doc, section.body, quotes, fonts, { noIndentFirstParagraph: true });
   }
 
   if (chapter.conclusion) {
-    writeDivider(doc, tmpl);
-    writeRichBody(doc, chapter.conclusion, quotes, fonts, tmpl, { noIndentFirstParagraph: true });
+    writeDivider(doc);
+    writeRichBody(doc, chapter.conclusion, quotes, fonts, { noIndentFirstParagraph: true });
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
-    doc.moveDown(0.3);
-    doc.fontSize(9).font(f(fonts, "sansBold")).fillColor(tmpl.labelColor).text("KEY TAKEAWAYS");
+    doc.fontSize(9).font(fonts.sansBold).fillColor("#888888").text("KEY TAKEAWAYS");
     doc.moveDown(0.3);
     for (const t of (chapter.keyTakeaways ?? [])) {
-      doc.fontSize(tmpl.bodyFontSize - 1).font(f(fonts, "serif")).fillColor("#222222").text(`• ${t}`, { lineGap: 3.5 });
+      doc.fontSize(10.5).font(fonts.serif).fillColor("#222222").text(`• ${t}`, { lineGap: 3.5 });
     }
     doc.moveDown();
   }
 
   if ((chapter.reflectionQuestions ?? []).length > 0) {
-    doc.moveDown(0.3);
-    doc.fontSize(9).font(f(fonts, "sansBold")).fillColor(tmpl.labelColor).text("REFLECTION QUESTIONS");
+    doc.fontSize(9).font(fonts.sansBold).fillColor("#888888").text("REFLECTION QUESTIONS");
     doc.moveDown(0.3);
     (chapter.reflectionQuestions ?? []).forEach((q, i) => {
-      doc.fontSize(tmpl.bodyFontSize - 1).font(f(fonts, "serif")).fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: 3.5 });
+      doc.fontSize(10.5).font(fonts.serif).fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: 3.5 });
     });
     doc.moveDown();
   }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeBackMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tmpl: BookTemplateConfig) {
+function writeBackMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet) {
   doc.addPage();
-  writeMatterTitle(doc, "Conclusion", fonts, tmpl);
-  writeDivider(doc, tmpl);
-  writeRichBody(doc, fm.conclusion, quotes, fonts, tmpl, { noIndentFirstParagraph: true });
+  doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Conclusion");
+  writeDivider(doc);
+  writeRichBody(doc, fm.conclusion, quotes, fonts, { noIndentFirstParagraph: true });
 
   if (fm.aboutAuthor) {
     doc.addPage();
-    writeMatterTitle(doc, "About the Author", fonts, tmpl);
-    writeDivider(doc, tmpl);
-    writeRichBody(doc, fm.aboutAuthor, quotes, fonts, tmpl, { noIndentFirstParagraph: true });
+    doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("About the Author");
+    writeDivider(doc);
+    writeRichBody(doc, fm.aboutAuthor, quotes, fonts, { noIndentFirstParagraph: true });
   }
 
   if ((fm.resourcesList ?? []).length > 0) {
     doc.addPage();
-    writeMatterTitle(doc, "Resources", fonts, tmpl);
-    writeDivider(doc, tmpl);
+    doc.fontSize(20).font(fonts.serifBold).fillColor("#111111").text("Resources");
+    writeDivider(doc);
     for (const r of (fm.resourcesList ?? [])) {
-      doc.fontSize(tmpl.bodyFontSize).font(f(fonts, "serif")).fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3.5 });
+      doc.fontSize(11.5).font(fonts.serif).fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3.5 });
     }
   }
 }
@@ -681,12 +530,6 @@ function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italic
         : "";
       return `<blockquote class="scripture-block"><p>${escapeHtml(matchingQuote.text)}</p>${reference ? `<div class="scripture-ref">${reference}</div>` : ""}</blockquote>`;
     }
-    // Fallback: detect the "body text\n— Reference (Translation)" pattern directly
-    const inlineScripture = detectInlineScripture(paragraph);
-    if (inlineScripture) {
-      const refPart = inlineScripture.reference + (inlineScripture.translation ? ` (${inlineScripture.translation})` : "");
-      return `<blockquote class="scripture-block"><p>${escapeHtml(inlineScripture.text)}</p>${refPart ? `<div class="scripture-ref">&mdash; ${escapeHtml(refPart)}</div>` : ""}</blockquote>`;
-    }
     const classes = ["book-paragraph"];
     if (index === 0) classes.push("no-indent");
     if (options?.italicFirstParagraph && index === 0) classes.push("chapter-intro");
@@ -831,9 +674,7 @@ blockquote.scripture-block p {
 .scripture-ref {
   margin-top: 0.45em;
   text-align: right;
-  font-style: normal;
   font-weight: 700;
-  color: #1a1a1a;
   letter-spacing: 0.01em;
 }
 `;

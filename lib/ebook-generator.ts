@@ -1,7 +1,7 @@
 /**
  * ebook-generator.ts
- * Server-side PDF and EPUB generation from an EbookManifest.
- * PDF: @react-pdf/renderer   EPUB: epub-gen-memory
+ * Server-side PDF, EPUB, and DOCX generation from an EbookManifest.
+ * PDF: @react-pdf/renderer   EPUB: epub-gen-memory   DOCX: docx
  */
 
 import React from "react";
@@ -14,6 +14,16 @@ import {
   pdf,
 } from "@react-pdf/renderer";
 import Epub from "epub-gen-memory";
+import {
+  Document as DocxDocument,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel,
+  AlignmentType,
+  PageBreak,
+  SectionType,
+} from "docx";
 import type { EbookManifest, ChapterDraft, Quote } from "@/lib/schemas/ebook";
 
 // ─── PDF styles ──────────────────────────────────────────────────────────────
@@ -619,4 +629,138 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
 
   const arrayBuffer = await epubInstance.genEpub();
   return Buffer.from(arrayBuffer);
+}
+
+// ─── DOCX generation ──────────────────────────────────────────────────────────
+
+function textToParagraphs(text: string): Paragraph[] {
+  return text
+    .split(/\n{1,}/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(
+      (line) =>
+        new Paragraph({
+          children: [new TextRun({ text: line, size: 24 })], // 12pt
+          spacing: { after: 160 },
+        })
+    );
+}
+
+export async function generateDocxBuffer(manifest: EbookManifest): Promise<Buffer> {
+  const { bookTitle, subtitle, authorName, frontMatter, chapters } = manifest;
+
+  const children: Paragraph[] = [];
+
+  // ── Cover ────────────────────────────────────────────────────────────────
+  children.push(
+    new Paragraph({
+      children: [new TextRun({ text: bookTitle, bold: true, size: 56 })],
+      heading: HeadingLevel.TITLE,
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: subtitle, size: 28, italics: true })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: authorName, size: 26 })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 600 },
+    }),
+    new Paragraph({ children: [new PageBreak()] })
+  );
+
+  // ── Front matter ─────────────────────────────────────────────────────────
+  const frontSections: Array<{ title: string; text: string }> = [
+    { title: "Preface", text: frontMatter.preface },
+    { title: "Introduction", text: frontMatter.introduction },
+  ];
+  if (frontMatter.dedication) {
+    frontSections.unshift({ title: "Dedication", text: frontMatter.dedication });
+  }
+
+  for (const section of frontSections) {
+    if (!section.text?.trim()) continue;
+    children.push(
+      new Paragraph({
+        text: section.title,
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 240 },
+      }),
+      ...textToParagraphs(section.text),
+      new Paragraph({ children: [new PageBreak()] })
+    );
+  }
+
+  // ── Chapters ──────────────────────────────────────────────────────────────
+  for (const chapter of chapters) {
+    children.push(
+      new Paragraph({
+        text: `Chapter ${chapter.number}: ${chapter.title}`,
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 300 },
+      })
+    );
+
+    for (const section of chapter.sections) {
+      if (section.heading) {
+        children.push(
+          new Paragraph({
+            text: section.heading,
+            heading: HeadingLevel.HEADING_2,
+            spacing: { before: 280, after: 160 },
+          })
+        );
+      }
+      children.push(...textToParagraphs(section.body));
+    }
+
+    children.push(new Paragraph({ children: [new PageBreak()] }));
+  }
+
+  // ── Back matter ───────────────────────────────────────────────────────────
+  if (frontMatter.conclusion?.trim()) {
+    children.push(
+      new Paragraph({
+        text: "Conclusion",
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 240 },
+      }),
+      ...textToParagraphs(frontMatter.conclusion),
+      new Paragraph({ children: [new PageBreak()] })
+    );
+  }
+
+  if (frontMatter.aboutAuthor?.trim()) {
+    children.push(
+      new Paragraph({
+        text: "About the Author",
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 240 },
+      }),
+      ...textToParagraphs(frontMatter.aboutAuthor)
+    );
+  }
+
+  const doc = new DocxDocument({
+    sections: [
+      {
+        properties: { type: SectionType.CONTINUOUS },
+        children,
+      },
+    ],
+    styles: {
+      default: {
+        document: {
+          run: { font: "Times New Roman", size: 24 },
+        },
+      },
+    },
+  });
+
+  const buffer = await Packer.toBuffer(doc);
+  return buffer;
 }

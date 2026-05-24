@@ -8,7 +8,6 @@ import {
   newJobId,
 } from "@/lib/ebook-job-store";
 import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
-import { BOOK_TEMPLATES, BOOK_TEMPLATE_IDS, type BookTemplateId } from "@/lib/book-templates";
 import type {
   VoiceDNA,
   ContentMap,
@@ -49,7 +48,7 @@ const STAGE_LABELS: Record<PipelineStage, string> = {
   writing: "Writing sections…",
   polishing: "Polishing chapters…",
   frontmatter: "Writing front matter…",
-  exporting: "Generating PDF & EPUB…",
+  exporting: "Generating PDF, EPUB & Word…",
   complete: "Complete",
   failed: "Failed",
 };
@@ -652,7 +651,6 @@ function readTextFile(file: File): Promise<string> {
 
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // stores jobId (for IndexedDB)
 const JOB_STATE_KEY = "nexus_ebook_job_state";    // stores full state as JSON (primary)
-const MANIFEST_PERSIST_KEY = "nexus_ebook_manifest"; // stores final manifest including post-pipeline edits
 
 export function EbookPipeline({
   ebookManifest,
@@ -669,8 +667,7 @@ export function EbookPipeline({
   const [log, setLog] = useState<string[]>([]);
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
-  const [exportUrls, setExportUrls] = useState<{ pdfUrl?: string; epubUrl?: string } | null>(null);
-  const [selectedTemplate, setSelectedTemplate] = useState<BookTemplateId>("devotional");
+  const [exportUrls, setExportUrls] = useState<{ pdfUrl?: string; epubUrl?: string; docxUrl?: string } | null>(null);
   const [completedManifest, setCompletedManifest] = useState<EbookManifest | null>(null);
   const [reviewContext, setReviewContext] = useState<{ contentMap: ContentMap; frontMatter: FrontBackMatter } | null>(null);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
@@ -726,27 +723,6 @@ export function EbookPipeline({
     onManifestReady?.(normalized);
   }, [onManifestReady, recalculateManifestTotal]);
 
-  // Apply externally-provided manifest updates (e.g. from the AI assistant).
-  // Uses a ref guard so this only fires when the parent genuinely pushes a new value,
-  // not when onManifestReady causes the same object to round-trip back as a prop.
-  const externalManifestRef = useRef<EbookManifest | null>(null);
-  useEffect(() => {
-    if (!ebookManifest || ebookManifest === externalManifestRef.current) return;
-    externalManifestRef.current = ebookManifest;
-    // Only inject when the pipeline has already produced a completed manifest
-    setCompletedManifest((current) => current === null ? current : ebookManifest);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ebookManifest]);
-
-  // Sync chapters + word count from completedManifest on every change.
-  // This is the single source of truth for Chapter Card content and ensures
-  // AI assistant edits are immediately visible in the Review UI.
-  useEffect(() => {
-    if (!completedManifest) return;
-    setChapters(completedManifest.chapters);
-    setTotalWords(completedManifest.totalWordCount);
-  }, [completedManifest]);
-
   useEffect(() => {
   if (!ebookManifest && !completedManifest) {
     onPipelineSnapshotChange?.(null);
@@ -772,6 +748,17 @@ export function EbookPipeline({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ebookManifest, completedManifest, stage, progress.total, progress.completed, totalWords, reviewContext, qualityReport, error, onPipelineSnapshotChange]);
 
+  useEffect(() => {
+  if (!ebookManifest) return;
+  const normalized = recalculateManifestTotal(ebookManifest);
+  setCompletedManifest(normalized);
+  setChapters(normalized.chapters);
+  setTotalWords(normalized.totalWordCount);
+  setExportUrls(null);
+  setQualityReport(null);
+  setError(null);
+  }, [ebookManifest, recalculateManifestTotal]);
+
   const updateCompletedManifest = useCallback((updater: (current: EbookManifest) => EbookManifest) => {
     setCompletedManifest((current) => {
       if (!current) return current;
@@ -784,16 +771,6 @@ export function EbookPipeline({
       return next;
     });
   }, [onManifestReady, recalculateManifestTotal]);
-
-  // ── Persist completedManifest on every change ─────────────────────────────
-  // This covers all post-pipeline edits: Review UI textareas, AI assistant changes,
-  // and the final assembled manifest — so a page refresh restores the latest version.
-  useEffect(() => {
-    if (!completedManifest) return;
-    try {
-      localStorage.setItem(MANIFEST_PERSIST_KEY, JSON.stringify(completedManifest));
-    } catch { /* storage quota exceeded — fail silently */ }
-  }, [completedManifest]);
 
   const exportFinalBook = useCallback(async () => {
     if (!completedManifest || !reviewContext) return;
@@ -817,13 +794,13 @@ export function EbookPipeline({
         throw new Error(`Quality gate failed (${report.score}/100): ${critical.join(" | ") || "critical fidelity issues detected"}`);
       }
 
-      addLog("Generating PDF and EPUB files…");
-      const urls = await postJson<{ pdfUrl?: string; epubUrl?: string }>(
+      addLog("Generating PDF, EPUB, and Word doc…");
+      const urls = await postJson<{ pdfUrl?: string; epubUrl?: string; docxUrl?: string }>(
         "/api/ebook/export",
-        { manifest: exportManifest, formats: { pdf: true, epub: true }, template: selectedTemplate }
+        { manifest: exportManifest, formats: { pdf: true, epub: true, docx: true } }
       );
       setExportUrls(urls);
-      addLog(`✓ PDF ready: ${urls.pdfUrl ? "yes" : "no"} | EPUB ready: ${urls.epubUrl ? "yes" : "no"}`);
+      addLog(`✓ PDF: ${urls.pdfUrl ? "yes" : "no"} | EPUB: ${urls.epubUrl ? "yes" : "no"} | DOCX: ${urls.docxUrl ? "yes" : "no"}`);
       addLog(`🎉 Ebook complete — ${exportManifest.totalWordCount.toLocaleString()} words across ${exportManifest.chapters.length} chapters`);
     } catch (err) {
       const msg = err instanceof Error && err.message.trim() ? err.message : "Export failed";
@@ -834,7 +811,7 @@ export function EbookPipeline({
       setExportingBook(false);
       setStage("complete");
     }
-  }, [addLog, completedManifest, recalculateManifestTotal, reviewContext, selectedTemplate, syncCompletedManifest]);
+  }, [addLog, completedManifest, recalculateManifestTotal, reviewContext, syncCompletedManifest]);
 
   // ── Auto-download PDF when export completes ──────────────────────────────
   useEffect(() => {
@@ -999,10 +976,11 @@ export function EbookPipeline({
         const lastErr = (job.errorLog ?? []).findLast?.((e) => e.includes("✗"));
         setError(lastErr ? lastErr.replace(/.*✗ Error:\s*/, "") || "Pipeline failed" : "Pipeline failed — tap Resume to retry");
       }
-      if (job.exportUrls?.pdfUrl || job.exportUrls?.epubUrl) {
+      if (job.exportUrls?.pdfUrl || job.exportUrls?.epubUrl || job.exportUrls?.docxUrl) {
         setExportUrls({
           pdfUrl: job.exportUrls.pdfUrl || undefined,
           epubUrl: job.exportUrls.epubUrl || undefined,
+          docxUrl: job.exportUrls.docxUrl || undefined,
         });
       }
       if (job.status === "complete" && job.architecture && job.frontMatter && job.contentMap) {
@@ -1019,18 +997,6 @@ export function EbookPipeline({
         };
         setReviewContext({ contentMap: job.contentMap, frontMatter: job.frontMatter });
         syncCompletedManifest(manifest);
-        // If the user edited the manifest after the pipeline (via Review UI or AI assistant),
-        // prefer that saved version over the reconstructed one from raw job fields.
-        try {
-          const savedRaw = localStorage.getItem(MANIFEST_PERSIST_KEY);
-          if (savedRaw) {
-            const saved = JSON.parse(savedRaw) as EbookManifest;
-            // Only apply when the saved manifest belongs to this exact job run.
-            if (!saved.jobId || saved.jobId === job.jobId) {
-              syncCompletedManifest(saved);
-            }
-          }
-        } catch { /* malformed saved data — fall back to reconstructed manifest */ }
       }
       const words = (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0);
       if (words > 0) setTotalWords(words);
@@ -1359,12 +1325,11 @@ export function EbookPipeline({
         setProgress({ total: totalSections, completed: completedCount });
       }
 
-      for (const [sectionIdx, assignment] of assignments.entries()) {
+      for (const assignment of assignments) {
         const key = `${assignment.chapterNumber}-${assignment.sectionNumber}`;
         if (completedSectionKeys.has(key)) continue; // already done
 
-        const nextSectionHeading = assignments[sectionIdx + 1]?.heading;
-        const augmented: SectionAssignment = { ...assignment, previousSectionEnding: previousEnding, nextSectionHeading };
+        const augmented: SectionAssignment = { ...assignment, previousSectionEnding: previousEnding };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
         // Update section status to "writing"
@@ -1671,7 +1636,6 @@ export function EbookPipeline({
               autoDownloadedRef.current = false;
               localStorage.removeItem(JOB_STORAGE_KEY);
               localStorage.removeItem(JOB_STATE_KEY);
-              localStorage.removeItem(MANIFEST_PERSIST_KEY);
             }}
             className="text-xs text-slate-500 underline min-h-[44px] px-2"
           >
@@ -1682,35 +1646,6 @@ export function EbookPipeline({
 
         {completedManifest && reviewContext && (
           <div className="rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-4 shadow-panel space-y-4">
-            {/* Template Picker */}
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3">Book Layout Template</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {BOOK_TEMPLATE_IDS.map((id) => {
-                  const tmpl = BOOK_TEMPLATES[id];
-                  const active = selectedTemplate === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => setSelectedTemplate(id)}
-                      className={`min-h-[64px] text-left rounded-xl border px-3 py-2.5 transition-all active:scale-[0.98] ${
-                        active
-                          ? "border-cyan-500/60 bg-cyan-500/10 ring-1 ring-cyan-500/30"
-                          : "border-slate-700/50 bg-slate-800/50 hover:border-slate-600"
-                      }`}
-                    >
-                      <p className={`text-sm font-semibold leading-tight ${active ? "text-cyan-300" : "text-slate-200"}`}>{tmpl.name}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-400 leading-snug">{tmpl.badge}</p>
-                    </button>
-                  );
-                })}
-              </div>
-              {selectedTemplate && (
-                <p className="mt-2 text-xs text-slate-500 italic">{BOOK_TEMPLATES[selectedTemplate].description}</p>
-              )}
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Final Review</p>
@@ -1861,7 +1796,6 @@ export function EbookPipeline({
               autoDownloadedRef.current = false;
               localStorage.removeItem(JOB_STORAGE_KEY);
               localStorage.removeItem(JOB_STATE_KEY);
-              localStorage.removeItem(MANIFEST_PERSIST_KEY);
             }}
             className="text-xs text-slate-500 underline min-h-[44px] flex items-center"
           >
@@ -1906,6 +1840,20 @@ export function EbookPipeline({
                   <path d="M12 17V3M5 10l7 7 7-7M3 20h18" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
                 Download EPUB
+              </a>
+            )}
+            {exportUrls.docxUrl && (
+              <a
+                href={exportUrls.docxUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                download
+                className="flex-1 min-h-[52px] flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-sky-600 text-white font-semibold text-sm hover:opacity-90 active:scale-[0.98] transition-all"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+                  <path d="M12 17V3M5 10l7 7 7-7M3 20h18" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Download Word
               </a>
             )}
           </div>

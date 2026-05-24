@@ -139,18 +139,21 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      // Read SSE stream — the route sends keep-alive pings then one data event
+      // Read SSE stream — buffer all chunks then find the data: line.
+      // Parsing chunk-by-chunk causes "Unterminated string" when JSON spans chunks.
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
-      let json: { academy?: unknown; siteConfig?: unknown; summary?: string; error?: string } | null = null;
-      outer: while (true) {
+      let buffer = "";
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        for (const line of decoder.decode(value).split("\n")) {
-          if (line.startsWith("data: ")) {
-            json = JSON.parse(line.slice(6)) as typeof json;
-            break outer;
-          }
+        buffer += decoder.decode(value, { stream: true });
+      }
+      let json: { academy?: unknown; siteConfig?: unknown; summary?: string; error?: string } | null = null;
+      for (const line of buffer.split("\n")) {
+        if (line.startsWith("data: ")) {
+          json = JSON.parse(line.slice(6)) as typeof json;
+          break;
         }
       }
 

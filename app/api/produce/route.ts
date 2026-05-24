@@ -227,7 +227,7 @@ PER MODULE output:
 
 PER LESSON output:
 - description: 1 sentence stating the specific learning outcome for THIS lesson
-- notes: ${notesWordCount}. Core teaching content — use ONLY what the source says about this specific lesson topic. If the source covers this topic briefly, write briefly — do NOT pad to hit a word count.`
+- notes: ${notesWordCount}. Core teaching content — use ONLY what the source says about this specific lesson topic. If the source covers this topic briefly, write briefly — do NOT pad to hit a word count.
   Format (adapt section count to actual source depth — omit sections if the source doesn't support them):
   1. Opening paragraph (2–3 sentences): frame the lesson topic grounded in the source.
   2. "## [Section Title]" — core concept block: explain the main idea using specific language from the source. **bold** key terms where introduced.

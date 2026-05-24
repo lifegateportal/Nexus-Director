@@ -182,7 +182,7 @@ export const EbookJobStateSchema = z.object({
   sections: z.array(SectionDraftSchema).default([]),
   chapters: z.array(ChapterDraftSchema).default([]),
   frontMatter: FrontBackMatterSchema.nullable().default(null),
-  exportUrls: z.object({ pdfUrl: z.string(), epubUrl: z.string() }).nullable().default(null),
+  exportUrls: z.object({ pdfUrl: z.string(), epubUrl: z.string(), docxUrl: z.string() }).partial().nullable().default(null),
   currentStage: z.string().default(""),
   progress: z.object({ total: z.number(), completed: z.number() }).default({ total: 0, completed: 0 }),
   errorLog: z.array(z.string()).default([]),
@@ -228,7 +228,7 @@ export const FrontMatterRequestSchema = z.object({
 
 export const ExportRequestSchema = z.object({
   manifest: EbookManifestSchema,
-  formats: z.object({ pdf: z.boolean(), epub: z.boolean() }).default({ pdf: true, epub: true }),
+  formats: z.object({ pdf: z.boolean(), epub: z.boolean(), docx: z.boolean() }).default({ pdf: true, epub: true, docx: true }),
   template: z.enum(["classic-academic", "modern-business", "devotional", "popular-nonfiction", "premium-literary"]).default("devotional"),
 });
 

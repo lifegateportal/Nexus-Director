@@ -3,7 +3,7 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "@/lib/env";
 import { ExportRequestSchema } from "@/lib/schemas/ebook";
-import { generatePdfBuffer, generateEpubBuffer } from "@/lib/ebook-generator.tsx";
+import { generatePdfBuffer, generateEpubBuffer, generateDocxBuffer } from "@/lib/ebook-generator.tsx";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   const prefix = `ebooks/${Date.now()}-${slug}`;
 
   try {
-    const results: { pdfUrl?: string; epubUrl?: string } = {};
+    const results: { pdfUrl?: string; epubUrl?: string; docxUrl?: string } = {};
 
     // ── Generate PDF ──────────────────────────────────────────────────────────
     if (formats.pdf) {
@@ -38,6 +38,16 @@ export async function POST(req: NextRequest) {
     if (formats.epub) {
       const epubBuffer = await generateEpubBuffer(manifest);
       results.epubUrl = await uploadOrStream(epubBuffer, `${prefix}.epub`, "application/epub+zip");
+    }
+
+    // ── Generate DOCX ─────────────────────────────────────────────────────────
+    if (formats.docx) {
+      const docxBuffer = await generateDocxBuffer(manifest);
+      results.docxUrl = await uploadOrStream(
+        docxBuffer,
+        `${prefix}.docx`,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      );
     }
 
     return NextResponse.json(results, { status: 200 });
