@@ -31,6 +31,135 @@ type AssistantPanelProps = {
 
 const IDLE_HINT = "No content loaded yet. Run the pipeline first, then I can help you make changes.";
 
+// ── Audit report types (mirrored from /api/ebook/audit) ──────────────────────
+type AuditConceptDuplicate = {
+  type: string; title: string; description: string; severity: "minor" | "major";
+  locations: Array<{ location: string; excerpt: string }>;
+  recommendation: string;
+};
+type AuditSimilarPair = { locationA: string; locationB: string; similarity: number };
+type AuditRepetition = { phrase: string; count: number; reason: string | null; alternatives: string[] };
+type AuditOverusedWord = { word: string; count: number; frequency: string; alternatives: string[] };
+type BookAuditReport = {
+  conceptDuplicates: AuditConceptDuplicate[];
+  similarPairs: AuditSimilarPair[];
+  repetitions: AuditRepetition[];
+  overusedWords: AuditOverusedWord[];
+  totalConceptDuplicates: number;
+  totalSimilarPairs: number;
+  totalRepetitionPhrases: number;
+  totalOverusedWords: number;
+};
+
+// ── Intent detectors ─────────────────────────────────────────────────────────
+function isAuditIntent(text: string): boolean {
+  return /\b(audit|full[\s-]?audit|review\s+the\s+book|analyse|analyze|repetit|duplicat|overused\s+words?|similar\s+sections?|quality\s+check|book\s+report|what.{0,12}issues|flag\s+issues|check\s+(?:the\s+)?book|run\s+(?:a\s+)?(?:full\s+)?audit)\b/i.test(text);
+}
+
+function isViewIntent(text: string): boolean {
+  return /\b(show\s+(?:me\s+)?(?:the\s+)?(?:book|chapters?|contents?|toc|table\s+of\s+contents?|overview|summary)|view\s+(?:book|chapters?|contents?)|list\s+chapters?|how\s+many\s+chapters?|what.{0,10}chapters?)\b/i.test(text);
+}
+
+// ── Client-side book table of contents ───────────────────────────────────────
+function buildBookToc(manifest: EbookManifest): string {
+  const lines: string[] = [
+    `\u{1F4DA}  "${manifest.bookTitle}"`,
+    `    by ${manifest.authorName}`,
+    `    ${manifest.chapters.length} chapters \u00b7 ${manifest.totalWordCount.toLocaleString()} words`,
+    "",
+  ];
+  const fm = manifest.frontMatter;
+  const fmParts: Array<[string, string | null | undefined]> = [
+    ["Preface", fm.preface],
+    ["Introduction", fm.introduction],
+  ];
+  if (fmParts.some(([, t]) => (t ?? "").trim())) {
+    lines.push("FRONT MATTER");
+    for (const [label, text] of fmParts) {
+      if ((text ?? "").trim()) lines.push(`  ${label} (${text!.trim().split(/\s+/).length.toLocaleString()} words)`);
+    }
+    lines.push("");
+  }
+  lines.push("CHAPTERS");
+  for (const ch of manifest.chapters) {
+    lines.push(`  Chapter ${ch.number}: ${ch.title}  (${(ch.totalWordCount ?? 0).toLocaleString()} words)`);
+    for (const s of ch.sections) {
+      lines.push(`    ${ch.number}.${s.sectionNumber}  ${s.heading}  [${(s.wordCount ?? 0).toLocaleString()} w]`);
+    }
+  }
+  const backParts: Array<[string, string | null | undefined]> = [
+    ["Conclusion", fm.conclusion],
+    ["About the Author", fm.aboutAuthor],
+    ["Resources", fm.resourcesList],
+  ];
+  if (backParts.some(([, t]) => (t ?? "").trim())) {
+    lines.push("");
+    lines.push("BACK MATTER");
+    for (const [label, text] of backParts) {
+      if ((text ?? "").trim()) lines.push(`  ${label} (${text!.trim().split(/\s+/).length.toLocaleString()} words)`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// ── Audit report formatter ────────────────────────────────────────────────────
+function formatAuditReport(r: BookAuditReport): string {
+  const total = r.totalConceptDuplicates + r.totalSimilarPairs + r.totalRepetitionPhrases;
+  const lines: string[] = [
+    `\u{1F4CA}  BOOK AUDIT COMPLETE`,
+    `    ${total === 0 ? "No significant issues found." : [
+      r.totalConceptDuplicates > 0 && `${r.totalConceptDuplicates} concept duplicate${r.totalConceptDuplicates !== 1 ? "s" : ""}`,
+      r.totalSimilarPairs > 0 && `${r.totalSimilarPairs} similar pair${r.totalSimilarPairs !== 1 ? "s" : ""}`,
+      r.totalRepetitionPhrases > 0 && `${r.totalRepetitionPhrases} repeated phrase${r.totalRepetitionPhrases !== 1 ? "s" : ""}`,
+    ].filter(Boolean).join(", ") + " flagged."}`,
+    "",
+  ];
+  if (r.conceptDuplicates?.length > 0) {
+    lines.push(`\u{1F504}  CONCEPT DUPLICATES (${r.conceptDuplicates.length})`);
+    lines.push("─".repeat(46));
+    for (const d of r.conceptDuplicates) {
+      lines.push(`\u25B8 [${d.severity.toUpperCase()}] ${d.title}`);
+      for (const loc of d.locations) lines.push(`  \u2192 ${loc.location}`);
+      lines.push(`  Issue: ${d.description}`);
+      lines.push(`  Fix:   ${d.recommendation}`);
+      lines.push("");
+    }
+  }
+  if (r.similarPairs?.length > 0) {
+    lines.push(`\u{1F4CC}  STRUCTURALLY SIMILAR SECTIONS (${r.similarPairs.length})`);
+    lines.push("─".repeat(46));
+    for (const p of r.similarPairs.slice(0, 8)) {
+      lines.push(`  ${p.locationA}  \u2194  ${p.locationB}  (${Math.round(p.similarity * 100)}% similar)`);
+    }
+    lines.push("");
+  }
+  if (r.repetitions?.length > 0) {
+    lines.push(`\u{1F501}  REPEATED PHRASES (top ${Math.min(r.repetitions.length, 10)})`);
+    lines.push("─".repeat(46));
+    for (const rep of r.repetitions.slice(0, 10)) {
+      lines.push(`  "${rep.phrase}"  \u00d7${rep.count}`);
+      if (rep.reason) lines.push(`    \u2192 ${rep.reason}`);
+      if (rep.alternatives?.length) lines.push(`    Alt: ${rep.alternatives.join(", ")}`);
+    }
+    lines.push("");
+  }
+  if (r.overusedWords?.length > 0) {
+    lines.push(`\u{1F4DD}  OVERUSED WORDS (${r.overusedWords.length})`);
+    lines.push("─".repeat(46));
+    for (const w of r.overusedWords.slice(0, 8)) {
+      const alts = w.alternatives?.length ? `  \u2192  ${w.alternatives.join(", ")}` : "";
+      lines.push(`  "${w.word}"  ${w.count}\u00d7 (${w.frequency})${alts}`);
+    }
+    lines.push("");
+  }
+  if (total === 0) {
+    lines.push("\u2705  The book passed the audit with no significant flags.");
+  } else {
+    lines.push(`\u{1F4A1}  Fix issues by asking me: "Rewrite section 2.1" or "Fix repetition in chapter 3".`);
+  }
+  return lines.join("\n");
+}
+
 export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate, ebookManifest, onEbookUpdate, ebookPipelineSnapshot, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     { role: "system", content: IDLE_HINT },
@@ -104,11 +233,34 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
       return;
     }
 
+    // ── View book contents (client-side, no loading state) ──────────────────
+    if (ebookManifest && isViewIntent(text)) {
+      setMessages((prev) => [...prev,
+        { role: "user", content: text },
+        { role: "assistant", content: buildBookToc(ebookManifest) },
+      ]);
+      setInput("");
+      return;
+    }
+
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setInput("");
     setLoading(true);
 
     try {
+      // ── Book audit ─────────────────────────────────────────────────────────
+      if (ebookManifest && isAuditIntent(text)) {
+        const res = await fetch("/api/ebook/audit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ manifest: ebookManifest }),
+        });
+        const json = await res.json() as BookAuditReport & { error?: string };
+        if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+        setMessages((prev) => [...prev, { role: "assistant", content: formatAuditReport(json) }]);
+        return;
+      }
+
       // ── Route to ebook assistant when a book manifest is loaded ────────────
       if (ebookManifest && onEbookUpdate) {
         const res = await fetch("/api/ebook/assistant", {
@@ -235,7 +387,26 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         {/* Suggestion chips — ebook mode */}
         {ebookManifest && (
           <div className="flex-shrink-0 border-b border-slate-800 px-3 py-2.5">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Metadata</p>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Audit &amp; Review</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {([
+                ["Full audit", "Audit the book"],
+                ["View contents", "Show me the table of contents"],
+                ["Repetition check", "Check for concept duplicates and repeated content"],
+                ["Overused words", "Show overused words in the book"],
+                ["Similar sections", "Show structurally similar sections"],
+              ] as [string, string][]).map(([label, prompt]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => { setInput(prompt); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-emerald-800/60 bg-emerald-950/30 px-3 py-1.5 text-[11px] text-emerald-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Metadata</p>
             <div className="flex gap-1.5 overflow-x-auto pb-1">
               {[
                 "Change the book title",
@@ -286,6 +457,47 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
                   type="button"
                   onClick={() => { setInput(chip); inputRef.current?.focus(); }}
                   className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-amber-500/40 hover:text-amber-300"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Format &amp; Layout</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {[
+                "Format the entire book",
+                "Bold all key terms throughout",
+                "Make scripture passages block quotes",
+                "Use the devotional template",
+                "Use the premium literary template",
+                "Use the classic academic layout",
+                "Use the modern business style",
+                "Use the popular nonfiction layout",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-teal-500/40 hover:text-teal-300"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Structure</p>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {[
+                "Move section 1.2 to chapter 2",
+                "Reorder sections in chapter 1",
+                "Merge sections 2.1 and 2.2",
+                "Move chapter 1 to position 3",
+                "Split chapter 1 into two chapters",
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-purple-500/40 hover:text-purple-300"
                 >
                   {chip}
                 </button>
@@ -379,7 +591,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
                     ? "bg-cyan-500/20 text-cyan-100"
                     : msg.role === "system"
                     ? "bg-slate-800/60 text-slate-400 italic"
-                    : "bg-slate-800 text-slate-200"
+                    : "bg-slate-800 text-slate-200 whitespace-pre-wrap"
                 }`}
               >
                 {msg.content}
