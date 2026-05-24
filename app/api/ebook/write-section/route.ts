@@ -152,6 +152,10 @@ export async function POST(req: NextRequest) {
     ? `\nPREVIOUS SECTION ENDING (for prose continuity — do NOT repeat this):\n${assignment.previousSectionEnding}`
     : "";
 
+  const coveredBlock = (assignment.alreadyCoveredPoints ?? []).length > 0
+    ? `\nALREADY COVERED IN EARLIER SECTIONS — DO NOT RE-EXPLAIN OR RE-INTRODUCE THESE (assume the reader already understands them):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\nIf the transcript excerpt touches on one of these points, acknowledge it briefly and move on — do NOT develop it again as though it is new.`
+    : "";
+
   const nextSectionBlock = assignment.nextSectionHeading
     ? `\nFORWARD BRIDGE: Close this section with a sentence or short paragraph that creates natural narrative pull toward the next section: "${assignment.nextSectionHeading}". Do not name the next section directly or use meta-language like "in the next section." Build logical momentum that makes the reader want to continue.`
     : "";
@@ -170,6 +174,7 @@ KEY POINTS TO COVER (all from the transcript — include every one):
 ${assignment.keyPoints.map((kp) => `• ${kp}`).join("\n")}
 ${quoteBlock}
 ${continuityBlock}
+${coveredBlock}
 ${nextSectionBlock}
 ${hookBlock}
 

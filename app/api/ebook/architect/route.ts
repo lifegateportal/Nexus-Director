@@ -88,18 +88,29 @@ function normalizeArchitecture(
   input: z.infer<typeof ArchitectRequestSchema>,
 ) {
   const fallback = fallbackArchitecture(input);
+  const validIds = new Set(input.contentMap.segments.map((s) => s.id));
+
+  // Deduplicate segment IDs globally — each segment must feed exactly one section.
+  // First-come-first-served: whichever section claims a segment first keeps it.
+  const globalUsedSegIds = new Set<string>();
+
   const chapters = (minimal.chapters ?? [])
     .map((chapter, chapterIndex) => ({
       number: Math.max(1, Math.trunc(chapter.number || chapterIndex + 1)),
       title: (chapter.title || "").trim() || fallback.chapters[0].title,
       keyTheme: (chapter.keyTheme || "").trim() || fallback.chapters[0].keyTheme,
       sections: (chapter.sections ?? [])
-        .map((section, sectionIndex) => ({
-          sectionNumber: Math.max(1, Math.trunc(section.sectionNumber || sectionIndex + 1)),
-          heading: (section.heading || "").trim() || `Section ${sectionIndex + 1}`,
-          sourceSegmentIds: (section.sourceSegmentIds ?? []).filter((id) => id in Object.fromEntries(input.contentMap.segments.map((s) => [s.id, true]))),
-          targetWordCount: Math.max(0, Math.trunc(section.targetWordCount || 0)),
-        }))
+        .map((section, sectionIndex) => {
+          const uniqueIds = (section.sourceSegmentIds ?? [])
+            .filter((id) => validIds.has(id) && !globalUsedSegIds.has(id));
+          uniqueIds.forEach((id) => globalUsedSegIds.add(id));
+          return {
+            sectionNumber: Math.max(1, Math.trunc(section.sectionNumber || sectionIndex + 1)),
+            heading: (section.heading || "").trim() || `Section ${sectionIndex + 1}`,
+            sourceSegmentIds: uniqueIds,
+            targetWordCount: Math.max(0, Math.trunc(section.targetWordCount || 0)),
+          };
+        })
         .filter((section) => section.sourceSegmentIds.length > 0),
     }))
     .filter((chapter) => chapter.sections.length > 0);
@@ -164,6 +175,7 @@ This content is a sermon series. The author's preaching sequence IS the book's s
 
 # PIPELINE RULES — REQUIRED FOR OUTPUT VALIDITY
 - sourceSegmentIds MUST reference actual segment IDs from the provided segment list (e.g. "seg-1"). Never invent IDs.
+- SEGMENT UNIQUENESS — NON-NEGOTIABLE: Each segment ID must appear in EXACTLY ONE section across the entire book. Never assign the same segment ID to two or more sections or chapters. If two sections seem to need the same content, merge them into one section.
 - Each chapter must draw segments from only one sourceAudio. A single sourceAudio may produce multiple consecutive chapters if the content depth warrants it.
 - Each chapter: 3–5 sections; each section covers one focused teaching point.
 - targetWordCount per section = sum of that section's segments' estimatedWordCount.

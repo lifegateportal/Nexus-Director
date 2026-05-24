@@ -692,7 +692,15 @@ const TYPE_LABELS: Record<ConceptDuplicate["type"], string> = {
   passage: "Passage",
 };
 
-function AuditPanel({ report }: { report: AuditReport }) {
+function AuditPanel({
+  report,
+  onApplyToManuscript,
+  applyingAudit,
+}: {
+  report: AuditReport;
+  onApplyToManuscript?: (appliedKeys: string[]) => void;
+  applyingAudit?: boolean;
+}) {
   const [openConceptKey, setOpenConceptKey] = useState<string | null>(null);
   const [openPhraseKey, setOpenPhraseKey] = useState<string | null>(null);
   const [showPhrases, setShowPhrases] = useState(false);
@@ -767,6 +775,18 @@ function AuditPanel({ report }: { report: AuditReport }) {
           <button type="button" onClick={applyAll}
             className="ml-auto min-h-[36px] px-4 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
             ✓ Apply All
+          </button>
+        )}
+        {applied.size > 0 && onApplyToManuscript && (
+          <button
+            type="button"
+            onClick={() => onApplyToManuscript(Array.from(applied))}
+            disabled={applyingAudit}
+            className="min-h-[36px] px-4 rounded-lg text-[11px] font-semibold bg-violet-500/20 border border-violet-500/40 text-violet-200 active:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {applyingAudit
+              ? "Rewriting chapters…"
+              : `Rewrite Manuscript (${applied.size} fix${applied.size !== 1 ? "es" : ""})`}
           </button>
         )}
       </div>
@@ -1080,6 +1100,7 @@ export function EbookPipeline({
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [auditReport, setAuditReport] = useState<AuditReport | null>(null);
   const [auditRunning, setAuditRunning] = useState(false);
+  const [applyingAudit, setApplyingAudit] = useState(false);
   const [exportingBook, setExportingBook] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signalFilterState, setSignalFilterState] = useState<SignalFilterState>("idle");
@@ -1236,6 +1257,25 @@ export function EbookPipeline({
       setAuditRunning(false);
     }
   }, [addLog, completedManifest]);
+
+  // ── Apply audit findings to manuscript ───────────────────────────────────
+  const applyAuditToManuscript = useCallback(async (appliedKeys: string[]) => {
+    if (!completedManifest || !auditReport) return;
+    setApplyingAudit(true);
+    addLog(`→ Rewriting chapters to apply ${appliedKeys.length} audit fix(es)…`);
+    try {
+      const result = await postJson<{ chapters: EbookManifest["chapters"] }>(
+        "/api/ebook/apply-audit",
+        { manifest: completedManifest, report: auditReport, appliedKeys },
+      );
+      updateCompletedManifest((current) => ({ ...current, chapters: result.chapters }));
+      addLog(`✓ Manuscript rewritten — ${result.chapters.length} chapter(s) updated`);
+    } catch (err) {
+      addLog(`✗ Apply audit error: ${err instanceof Error ? err.message : "Rewrite failed"}`);
+    } finally {
+      setApplyingAudit(false);
+    }
+  }, [addLog, auditReport, completedManifest, updateCompletedManifest]);
 
   // ── Auto-download PDF when export completes ──────────────────────────────
   useEffect(() => {
@@ -1744,6 +1784,13 @@ export function EbookPipeline({
       let previousEnding = allSections.length > 0
         ? (allSections[allSections.length - 1].body ?? "").split("\n\n").slice(-2).join("\n\n")
         : "";
+
+      // Accumulate key points from already-completed sections so the writer
+      // knows what's already been covered and won't repeat those concepts.
+      const coveredKeyPoints: string[] = assignments
+        .filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
+        .flatMap((a) => a.keyPoints ?? []);
+
       if (completedCount > 0) {
         addLog(`↩ Resuming — ${completedCount} sections already written, continuing from section ${completedCount + 1}`);
         setProgress({ total: totalSections, completed: completedCount });
@@ -1753,7 +1800,11 @@ export function EbookPipeline({
         const key = `${assignment.chapterNumber}-${assignment.sectionNumber}`;
         if (completedSectionKeys.has(key)) continue; // already done
 
-        const augmented: SectionAssignment = { ...assignment, previousSectionEnding: previousEnding };
+        const augmented: SectionAssignment = {
+          ...assignment,
+          previousSectionEnding: previousEnding,
+          alreadyCoveredPoints: [...coveredKeyPoints],
+        };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
         // Update section status to "writing"
@@ -1792,6 +1843,8 @@ export function EbookPipeline({
         allSections.push(draft);
         completedCount++;
         previousEnding = (body ?? "").split("\n\n").slice(-2).join("\n\n");
+        // Track what this section covered so subsequent sections don't repeat it
+        coveredKeyPoints.push(...(assignment.keyPoints ?? []));
 
         // Update UI
         setChapters((prev) =>
@@ -2079,7 +2132,7 @@ export function EbookPipeline({
                 <button
                   type="button"
                   onClick={() => void runAudit()}
-                  disabled={auditRunning || exportingBook}
+                  disabled={auditRunning || exportingBook || applyingAudit}
                   className="min-h-[48px] rounded-xl border border-amber-400/30 bg-amber-400/8 px-4 py-2.5 text-sm font-semibold text-amber-200 transition-all hover:bg-amber-400/15 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {auditRunning ? "Auditing…" : "Audit Book"}
@@ -2087,7 +2140,7 @@ export function EbookPipeline({
                 <button
                   type="button"
                   onClick={() => void exportFinalBook()}
-                  disabled={exportingBook || auditRunning}
+                  disabled={exportingBook || auditRunning || applyingAudit}
                   className="min-h-[48px] rounded-xl bg-gradient-to-r from-cyan-500 to-violet-500 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {exportingBook ? "Exporting…" : "Export Final Book"}
@@ -2190,7 +2243,13 @@ export function EbookPipeline({
                     </button>
                   )}
                 </div>
-                {auditReport && <AuditPanel report={auditReport} />}
+                {auditReport && (
+                  <AuditPanel
+                    report={auditReport}
+                    onApplyToManuscript={(keys) => void applyAuditToManuscript(keys)}
+                    applyingAudit={applyingAudit}
+                  />
+                )}
               </div>
             )}
           </div>
