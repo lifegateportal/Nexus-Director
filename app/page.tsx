@@ -184,89 +184,84 @@ export default function HomePage() {
     }
   }, []);
 
-  const handleBlueprint = useCallback(async (ingestResult: IngestResult, sourceText = "") => {
-    // Reset any previous run's downstream results
-    setLogicResult(null);
-    setUiResult(null);
-    setAcademyResult(null);
-    setBlueprint(ingestResult);
-    setRawTranscript(sourceText);
-    setActiveNav("analyse");
-
-    addLog({
-      level: "success",
-      message: `Blueprint ready — ${ingestResult.workflow.length} step${ingestResult.workflow.length !== 1 ? "s" : ""}, ${ingestResult.assets.length} asset${ingestResult.assets.length !== 1 ? "s" : ""}`,
-    });
-
-    if (ingestResult.assets.length === 0 || ingestResult.workflow.length === 0) {
-      addLog({ level: "warn", message: "Blueprint has no assets or workflow — skipping logic + design stages" });
-      handleStageChange("done");
-      return;
-    }
-
-    // ── Stage 2: DeepSeek Engineer → execution logic graph ──────────────
-    handleStageChange("reasoning");
-    addLog({ level: "info", message: "Blueprint dispatched to Engineer — building execution graph…", model: "deepseek" });
-
+  // ── Shared stages 2-4 runner ──────────────────────────────────────────────
+  // Pass existing results to skip completed stages (used by resume).
+  const runDownstream = useCallback(async (
+    ingestResult: IngestResult,
+    sourceText: string,
+    existingLogic: LogicTransformResult | null,
+    existingUi: UiManifestResult | null,
+  ) => {
     try {
-      const logicRes = await fetch("/api/generate-logic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          objective: `${ingestResult.title}: ${ingestResult.summary}`,
-          constraints: [],
-          blueprint: { ...ingestResult, createdAtIso: new Date().toISOString() }
-        })
-      });
+      let logicData = existingLogic;
+      let uiData = existingUi;
 
-      if (!logicRes.ok) {
-        const e = await logicRes.json().catch(() => ({ error: `HTTP ${logicRes.status}` })) as { error?: string; detail?: string };
-        throw new Error(e.detail ?? e.error ?? `Logic stage: HTTP ${logicRes.status}`);
+      // ── Stage 2: DeepSeek Engineer → execution logic graph ────────────
+      if (!logicData) {
+        handleStageChange("reasoning");
+        addLog({ level: "info", message: "Blueprint dispatched to Engineer — building execution graph…", model: "deepseek" });
+
+        const logicRes = await fetch("/api/generate-logic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            objective: `${ingestResult.title}: ${ingestResult.summary}`,
+            constraints: [],
+            blueprint: { ...ingestResult, createdAtIso: new Date().toISOString() }
+          })
+        });
+        if (!logicRes.ok) {
+          const e = await logicRes.json().catch(() => ({ error: `HTTP ${logicRes.status}` })) as { error?: string; detail?: string };
+          throw new Error(e.detail ?? e.error ?? `Logic stage: HTTP ${logicRes.status}`);
+        }
+        logicData = LogicTransformResultSchema.parse(await logicRes.json() as unknown);
+        setLogicResult(logicData);
+        setActiveNav("architect");
+        addLog({
+          level: "success",
+          message: `Execution graph ready — ${logicData.executionPlan.length} step${logicData.executionPlan.length !== 1 ? "s" : ""} planned`,
+          model: "deepseek"
+        });
+      } else {
+        addLog({ level: "info", message: "Execution graph already complete — skipping Stage 2" });
       }
 
-      const logicData = LogicTransformResultSchema.parse(await logicRes.json() as unknown);
-      setLogicResult(logicData);
-      setActiveNav("architect");
-      addLog({
-        level: "success",
-        message: `Execution graph ready — ${logicData.executionPlan.length} step${logicData.executionPlan.length !== 1 ? "s" : ""} planned`,
-        model: "deepseek"
-      });
+      // ── Stage 3: Claude Designer → UI manifest ────────────────────────
+      if (!uiData) {
+        handleStageChange("generating");
+        addLog({ level: "info", message: "Execution plan dispatched to Designer — synthesising UI manifest…", model: "claude" });
 
-      // ── Stage 3: Claude Designer → UI manifest ───────────────────────
-      handleStageChange("generating");
-      addLog({ level: "info", message: "Execution plan dispatched to Designer — synthesising UI manifest…", model: "claude" });
-
-      const uiRes = await fetch("/api/generate-ui", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          objective: `${ingestResult.title}: ${ingestResult.summary}`,
-          domain: "Digital Product Academy",
-          constraints: [
-            "iPad Safari safe — dvh units only",
-            "Dark mode only",
-            "48px minimum touch targets",
-            "No hover-only interactions"
-          ]
-        })
-      });
-
-      if (!uiRes.ok) {
-        const e = await uiRes.json().catch(() => ({ error: `HTTP ${uiRes.status}` })) as { error?: string; detail?: string };
-        throw new Error(e.detail ?? e.error ?? `UI stage: HTTP ${uiRes.status}`);
+        const uiRes = await fetch("/api/generate-ui", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            objective: `${ingestResult.title}: ${ingestResult.summary}`,
+            domain: "Digital Product Academy",
+            constraints: [
+              "iPad Safari safe — dvh units only",
+              "Dark mode only",
+              "48px minimum touch targets",
+              "No hover-only interactions"
+            ]
+          })
+        });
+        if (!uiRes.ok) {
+          const e = await uiRes.json().catch(() => ({ error: `HTTP ${uiRes.status}` })) as { error?: string; detail?: string };
+          throw new Error(e.detail ?? e.error ?? `UI stage: HTTP ${uiRes.status}`);
+        }
+        uiData = UiManifestResultSchema.parse(await uiRes.json() as unknown);
+        setUiResult(uiData);
+        setActiveNav("design");
+        addLog({
+          level: "success",
+          message: `UI manifest complete — ${uiData.components.length} component${uiData.components.length !== 1 ? "s" : ""}  ·  ${uiData.interactions.length} interaction pattern${uiData.interactions.length !== 1 ? "s" : ""}`,
+          model: "claude"
+        });
+      } else {
+        addLog({ level: "info", message: "UI manifest already complete — skipping Stage 3" });
       }
 
-      const uiData = UiManifestResultSchema.parse(await uiRes.json() as unknown);
-      setUiResult(uiData);
-      setActiveNav("design");
-      addLog({
-        level: "success",
-        message: `UI manifest complete — ${uiData.components.length} component${uiData.components.length !== 1 ? "s" : ""}  ·  ${uiData.interactions.length} interaction pattern${uiData.interactions.length !== 1 ? "s" : ""}`,
-        model: "claude"
-      });
-
-      // ── Stage 4: DeepSeek Curator → academy package ────────────────
+      // ── Stage 4: DeepSeek Curator → academy package ───────────────────
       handleStageChange("producing");
       addLog({ level: "info", message: "UI spec dispatched to Curator — packaging full academy…", model: "curator" });
 
@@ -291,11 +286,6 @@ export default function HomePage() {
         throw new Error(e.detail ?? e.error ?? `Produce stage: HTTP ${produceRes.status}`);
       }
 
-      // Read SSE stream — route sends ": ping\n\n" comments to keep alive,
-      // then one "data: {...}\n\n" with the final result.
-      // IMPORTANT: the academy JSON can be 15–20 KB, so it arrives split
-      // across multiple TCP chunks. We must buffer until we see a full SSE
-      // event (terminated by "\n\n") before trying JSON.parse.
       const reader = produceRes.body.getReader();
       const decoder = new TextDecoder();
       let academyRaw: unknown = null;
@@ -304,9 +294,7 @@ export default function HomePage() {
         const { done, value } = await reader.read();
         if (done) break;
         sseBuffer += decoder.decode(value, { stream: true });
-        // Split on SSE event boundaries (blank line between events)
         const events = sseBuffer.split("\n\n");
-        // Last element is an incomplete event — keep it in the buffer
         sseBuffer = events.pop() ?? "";
         for (const event of events) {
           for (const line of event.split("\n")) {
@@ -322,20 +310,50 @@ export default function HomePage() {
       if (!academyRaw) throw new Error("Produce stage: empty response from server");
       const academyData = AcademyPackageSchema.parse(academyRaw);
       setAcademyResult(academyData);
+      localStorage.setItem("nexus_academy_preview", JSON.stringify(academyData));
       setActiveNav("produce");
       addLog({
         level: "success",
         message: `Academy package ready — ${academyData.curriculum.length} module${academyData.curriculum.length !== 1 ? "s" : ""}, ${academyData.pricing.length} pricing tiers`,
         model: "curator"
       });
-
       handleStageChange("done");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Pipeline error";
       addLog({ level: "error", message: msg });
       handleStageChange("error");
     }
-  }, [addLog, handleStageChange]);
+  }, [deliveryInstructions, addLog, handleStageChange]);
+
+  const handleBlueprint = useCallback(async (ingestResult: IngestResult, sourceText = "") => {
+    setLogicResult(null);
+    setUiResult(null);
+    setAcademyResult(null);
+    setBlueprint(ingestResult);
+    setRawTranscript(sourceText);
+    setActiveNav("analyse");
+
+    addLog({
+      level: "success",
+      message: `Blueprint ready — ${ingestResult.workflow.length} step${ingestResult.workflow.length !== 1 ? "s" : ""}, ${ingestResult.assets.length} asset${ingestResult.assets.length !== 1 ? "s" : ""}`,
+    });
+
+    if (ingestResult.assets.length === 0 || ingestResult.workflow.length === 0) {
+      addLog({ level: "warn", message: "Blueprint has no assets or workflow — skipping logic + design stages" });
+      handleStageChange("done");
+      return;
+    }
+
+    await runDownstream(ingestResult, sourceText, null, null);
+  }, [addLog, handleStageChange, runDownstream]);
+
+  // Resume from the first incomplete stage using whatever is already in state
+  const handleResume = useCallback(async () => {
+    if (!blueprint) return;
+    const resumeStage = !logicResult ? 2 : !uiResult ? 3 : 4;
+    addLog({ level: "info", message: `Resuming pipeline from Stage ${resumeStage}…` });
+    await runDownstream(blueprint, rawTranscript, logicResult, uiResult);
+  }, [blueprint, rawTranscript, logicResult, uiResult, runDownstream, addLog]);
 
   // Map left-nav items to the PipelineResults tab they drive
   const NAV_TAB: Record<string, "blueprint" | "logic" | "ui" | "academy" | null> = {
@@ -432,6 +450,17 @@ export default function HomePage() {
                           <p className={stage === "done" ? "text-emerald-400" : stage === "error" ? "text-red-400" : "text-slate-400"}>
                             {stage === "done" ? "Build complete — ready to deploy" : stage === "error" ? "Pipeline error" : stage === "idle" ? "Standing by" : "Pipeline running…"}
                           </p>
+                          {stage === "error" && blueprint && (
+                            <button
+                              onClick={() => { void handleResume(); }}
+                              className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-amber-500/20 border border-amber-500/40 px-4 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/30 active:scale-95"
+                            >
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 flex-shrink-0">
+                                <path d="M12 5v14M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              Continue from {!logicResult ? "Stage 2 — Logic" : !uiResult ? "Stage 3 — Design" : "Stage 4 — Produce"}
+                            </button>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -467,12 +496,25 @@ export default function HomePage() {
               {/* Right column — full width mobile (stacked), 2/5 desktop (grid-rows-2) */}
               <div className="flex flex-col gap-3 lg:col-span-2 lg:grid lg:min-h-0 lg:grid-rows-2">
                 {blueprint !== null ? (
-                  <PipelineResults
-                    blueprint={blueprint}
-                    logic={logicResult}
-                    ui={uiResult}
-                    academy={academyResult}
-                  />
+                  <>
+                    <PipelineResults
+                      blueprint={blueprint}
+                      logic={logicResult}
+                      ui={uiResult}
+                      academy={academyResult}
+                    />
+                    {stage === "error" && (
+                      <button
+                        onClick={() => { void handleResume(); }}
+                        className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-amber-500/20 border border-amber-500/40 px-4 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/30 active:scale-95"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 flex-shrink-0">
+                          <path d="M12 5v14M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        Continue from {!logicResult ? "Stage 2 — Logic" : !uiResult ? "Stage 3 — Design" : "Stage 4 — Produce"}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <ProjectCard
                     title="Mission Control"
@@ -485,7 +527,7 @@ export default function HomePage() {
                       { label: "Viewport",  value: "iPad-safe"       }
                     ]}
                   />
-                )}
+                  )}
 
                 <MediaUpload
                   onLog={addLog}
