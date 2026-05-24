@@ -152,9 +152,9 @@ export async function POST(req: NextRequest) {
     ? `\nPREVIOUS SECTION ENDING (for prose continuity — do NOT repeat this):\n${assignment.previousSectionEnding}`
     : "";
 
-  const coveredBlock = (assignment.alreadyCoveredPoints ?? []).length > 0
-    ? `\nALREADY COVERED IN EARLIER SECTIONS — DO NOT RE-EXPLAIN OR RE-INTRODUCE THESE (assume the reader already understands them):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\nIf the transcript excerpt touches on one of these points, acknowledge it briefly and move on — do NOT develop it again as though it is new.`
-    : "";
+  // coveredBlock is intentionally empty here — the dedup constraint is injected into
+  // the system prompt (deduplicatedSystem, below) where it carries maximum LLM weight.
+  const coveredBlock = "";
 
   const nextSectionBlock = assignment.nextSectionHeading
     ? `\nFORWARD BRIDGE: Close this section with a sentence or short paragraph that creates natural narrative pull toward the next section: "${assignment.nextSectionHeading}". Do not name the next section directly or use meta-language like "in the next section." Build logical momentum that makes the reader want to continue.`
@@ -177,9 +177,6 @@ ${continuityBlock}
 ${coveredBlock}
 ${nextSectionBlock}
 ${hookBlock}
-
-AUTHOR VOICE DNA:
-${JSON.stringify(assignment.voiceDNA, null, 2)}
 
 TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
@@ -207,11 +204,15 @@ Now write the section prose:`;
 
   try {
     let paragraphPlan: z.infer<typeof PlanSchema>["paragraphPlan"] = [];
+    const plannerDedup = (assignment.alreadyCoveredPoints ?? []).length > 0
+      ? `\n\n════════════════════════════════════════════\nALREADY COVERED — DO NOT PLAN THESE\n════════════════════════════════════════════\nThe following ideas, stories, and claims have already been written in earlier sections. Do NOT plan any paragraph that covers, references, or re-introduces them:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+      : "";
+
     try {
       const { object: plan } = await generateObject({
         model: deepSeekModel,
         schema: PlanSchema,
-        mode: "tool",
+        mode: "json",
         temperature: 0.15,
         system: `You are a structural editor planning the paragraph-level architecture for a single book section.
 
@@ -220,24 +221,35 @@ BESTSELLER ARC — apply within this section where the content supports it:
 - CONTEXT: Establish why this matters (drawn only from what the speaker said)
 - MECHANISM: Develop the core argument or framework the speaker presented
 - APPLICATION: Close with how the reader applies or internalizes this
-
+${plannerDedup}
 Each paragraph in your plan must have a clear narrative purpose and be supported by specific transcript excerpt numbers. Do not plan paragraphs with no excerpt support.
 
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}`,
-        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n\nEXCERPTS:\n${excerptBlock}`,
+        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
       });
       paragraphPlan = plan.paragraphPlan ?? [];
     } catch {
       paragraphPlan = [];
     }
 
+    // Build a per-request system prompt: Voice DNA at the top (system-level weight),
+    // then the dedup prohibition block if any points have already been covered.
+    const voiceDnaBlock = assignment.voiceDNA
+      ? `\n\n════════════════════════════════════════════\nAUTHOR VOICE DNA — ENFORCE IN EVERY SENTENCE\n════════════════════════════════════════════\nThis is the speaker's unique voice fingerprint. Every sentence you write MUST reflect these patterns:\n${JSON.stringify(assignment.voiceDNA, null, 2)}`
+      : "";
+
+    const deduplicatedSystem =
+      (assignment.alreadyCoveredPoints ?? []).length > 0
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — ABSOLUTE PROHIBITION\n════════════════════════════════════════════\nThe following ideas, claims, opening sentences, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST NOT re-introduce, re-explain, re-state, or re-develop ANY of them — even with different wording. If a transcript excerpt references these, acknowledge with at most one transitional phrase and move immediately to new material. Do not give them a paragraph, example, story, or dedicated treatment:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}`;
+
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: SectionBodySchema,
-      mode: "tool",
+      mode: "json",
       temperature: 0.25,
-      system: EDITORIAL_SYSTEM,
+      system: deduplicatedSystem,
       prompt: `${prompt}\n\nPARAGRAPH PLAN (must follow if provided):\n${JSON.stringify(paragraphPlan)}`,
     });
     const body = stripAudienceLanguage(normalizeReaderFacingProse((object.body ?? "").trim()) || fallbackSectionBody(assignment));

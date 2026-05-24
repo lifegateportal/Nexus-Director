@@ -8,6 +8,8 @@ import {
   newJobId,
 } from "@/lib/ebook-job-store";
 import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
+import { BOOK_TEMPLATES, BOOK_TEMPLATE_IDS } from "@/lib/book-templates";
+import type { BookTemplateId } from "@/lib/book-templates";
 import type {
   VoiceDNA,
   ContentMap,
@@ -133,9 +135,9 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
   throw new Error(`Request failed after retries: ${route}`);
 }
 
-async function streamSection(assignment: SectionAssignment): Promise<string> {
-  const result = await postJson<{ body: string }>("/api/ebook/write-section", { assignment });
-  return (result.body ?? "").trim();
+async function streamSection(assignment: SectionAssignment): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }> }> {
+  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }> }>("/api/ebook/write-section", { assignment });
+  return { body: (result.body ?? "").trim(), claimLedger: result.claimLedger ?? [] };
 }
 
 function countWords(text: string): number {
@@ -1227,7 +1229,11 @@ export function EbookPipeline({
       addLog("Generating PDF, EPUB, and Word doc…");
       const urls = await postJson<{ pdfUrl?: string; epubUrl?: string; docxUrl?: string }>(
         "/api/ebook/export",
-        { manifest: exportManifest, formats: { pdf: true, epub: true, docx: true } }
+        {
+          manifest: exportManifest,
+          formats: { pdf: true, epub: true, docx: true },
+          template: exportManifest.selectedTemplate ?? "devotional",
+        }
       );
       setExportUrls(urls);
       addLog(`✓ PDF: ${urls.pdfUrl ? "yes" : "no"} | EPUB: ${urls.epubUrl ? "yes" : "no"} | DOCX: ${urls.docxUrl ? "yes" : "no"}`);
@@ -1821,14 +1827,14 @@ export function EbookPipeline({
           )
         );
 
-        let body = await streamSection(augmented);
+        let { body, claimLedger } = await streamSection(augmented);
 
         // Quality gate: retry once if too short
         const wc = countWords(body);
         if (wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
           addLog(`  ↺ Section too short (${wc} words) — retrying with expansion prompt…`);
           const expanded = { ...augmented, targetWordCount: Math.max(assignment.targetWordCount, 600) };
-          body = await streamSection(expanded);
+          ({ body, claimLedger } = await streamSection(expanded));
         }
 
         const finalWc = countWords(body);
@@ -1843,8 +1849,19 @@ export function EbookPipeline({
         allSections.push(draft);
         completedCount++;
         previousEnding = (body ?? "").split("\n\n").slice(-2).join("\n\n");
-        // Track what this section covered so subsequent sections don't repeat it
-        coveredKeyPoints.push(...(assignment.keyPoints ?? []));
+
+        // Permanent dedup: accumulate the first sentence of EVERY paragraph (not just
+        // the first 3) so middle-of-chapter stories and illustrations are also registered
+        // as covered territory — preventing the same anecdote appearing in later sections.
+        const allParagraphTopics = (body ?? "")
+          .split(/\n{2,}/)
+          .map((p) => p.replace(/^[>\s#*\-]+/, "").split(/(?<=[.!?])\s+/)[0]?.trim())
+          .filter((s): s is string => Boolean(s) && s.length > 20);
+        coveredKeyPoints.push(
+          ...(assignment.keyPoints ?? []),
+          ...(claimLedger ?? []).map((c) => c.claim).filter(Boolean),
+          ...allParagraphTopics,
+        );
 
         // Update UI
         setChapters((prev) =>
@@ -2129,6 +2146,20 @@ export function EbookPipeline({
                 <p className="mt-1 text-sm text-slate-300">Edit chapter by chapter, then export the finished book when ready.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {/* Template picker */}
+                <select
+                  value={completedManifest?.selectedTemplate ?? "devotional"}
+                  onChange={(e) => {
+                    const id = e.target.value as BookTemplateId;
+                    updateCompletedManifest((cur) => ({ ...cur, selectedTemplate: id }));
+                  }}
+                  className="min-h-[48px] rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+                  aria-label="Book layout template"
+                >
+                  {BOOK_TEMPLATE_IDS.map((id) => (
+                    <option key={id} value={id}>{BOOK_TEMPLATES[id].name}</option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => void runAudit()}
