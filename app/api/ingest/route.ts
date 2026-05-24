@@ -10,21 +10,30 @@ export async function POST(request: NextRequest) {
     const json = await request.json();
     const input = IngestInputSchema.parse(json);
 
+    // Trim source — blueprint extraction only needs a representative sample.
+    // Sending the full transcript wastes tokens and slows the response.
+    const sourceSample = input.sourceText.length > 10_000
+      ? input.sourceText.slice(0, 5_000) + "\n\n[…]\n\n" + input.sourceText.slice(-3_000)
+      : input.sourceText;
+
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: IngestResultSchema,
+      schemaName: "IngestResult",
+      schemaDescription: "Structured blueprint extracted from source content",
       mode: "json",
-      temperature: 0.2,
+      maxTokens: 1_000,
+      temperature: 0.1,
       system:
-        "You are the Nexus Director Analyst. Given raw media transcripts, workshop recordings, podcast streams, or content archives, extract a structured blueprint: map course chapters, identify key semantic segments, categorise all assets by type, and define the workflow steps needed to build a premium digital product.",
+        "You are the Nexus Director Analyst. Extract a concise structured blueprint from the source. Be brief — every field should be the shortest accurate value. Do not pad or invent.",
       prompt: [
-        "Analyse the source content and extract a structured blueprint.",
-        "- Identify logical chapters or modules as workflow steps with clear labels and intent.",
-        "- Categorise all referenced media assets by type (video, audio, document, log).",
-        "- Flag content gaps, quality issues, or production risks.",
+        "Extract a structured blueprint from this source. Be concise.",
+        "- workflow: 2–4 steps max, each with a clear label and intent.",
+        "- assets: list only assets explicitly mentioned in the source.",
+        "- riskFlags: 1–2 flags only if there are genuine gaps.",
         "- Return only data that validates against the schema.",
         `Locale: ${input.locale}`,
-        `Source: ${input.sourceText}`
+        `Source: ${sourceSample}`
       ].join("\n")
     });
 

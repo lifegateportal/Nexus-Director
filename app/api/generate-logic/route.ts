@@ -16,10 +16,13 @@ export async function POST(request: NextRequest) {
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: LogicTransformResultSchema,
+      schemaName: "LogicTransformResult",
+      schemaDescription: "Execution logic graph derived from the blueprint",
       mode: "json",
+      maxTokens: 1_500,
       temperature: 0.1,
       system:
-        "You are the Nexus Director structural reasoning engine. Return deterministic, architecture-first outputs that honor constraints and preserve referential integrity.",
+        "You are the Nexus Director structural reasoning engine. Return deterministic, architecture-first outputs that honor constraints and preserve referential integrity. Be concise — do not pad fields.",
       prompt: [
         "Transform the workspace blueprint into a strict execution logic graph.",
         "- Preserve all workflow dependencies.",

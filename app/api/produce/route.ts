@@ -101,6 +101,8 @@ export async function POST(req: NextRequest) {
           const { object: map } = await generateObject({
             model: deepSeekModel,
             schema: ContentMapSchema,
+            schemaName: "ContentMap",
+            schemaDescription: "Distinct major themes found in the source material",
             mode: "json",
             maxTokens: 1_200,
             temperature: 0.1,
@@ -136,6 +138,8 @@ RULES — non-negotiable:
         const { object: shell } = await generateObject({
           model: deepSeekModel,
           schema: AcademyShellSchema,
+          schemaName: "AcademyShell",
+          schemaDescription: "Academy structure with landing page, pricing, SEO, and lesson outlines — no lesson content",
           mode: "json",
           maxTokens: 6_000,
           temperature: 0.3,
@@ -174,63 +178,48 @@ CURRICULUM: moduleTitle, moduleDescription (1–2 sentences), lessonOutlines (ma
 SEO: title (50–60 chars), description (140–155 chars), keywords (6–8)
 onboardingSteps: 3–4 steps
 
-GROUNDING — non-negotiable:
-- Every module and lesson title must reflect actual content from the source material or the content map below
-- Do NOT invent topics absent from the source`,
+GROUNDING — absolute hard rules:
+- Every module title, lesson title, tagline, headline, and feature bullet must be drawn DIRECTLY from the source material or content map below
+- Do NOT introduce ANY concept, example, framework, statistic, or claim that does not appear in the source
+- If the source does not contain enough material for a field, use a shorter or vaguer value — never pad with invented content
+- Paraphrase only to improve readability; never expand beyond what the speaker/author actually said`,
           prompt: basePrompt + contentMapSection + phase1SourceSection + deliverySection,
         });
 
-        // ── Phase 2: ALL module + lesson content in a SINGLE call ─────────────
-        // One context window = one consistent voice, zero repetition.
-        // The model sees the complete curriculum outline and all theme passages
-        // simultaneously, so it naturally writes distinct content per lesson.
-        const AllModulesContentSchema = z.object({
-          modules: z.array(z.object({
-            moduleIndex:        z.number().int().min(0),
-            learningObjectives: z.array(z.string()).min(1).max(5),
-            keyTerms: z.array(z.object({
-              term:       z.string(),
-              definition: z.string(),
-            })).min(1).max(6),
-            lessons: z.array(z.object({
-              lessonIndex:  z.number().int().min(0),
-              description:  z.string(),
-              notes:        z.string(),
-              keyTakeaways: z.array(z.string()).min(1).max(7),
-              actionItems:  z.array(z.string()).min(1).max(4),
-              quiz: z.array(z.object({
-                q:       z.string(),
-                options: z.array(z.string()).length(4),
-                correct: z.number().int().min(0).max(3),
-              })).min(3).max(3),
-            })),
+        // ── Phase 2: one generateObject call per module ───────────────────────
+        // Splitting by module keeps each call well under DeepSeek's 8K output
+        // limit. A single all-modules call would exceed it for any course with
+        // rich notes, causing truncated JSON and a parse failure.
+        const SingleModuleContentSchema = z.object({
+          moduleIndex:        z.number().int().min(0),
+          learningObjectives: z.array(z.string()).min(1).max(5),
+          keyTerms: z.array(z.object({
+            term:       z.string(),
+            definition: z.string(),
+          })).min(1).max(6),
+          lessons: z.array(z.object({
+            lessonIndex:  z.number().int().min(0),
+            description:  z.string(),
+            notes:        z.string(),
+            keyTakeaways: z.array(z.string()).min(1).max(7),
+            actionItems:  z.array(z.string()).min(1).max(4),
+            quiz: z.array(z.object({
+              q:       z.string(),
+              options: z.array(z.string()).length(4),
+              correct: z.number().int().min(0).max(3),
+            })).min(3).max(3),
           })),
         });
 
-        // Build the full curriculum outline so the model sees every lesson at once
-        const curriculumOutline = shell.curriculum.map((mod, mi) => [
-          `MODULE ${mi} "${mod.moduleTitle}": ${mod.moduleDescription}`,
-          ...mod.lessonOutlines.map((l, li) => `  LESSON ${li}: "${l.title}" (${l.type}, ${l.durationMinutes}min)`),
-        ].join("\n")).join("\n\n");
+        // Scale notes length to available source material. Short videos don't
+        // have enough unique content to fill 500-word lessons without repetition.
+        const notesWordCount = estMinutes < 5
+          ? "150–200 words"
+          : estMinutes < 15
+          ? "200–300 words"
+          : "350–500 words";
 
-        const themePassages = contentMap.themes.length > 0
-          ? contentMap.themes.map((t) =>
-              `Theme ${t.index} \u201c${t.title}\u201d (${t.sourceRegion}): ${t.summary}\n  Passages: ${t.keyPassages.map(p => `\u201c${p}\u201d`).join(" | ")}`
-            ).join("\n")
-          : "";
-
-        const { object: allContent } = await generateObject({
-          model: deepSeekModel,
-          schema: AllModulesContentSchema,
-          mode: "json",
-          maxTokens: 14_000,
-          temperature: 0.3,
-          system: `You are the Curator — a world-class educational content writer. You will receive a complete academy curriculum outline and must write ALL content for every module and lesson in ONE response.
-
-CRITICAL — you can see the FULL curriculum. Use this to:
-- Write each lesson about DIFFERENT content. If you cover a concept in Lesson A, do NOT mention it in Lesson B.
-- Maintain a single, consistent teaching voice and tone across the entire academy.
-- Each module covers its assigned theme ONLY — no theme content bleeds into another module.
+        const phase2System = `You are the Curator — a world-class educational content writer focused on a SINGLE module.
 
 PER MODULE output:
 - learningObjectives: exactly 3 (Understand/Apply/Identify pattern), drawn from the theme's source passages
@@ -238,34 +227,60 @@ PER MODULE output:
 
 PER LESSON output:
 - description: 1 sentence stating the specific learning outcome for THIS lesson
-- notes: 350–500 words. This is the core teaching content — make it rich, substantive, and practical.
-  Format:
-  1. Opening paragraph (3–4 sentences): frame the lesson topic and why it matters, grounded in the source.
-  2. "## [Section Title]" — first concept block (2–3 paragraphs): explain the core idea in depth using specific language, examples, or frameworks from the source material. **bold** key terms where introduced.
-  3. "## [Section Title]" — second concept block (2–3 paragraphs): a distinct sub-topic or application angle from the source. No overlap with the first section.
-  4. "## Key Insight" — closing paragraph (2–3 sentences): distil the single most important idea from THIS lesson into a memorable takeaway statement.
-  Rules: every claim must come from the source. Use **bold** for 2–4 terms per lesson. Vary sentence length for rhythm. Do NOT use bullet lists inside notes — prose only.
+- notes: ${notesWordCount}. Core teaching content — use ONLY what the source says about this specific lesson topic. If the source covers this topic briefly, write briefly — do NOT pad to hit a word count.`
+  Format (adapt section count to actual source depth — omit sections if the source doesn't support them):
+  1. Opening paragraph (2–3 sentences): frame the lesson topic grounded in the source.
+  2. "## [Section Title]" — core concept block: explain the main idea using specific language from the source. **bold** key terms where introduced.
+  3. "## Key Insight" — closing 1–2 sentences: the single most important takeaway from THIS lesson.
+  Rules: prose only — no bullet lists. **bold** 1–3 terms. Do NOT repeat content from other lessons.
 - keyTakeaways: exactly 3 — specific, distinct insights from THIS lesson only
 - actionItems: exactly 2 practical steps grounded in the source
 - quiz: exactly 3 questions, each with exactly 4 options, correct index 0–3
 
-GROUNDING — every sentence must be traceable to the source material or theme passages provided. No invented content.`,
-          prompt: [
-            "CURRICULUM OUTLINE (write content for all of these):",
-            curriculumOutline,
-            "",
-            themePassages ? `THEME PASSAGES (each module must be grounded in its theme passages):\n${themePassages}` : "",
-            "",
-            phase1Source ? `SOURCE MATERIAL (sampled: beginning \u00b7 middle \u00b7 end):\n${phase1Source}` : "",
-            deliverySection,
-          ].filter(Boolean).join("\n"),
-        });
+GROUNDING — non-negotiable hard rules:
+- Every sentence must be directly traceable to the source material or theme passages provided
+- Do NOT introduce concepts, examples, statistics, frameworks, or advice the speaker/author did not state
+- Do NOT extrapolate or fill gaps with common knowledge — if the source is silent on a point, omit it
+- Paraphrase for clarity only; never add meaning beyond what was said
+- Quiz wrong-answer options must be plausible distractors from the source context, not invented facts`;
+
+        const allModuleContents: z.infer<typeof SingleModuleContentSchema>[] = [];
+        for (const [mi, mod] of shell.curriculum.entries()) {
+          const theme = contentMap.themes[mi] ?? contentMap.themes[contentMap.themes.length - 1];
+          const modOutline = [
+            `MODULE ${mi} "${mod.moduleTitle}": ${mod.moduleDescription}`,
+            ...mod.lessonOutlines.map((l, li) => `  LESSON ${li}: "${l.title}" (${l.type}, ${l.durationMinutes}min)`),
+          ].join("\n");
+          const themePassage = theme
+            ? `THEME PASSAGES:\nTheme \u201c${theme.title}\u201d (${theme.sourceRegion}): ${theme.summary}\n  Passages: ${theme.keyPassages.map(p => `\u201c${p}\u201d`).join(" | ")}`
+            : "";
+
+          const { object: modContent } = await generateObject({
+            model: deepSeekModel,
+            schema: SingleModuleContentSchema,
+            schemaName: "ModuleContent",
+            schemaDescription: "Full lesson content for one academy module",
+            mode: "json",
+            maxTokens: 6_000,
+            temperature: 0.2,
+            system: phase2System,
+            prompt: [
+              `Write all content for this module (moduleIndex: ${mi}):`,
+              modOutline,
+              "",
+              themePassage,
+              "",
+              phase1Source ? `SOURCE MATERIAL (sampled):\n${phase1Source}` : "",
+              deliverySection,
+            ].filter(Boolean).join("\n"),
+          });
+          allModuleContents.push(modContent);
+        }
 
         // Merge Phase 2 content back onto the Phase 1 shell
         const fullCurriculum = shell.curriculum.map((mod, mi) => {
-          const modContent = allContent.modules.find(m => m.moduleIndex === mi)
-            ?? allContent.modules[mi]
-            ?? allContent.modules[allContent.modules.length - 1];
+          const modContent = allModuleContents[mi]
+            ?? allModuleContents[allModuleContents.length - 1];
           return {
             moduleTitle:        mod.moduleTitle,
             moduleDescription:  mod.moduleDescription,
