@@ -5,7 +5,7 @@ import { deepSeekModel } from "@/lib/ai-providers";
 import { pruneRedundantSeriesRecaps, stripNonBookLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const RequestSchema = z.object({
   masterTranscript: z.string().min(50),
@@ -56,8 +56,8 @@ export async function POST(req: NextRequest) {
   // Only sample the head + tail (non-teaching content is almost always at the edges).
   // Keep the LLM output tiny — just two phrase markers.
   const words = transcript.split(/\s+/);
-  const headSample = words.slice(0, 2500).join(" ");
-  const tailSample = words.length > 2500 ? words.slice(-1500).join(" ") : "";
+  const headSample = words.slice(0, 1200).join(" ");
+  const tailSample = words.length > 1200 ? words.slice(-600).join(" ") : "";
   const sample = tailSample
     ? `${headSample}\n\n[…middle of transcript omitted…]\n\n${tailSample}`
     : headSample;
@@ -96,8 +96,14 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
 {"teachingStartPhrase":"...","teachingEndPhrase":"...","removedCategories":[],"summary":"..."}`,
       prompt: `Identify the teaching start and end markers:\n\n${sample}`,
     });
-    const _jsonMatch = text.match(/\{[\s\S]*\}/);
-    const object = MarkersSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
+    let _parsed: unknown;
+    try {
+      const _jsonMatch = text.match(/\{[\s\S]*\}/);
+      _parsed = _jsonMatch ? JSON.parse(_jsonMatch[0]) : {};
+    } catch {
+      _parsed = {};
+    }
+    const object = MarkersSchema.parse(_parsed);
 
     // Reconstruct cleaned transcript using the markers (string-match, no LLM output of full text)
     let cleaned = transcript;

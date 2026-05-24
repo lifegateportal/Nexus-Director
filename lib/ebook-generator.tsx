@@ -7,6 +7,16 @@
 
 import type { EbookManifest, ChapterDraft, FrontBackMatter, Quote } from "@/lib/schemas/ebook";
 import { existsSync } from "node:fs";
+import {
+  Document as DocxDocument,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel,
+  AlignmentType,
+  PageBreak,
+  SectionType,
+} from "docx";
 
 type PdfFontSet = {
   serif: string;
@@ -709,4 +719,100 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
   );
 
   return Buffer.from(epubBuffer);
+}
+
+// ─── DOCX generation ─────────────────────────────────────────────────────────
+
+function textToParagraphs(text: string): Paragraph[] {
+  return text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(
+      (line) =>
+        new Paragraph({
+          children: [new TextRun({ text: line, size: 24 })],
+          spacing: { after: 160 },
+        })
+    );
+}
+
+export async function generateDocxBuffer(manifest: EbookManifest): Promise<Buffer> {
+  const { bookTitle, subtitle, authorName, frontMatter, chapters } = manifest;
+
+  const children: Paragraph[] = [];
+
+  children.push(
+    new Paragraph({
+      children: [new TextRun({ text: bookTitle, bold: true, size: 56 })],
+      heading: HeadingLevel.TITLE,
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: subtitle, size: 28, italics: true })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: authorName, size: 26 })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 600 },
+    }),
+    new Paragraph({ children: [new PageBreak()] })
+  );
+
+  for (const { title, text } of [
+    { title: "Preface", text: frontMatter.preface },
+    { title: "Introduction", text: frontMatter.introduction },
+    ...(frontMatter.dedication ? [{ title: "Dedication", text: frontMatter.dedication }] : []),
+  ]) {
+    if (!text?.trim()) continue;
+    children.push(
+      new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+      ...textToParagraphs(text),
+      new Paragraph({ children: [new PageBreak()] })
+    );
+  }
+
+  for (const chapter of chapters) {
+    children.push(
+      new Paragraph({
+        text: `Chapter ${chapter.number}: ${chapter.title}`,
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 300 },
+      })
+    );
+    for (const section of chapter.sections) {
+      if (section.heading) {
+        children.push(
+          new Paragraph({ text: section.heading, heading: HeadingLevel.HEADING_2, spacing: { before: 280, after: 160 } })
+        );
+      }
+      children.push(...textToParagraphs(section.body));
+    }
+    children.push(new Paragraph({ children: [new PageBreak()] }));
+  }
+
+  if (frontMatter.conclusion?.trim()) {
+    children.push(
+      new Paragraph({ text: "Conclusion", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+      ...textToParagraphs(frontMatter.conclusion),
+      new Paragraph({ children: [new PageBreak()] })
+    );
+  }
+
+  if (frontMatter.aboutAuthor?.trim()) {
+    children.push(
+      new Paragraph({ text: "About the Author", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+      ...textToParagraphs(frontMatter.aboutAuthor)
+    );
+  }
+
+  const doc = new DocxDocument({
+    sections: [{ properties: { type: SectionType.CONTINUOUS }, children }],
+    styles: { default: { document: { run: { font: "Times New Roman", size: 24 } } } },
+  });
+
+  return Packer.toBuffer(doc);
 }

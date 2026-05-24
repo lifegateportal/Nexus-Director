@@ -638,6 +638,413 @@ function AgentActivityLog({ entries, isRunning }: { entries: string[]; isRunning
   );
 }
 
+// ─── Audit Panel ─────────────────────────────────────────────────────────────
+
+type ConceptDuplicate = {
+  type: "example" | "argument" | "concept" | "story" | "illustration" | "passage";
+  title: string;
+  description: string;
+  severity: "minor" | "major";
+  locations: Array<{ location: string; excerpt: string }>;
+  recommendation: string;
+};
+
+type SimilarPair = {
+  locationA: string;
+  locationB: string;
+  similarity: number;
+  excerptA: string;
+  excerptB: string;
+};
+
+type RepetitionEntry = {
+  phrase: string;
+  count: number;
+  occurrences: Array<{ chapterNumber: number; sectionNumber: number | null; location: string; context: string }>;
+  reason: string | null;
+  alternatives: string[];
+};
+
+type OverusedWord = {
+  word: string;
+  count: number;
+  frequency: string;
+  alternatives: string[];
+};
+
+type AuditReport = {
+  conceptDuplicates: ConceptDuplicate[];
+  similarPairs: SimilarPair[];
+  repetitions: RepetitionEntry[];
+  overusedWords: OverusedWord[];
+  totalConceptDuplicates: number;
+  totalSimilarPairs: number;
+  totalRepetitionPhrases: number;
+  totalOverusedWords: number;
+};
+
+const TYPE_LABELS: Record<ConceptDuplicate["type"], string> = {
+  example: "Example",
+  argument: "Argument",
+  concept: "Concept",
+  story: "Story",
+  illustration: "Illustration",
+  passage: "Passage",
+};
+
+function AuditPanel({ report }: { report: AuditReport }) {
+  const [openConceptKey, setOpenConceptKey] = useState<string | null>(null);
+  const [openPhraseKey, setOpenPhraseKey] = useState<string | null>(null);
+  const [showPhrases, setShowPhrases] = useState(false);
+  const [showPairs, setShowPairs] = useState(false);
+  const [showWords, setShowWords] = useState(false);
+  const [applied, setApplied] = useState<Set<string>>(new Set());
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+
+  const applyItem = (key: string) => setApplied(s => new Set([...s, key]));
+  const applyAll = () => {
+    const allKeys = [
+      ...report.conceptDuplicates.map((_, i) => `c-${i}`),
+      ...report.similarPairs.map((_, i) => `p-${i}`),
+      ...report.repetitions.map((_, i) => `r-${i}`),
+      ...report.overusedWords.map((_, i) => `w-${i}`),
+    ].filter(k => !dismissed.has(k));
+    setApplied(s => new Set([...s, ...allKeys]));
+  };
+  const dismissItem = (key: string) => {
+    setDismissed(s => new Set([...s, key]));
+    setApplied(s => { const n = new Set(s); n.delete(key); return n; });
+    setOpenConceptKey(k => k === key ? null : k);
+    setOpenPhraseKey(k => k === key ? null : k);
+  };
+
+  const activeConcepts = report.conceptDuplicates.map((item, i) => ({ item, k: `c-${i}` })).filter(e => !dismissed.has(e.k));
+  const activePairs = report.similarPairs.map((item, i) => ({ item, k: `p-${i}` })).filter(e => !dismissed.has(e.k));
+  const activeRepetitions = report.repetitions.map((item, i) => ({ item, k: `r-${i}` })).filter(e => !dismissed.has(e.k));
+  const activeWords = report.overusedWords.map((item, i) => ({ item, k: `w-${i}` })).filter(e => !dismissed.has(e.k));
+
+  const totalIssues = activeConcepts.length + activePairs.length + activeRepetitions.length + activeWords.length;
+
+  if (totalIssues === 0) {
+    return (
+      <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/6 px-4 py-3">
+        <p className="text-sm font-semibold text-emerald-300">No significant duplication found.</p>
+        <p className="text-xs text-slate-400 mt-1">The manuscript has strong conceptual variety throughout.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+
+      {/* Summary badges */}
+      <div className="flex flex-wrap items-center gap-2">
+        {activeConcepts.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-400/8 px-3 py-1.5 text-xs font-semibold text-red-300">
+            <span className="text-sm font-bold tabular-nums">{activeConcepts.length}</span>
+            concept duplicate{activeConcepts.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {activePairs.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-orange-400/30 bg-orange-400/8 px-3 py-1.5 text-xs font-semibold text-orange-300">
+            <span className="text-sm font-bold tabular-nums">{activePairs.length}</span>
+            similar section{activePairs.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {activeRepetitions.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/25 bg-amber-400/8 px-3 py-1.5 text-xs font-semibold text-amber-300">
+            <span className="text-sm font-bold tabular-nums">{activeRepetitions.length}</span>
+            repeated phrase{activeRepetitions.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {activeWords.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-500/30 bg-slate-700/40 px-3 py-1.5 text-xs font-semibold text-slate-300">
+            <span className="text-sm font-bold tabular-nums">{activeWords.length}</span>
+            overused word{activeWords.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {applied.size < totalIssues && (
+          <button type="button" onClick={applyAll}
+            className="ml-auto min-h-[36px] px-4 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+            ✓ Apply All
+          </button>
+        )}
+      </div>
+
+      {/* ── Concept duplicates (primary, most important) ───────────────────── */}
+      {activeConcepts.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-red-400/80">Concept Duplicates</p>
+          {activeConcepts.map(({ item: dup, k }) => (
+            <div key={k} className={`rounded-xl border overflow-hidden ${dup.severity === "major" ? "border-red-500/35 bg-red-500/5" : "border-orange-400/25 bg-orange-400/4"}`}>
+              <button
+                type="button"
+                onClick={() => setOpenConceptKey(openConceptKey === k ? null : k)}
+                className="w-full min-h-[52px] flex items-start justify-between gap-3 px-4 py-3 text-left"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-md ${dup.severity === "major" ? "bg-red-500/20 text-red-300" : "bg-orange-400/15 text-orange-300"}`}>
+                      {dup.severity === "major" ? "Major" : "Minor"} · {TYPE_LABELS[dup.type] ?? dup.type}
+                    </span>
+                    <span className="text-xs text-slate-400 tabular-nums">{dup.locations.length} location{dup.locations.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  <p className="mt-1 text-sm font-semibold text-slate-100 leading-snug">{dup.title}</p>
+                </div>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                  className={`flex-shrink-0 h-4 w-4 mt-1 text-slate-500 transition-transform ${openConceptKey === k ? "rotate-180" : ""}`}
+                >
+                  <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+
+              {openConceptKey === k && (
+                <div className="border-t border-slate-700/40 px-4 pb-4 pt-3 space-y-3">
+                  <p className="text-xs text-slate-300 leading-relaxed">{dup.description}</p>
+
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">Where it appears</p>
+                    <div className="space-y-2">
+                      {dup.locations.map((loc, li) => (
+                        <div key={li} className="rounded-lg border border-slate-700/50 bg-slate-950/50 px-3 py-2.5">
+                          <p className="text-xs font-semibold text-slate-300 mb-1">{loc.location}</p>
+                          {loc.excerpt && (
+                            <p className="text-xs text-slate-500 italic leading-relaxed">&ldquo;{loc.excerpt}&rdquo;</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400/70 mb-1">Editorial recommendation</p>
+                    <p className="text-xs text-emerald-200 leading-relaxed">{dup.recommendation}</p>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    {applied.has(k) ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-3.5 w-3.5"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        Applied
+                      </span>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => applyItem(k)}
+                          className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                          ✓ Apply
+                        </button>
+                        <button type="button" onClick={() => dismissItem(k)}
+                          className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                          Dismiss
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Algorithmically similar pairs ─────────────────────────────────── */}
+      {activePairs.length > 0 && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setShowPairs((v) => !v)}
+            className="flex items-center gap-2 min-h-[44px] w-full text-left"
+          >
+            <p className="text-[10px] font-bold uppercase tracking-widest text-orange-400/80">
+              Similar Sections ({activePairs.length})
+            </p>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+              className={`h-3.5 w-3.5 text-slate-500 transition-transform ${showPairs ? "rotate-180" : ""}`}
+            >
+              <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span className="text-[10px] text-slate-500">TF-IDF content overlap detection</span>
+          </button>
+          {showPairs && (
+            <div className="space-y-2">
+              {activePairs.map(({ item: pair, k }) => (
+                <div key={k} className="rounded-xl border border-slate-700/50 bg-slate-900/60 px-4 py-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 text-xs text-slate-300 font-semibold flex-wrap">
+                      <span>{pair.locationA}</span>
+                      <span className="text-slate-600">↔</span>
+                      <span>{pair.locationB}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-bold tabular-nums px-2 py-0.5 rounded-md ${pair.similarity >= 0.5 ? "bg-red-500/20 text-red-300" : "bg-orange-400/15 text-orange-300"}`}>
+                        {Math.round(pair.similarity * 100)}% overlap
+                      </span>
+                      {applied.has(k) ? (
+                        <span className="text-[11px] font-semibold text-emerald-400">✓ Applied</span>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => applyItem(k)}
+                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                            ✓
+                          </button>
+                          <button type="button" onClick={() => dismissItem(k)}
+                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                            ✕
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <p className="text-[11px] text-slate-500 italic leading-relaxed border-l-2 border-slate-700 pl-2">{pair.excerptA}</p>
+                    <p className="text-[11px] text-slate-500 italic leading-relaxed border-l-2 border-slate-700 pl-2">{pair.excerptB}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Repeated phrases ──────────────────────────────────────────────── */}
+      {activeRepetitions.length > 0 && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setShowPhrases((v) => !v)}
+            className="flex items-center gap-2 min-h-[44px] w-full text-left"
+          >
+            <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400/80">
+              Repeated Phrases ({activeRepetitions.length})
+            </p>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+              className={`h-3.5 w-3.5 text-slate-500 transition-transform ${showPhrases ? "rotate-180" : ""}`}
+            >
+              <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {showPhrases && (
+            <div className="space-y-2">
+              {activeRepetitions.map(({ item: r, k }) => (
+                <div key={k} className="rounded-xl border border-slate-700/60 bg-slate-900/70 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setOpenPhraseKey(openPhraseKey === k ? null : k)}
+                    className="w-full min-h-[48px] flex items-center justify-between gap-3 px-4 py-3 text-left"
+                  >
+                    <span className="text-sm font-mono text-amber-200 font-medium break-all">&ldquo;{r.phrase}&rdquo;</span>
+                    <span className="flex-shrink-0 flex items-center gap-2">
+                      <span className="text-xs text-slate-400 tabular-nums">{r.count}×</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                        className={`h-4 w-4 text-slate-500 transition-transform ${openPhraseKey === k ? "rotate-180" : ""}`}
+                      >
+                        <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </span>
+                  </button>
+                  {openPhraseKey === k && (
+                    <div className="border-t border-slate-700/50 px-4 pb-4 pt-3 space-y-3">
+                      <ul className="space-y-1.5">
+                        {r.occurrences.map((occ, oi) => (
+                          <li key={oi} className="text-xs">
+                            <span className="font-semibold text-slate-300">{occ.location}</span>
+                            {occ.context && <span className="block mt-0.5 text-slate-500 italic leading-snug">&ldquo;…{occ.context}…&rdquo;</span>}
+                          </li>
+                        ))}
+                      </ul>
+                      {r.reason && <p className="text-xs text-slate-300 leading-relaxed">{r.reason}</p>}
+                      {r.alternatives.length > 0 && (
+                        <ul className="space-y-1">
+                          {r.alternatives.map((alt, ai) => (
+                            <li key={ai} className="flex items-start gap-2 text-xs text-emerald-300">
+                              <span className="mt-0.5 text-emerald-500 flex-shrink-0">→</span>
+                              <span>{alt}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <div className="flex items-center gap-2 pt-1">
+                        {applied.has(k) ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-3.5 w-3.5"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            Applied
+                          </span>
+                        ) : (
+                          <>
+                            <button type="button" onClick={() => applyItem(k)}
+                              className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                              ✓ Apply
+                            </button>
+                            <button type="button" onClick={() => dismissItem(k)}
+                              className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                              Dismiss
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Overused words ────────────────────────────────────────────────── */}
+      {activeWords.length > 0 && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setShowWords((v) => !v)}
+            className="flex items-center gap-2 min-h-[44px] w-full text-left"
+          >
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+              Overused Words ({activeWords.length})
+            </p>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+              className={`h-3.5 w-3.5 text-slate-500 transition-transform ${showWords ? "rotate-180" : ""}`}
+            >
+              <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {showWords && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {activeWords.map(({ item: w, k }) => (
+                <div key={k} className="rounded-xl border border-slate-700/50 bg-slate-900/60 px-3 py-2.5 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-mono font-semibold text-slate-300">{w.word}</span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className="text-[10px] text-slate-500 tabular-nums">{w.count}× · {w.frequency}</span>
+                      {applied.has(k) ? (
+                        <span className="text-[11px] font-semibold text-emerald-400">✓</span>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => applyItem(k)}
+                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                            ✓
+                          </button>
+                          <button type="button" onClick={() => dismissItem(k)}
+                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                            ✕
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {w.alternatives.length > 0 && (
+                    <p className="text-xs text-slate-400">Try: <span className="text-emerald-300">{w.alternatives.join(" · ")}</span></p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 function readTextFile(file: File): Promise<string> {
@@ -671,6 +1078,8 @@ export function EbookPipeline({
   const [completedManifest, setCompletedManifest] = useState<EbookManifest | null>(null);
   const [reviewContext, setReviewContext] = useState<{ contentMap: ContentMap; frontMatter: FrontBackMatter } | null>(null);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
+  const [auditReport, setAuditReport] = useState<AuditReport | null>(null);
+  const [auditRunning, setAuditRunning] = useState(false);
   const [exportingBook, setExportingBook] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signalFilterState, setSignalFilterState] = useState<SignalFilterState>("idle");
@@ -812,6 +1221,21 @@ export function EbookPipeline({
       setStage("complete");
     }
   }, [addLog, completedManifest, recalculateManifestTotal, reviewContext, syncCompletedManifest]);
+
+  // ── Book audit ────────────────────────────────────────────────────────────
+  const runAudit = useCallback(async () => {
+    if (!completedManifest) return;
+    setAuditRunning(true);
+    setAuditReport(null);
+    try {
+      const report = await postJson<AuditReport>("/api/ebook/audit", { manifest: completedManifest });
+      setAuditReport(report);
+    } catch (err) {
+      addLog(`✗ Audit error: ${err instanceof Error ? err.message : "Audit failed"}`);
+    } finally {
+      setAuditRunning(false);
+    }
+  }, [addLog, completedManifest]);
 
   // ── Auto-download PDF when export completes ──────────────────────────────
   useEffect(() => {
@@ -1651,14 +2075,24 @@ export function EbookPipeline({
                 <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Final Review</p>
                 <p className="mt-1 text-sm text-slate-300">Edit chapter by chapter, then export the finished book when ready.</p>
               </div>
-              <button
-                type="button"
-                onClick={() => void exportFinalBook()}
-                disabled={exportingBook}
-                className="min-h-[48px] rounded-xl bg-gradient-to-r from-cyan-500 to-violet-500 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {exportingBook ? "Exporting…" : "Export Final Book"}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runAudit()}
+                  disabled={auditRunning || exportingBook}
+                  className="min-h-[48px] rounded-xl border border-amber-400/30 bg-amber-400/8 px-4 py-2.5 text-sm font-semibold text-amber-200 transition-all hover:bg-amber-400/15 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {auditRunning ? "Auditing…" : "Audit Book"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void exportFinalBook()}
+                  disabled={exportingBook || auditRunning}
+                  className="min-h-[48px] rounded-xl bg-gradient-to-r from-cyan-500 to-violet-500 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {exportingBook ? "Exporting…" : "Export Final Book"}
+                </button>
+              </div>
             </div>
 
             {qualityReport && (
@@ -1737,6 +2171,28 @@ export function EbookPipeline({
                 />
               </div>
             </div>
+
+            {/* Audit Results */}
+            {(auditReport || auditRunning) && (
+              <div className="border-t border-slate-700/40 pt-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-bold uppercase tracking-widest text-amber-300">Audit Results</p>
+                  {auditRunning && (
+                    <span className="text-[10px] text-slate-500 animate-pulse">Analysing manuscript…</span>
+                  )}
+                  {auditReport && !auditRunning && (
+                    <button
+                      type="button"
+                      onClick={() => void runAudit()}
+                      className="text-[10px] text-slate-500 underline min-h-[44px] px-1"
+                    >
+                      Re-run
+                    </button>
+                  )}
+                </div>
+                {auditReport && <AuditPanel report={auditReport} />}
+              </div>
+            )}
           </div>
         )}
 
