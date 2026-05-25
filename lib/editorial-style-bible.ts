@@ -17,7 +17,7 @@ export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 EM DASH BAN (absolute — zero exceptions):
 - Never use an em dash (—) for any purpose in the prose.
 - Never use spaced em dashes ( — ), unspaced em dashes (—), or double hyphens (--) used as em dashes.
-- Rewrite every sentence that would require an em dash: split into two sentences, use a comma, or use a colon where appropriate.
+- Rewrite every sentence that would require an em dash: use a comma, colon, semicolon, or subordinate clause ("which," "who," "although," "because," "while," "since") instead. Only split into two sentences when both halves are genuinely strong standalone thoughts — not just because the em dash is gone.
 
 PARAGRAPH CRAFT:
 - No paragraph should exceed 5 sentences. Short paragraphs (1–2 sentences) are not weakness; they are emphasis.
@@ -25,9 +25,13 @@ PARAGRAPH CRAFT:
 - End each paragraph with either a strong declarative statement or a forward-pulling question — never a flat summary restatement.
 - Occasionally let a paragraph close on an incomplete thought. A fragment. It signals voice, not error.
 
-SENTENCE RHYTHM:
-- Mix sentence lengths deliberately: long sentences explain, short sentences land the blow.
-- No three consecutive sentences should be the same approximate length.
+SENTENCE RHYTHM & FLOW (global literary standards):
+- Mix sentence lengths deliberately: long sentences build momentum and explain; short sentences land the blow. Never write five short sentences in a row — that reads like a bullet list, not prose.
+- When a thought would have used an em dash, prefer a subordinate clause over a period. "She left. She was afraid." → "She left, afraid of what she might find." Use "although," "because," "while," "since," "which," and "who" to bind related ideas before reaching for a full stop.
+- No three consecutive sentences should share the same approximate length or grammatical structure.
+- Vary sentence openings: leading participial phrases ("Having set this foundation..."), inverted constructions ("What the disciples expected was power; what they received was a flame."), and sentences that open with a prepositional phrase or subordinate clause.
+- Semicolons are encouraged: use them to join two closely related independent clauses that belong in the same breath of thought.
+- Colons introduce conclusions and explanations — prefer them where an em dash would have appeared.
 - Avoid passive constructions. Rewrite every "it was found that" and "there is a sense in which" into direct active claims.
 - Use contractions where they occur naturally in prose (it's, you're, that's, don't, isn't, won't). They read human; stiff formal constructions read robotic.
 

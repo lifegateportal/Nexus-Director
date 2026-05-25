@@ -66,6 +66,10 @@ export async function POST(req: NextRequest) {
   }
 
   const { input: chapter } = input;
+  const authorConfig = input.authorConfig;
+  const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
+    ? `\n\nAUTHOR BOOK CONFIGURATION (highest priority):\n${authorConfig.targetAudience ? `TARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}`
+    : "";
 
   try {
     // Send section headings + key takeaways only — NOT body prose.
@@ -138,7 +142,7 @@ ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
 
-${PREMIUM_BOOK_STYLE_RULES}
+${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}
 
 Respond with ONLY a valid JSON object — no markdown, no code blocks, no explanation:
 {"intro":"...","conclusion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."],"epigraph":"...","premiseLine":"..."}`,

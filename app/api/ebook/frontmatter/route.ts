@@ -18,6 +18,10 @@ export async function POST(req: NextRequest) {
   }
 
   const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
+  const authorConfig = input.authorConfig;
+  const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
+    ? `\n\n════════════════════════════════════════════\nAUTHOR BOOK CONFIGURATION (highest priority)\n════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}`
+    : "";
 
   try {
     const { object } = await generateObject({
@@ -77,7 +81,7 @@ ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
 
-${PREMIUM_BOOK_STYLE_RULES}`,
+${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}`,
       prompt: `Write the front and back matter for this ebook.
 
 BOOK TITLE: ${input.architecture.bookTitle}

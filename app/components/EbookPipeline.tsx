@@ -135,8 +135,13 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
   throw new Error(`Request failed after retries: ${route}`);
 }
 
-async function streamSection(assignment: SectionAssignment): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }> }> {
-  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }> }>("/api/ebook/write-section", { assignment });
+async function streamSection(
+  assignment: SectionAssignment,
+  authorConfig?: { instructions: string; targetAudience: string }
+): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }> }> {
+  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }> }>(
+    "/api/ebook/write-section", { assignment, ...(authorConfig ? { authorConfig } : {}) }
+  );
   return { body: (result.body ?? "").trim(), claimLedger: result.claimLedger ?? [] };
 }
 
@@ -1093,6 +1098,8 @@ export function EbookPipeline({
   const [audioFiles, setAudioFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
   const [transcriptFiles, setTranscriptFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
   const [stage, setStage] = useState<PipelineStage>("idle");
+  const [authorInstructions, setAuthorInstructions] = useState("");
+  const [targetAudience, setTargetAudience] = useState("");
   const [log, setLog] = useState<string[]>([]);
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
@@ -1827,14 +1834,20 @@ export function EbookPipeline({
           )
         );
 
-        let { body, claimLedger } = await streamSection(augmented);
+        let { body, claimLedger } = await streamSection(
+          augmented,
+          (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
+        );
 
         // Quality gate: retry once if too short
         const wc = countWords(body);
         if (wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
           addLog(`  ↺ Section too short (${wc} words) — retrying with expansion prompt…`);
           const expanded = { ...augmented, targetWordCount: Math.max(assignment.targetWordCount, 600) };
-          ({ body, claimLedger } = await streamSection(expanded));
+          ({ body, claimLedger } = await streamSection(
+            expanded,
+            (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
+          ));
         }
 
         const finalWc = countWords(body);
@@ -1919,6 +1932,7 @@ export function EbookPipeline({
               ? polishedChapters[polishedChapters.length - 1].conclusion
               : undefined,
           },
+          ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
         });
 
         // Restore full section bodies that were stripped for the request
@@ -1956,6 +1970,7 @@ export function EbookPipeline({
           masterTranscript: frontMatterTranscript.slice(0, 14000),
           architecture,
           voiceDNA,
+          ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
         });
         addLog("✓ Front and back matter complete");
         acc.frontMatter = frontMatter;
@@ -2071,6 +2086,41 @@ export function EbookPipeline({
             disabled={isRunning}
           />
         ))}
+      </div>
+
+      {/* Book Configuration Panel */}
+      <div className="rounded-2xl border border-violet-500/15 bg-slate-900/60 overflow-hidden">
+        <div className="border-b border-violet-500/10 px-4 py-3">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-300">Book Configuration</h3>
+          <p className="text-xs text-slate-500 mt-0.5">Shape how your book is written before the pipeline begins.</p>
+        </div>
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Target Audience</label>
+            <input
+              type="text"
+              value={targetAudience}
+              onChange={(e) => setTargetAudience(e.target.value)}
+              placeholder="e.g. Pentecostal believers, new Christians, church leaders…"
+              className="w-full min-h-[48px] rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder:text-slate-600 outline-none focus:border-violet-500/40"
+              disabled={isRunning}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+              Writing Instructions <span className="ml-1 text-slate-600 normal-case font-normal">(optional)</span>
+            </label>
+            <textarea
+              value={authorInstructions}
+              onChange={(e) => setAuthorInstructions(e.target.value)}
+              placeholder="e.g. Keep a warm, conversational tone. Use simple language suitable for first-generation believers. Emphasize practical application over theological theory…"
+              rows={4}
+              className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder:text-slate-600 outline-none focus:border-violet-500/40 resize-none"
+              disabled={isRunning}
+            />
+            <p className="mt-1 text-[10px] text-slate-600">Tell the AI how you want your book to read. Be specific about tone, vocabulary level, and style.</p>
+          </div>
+        </div>
       </div>
 
       {/* Start Button OR Start-fresh banner when a run is restored */}

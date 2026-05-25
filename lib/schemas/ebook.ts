@@ -229,18 +229,26 @@ export const AssignSegmentsRequestSchema = z.object({
   voiceDNA: VoiceDNASchema,
 });
 
+export const AuthorConfigSchema = z.object({
+  instructions: z.string().default(""),  // author's custom writing instructions
+  targetAudience: z.string().default(""), // e.g. "Pentecostal believers aged 25–50"
+});
+
 export const WriteSectionRequestSchema = z.object({
   assignment: SectionAssignmentSchema,
+  authorConfig: AuthorConfigSchema.optional(),
 });
 
 export const PolishChapterRequestSchema = z.object({
   input: ChapterPolishInputSchema,
+  authorConfig: AuthorConfigSchema.optional(),
 });
 
 export const FrontMatterRequestSchema = z.object({
   masterTranscript: z.string().min(100),
   architecture: BookArchitectureSchema,
   voiceDNA: VoiceDNASchema,
+  authorConfig: AuthorConfigSchema.optional(),
 });
 
 export const ExportRequestSchema = z.object({
@@ -265,3 +273,4 @@ export type ChapterDraft = z.infer<typeof ChapterDraftSchema>;
 export type FrontBackMatter = z.infer<typeof FrontBackMatterSchema>;
 export type EbookManifest = z.infer<typeof EbookManifestSchema>;
 export type EbookJobState = z.infer<typeof EbookJobStateSchema>;
+export type AuthorConfig = z.infer<typeof AuthorConfigSchema>;

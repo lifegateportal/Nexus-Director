@@ -56,7 +56,7 @@ You will receive transcribed audio text. Expect the following flaws:
 2. INFORMATION FIDELITY — ZERO FABRICATION: Do not hallucinate data, invent new stories, or inject outside facts. This ban covers plausible extensions, inferred context, and theological background the author "probably" knows. Every sentence must trace to the provided transcript excerpts. If an idea is not in the excerpts, delete it. Write shorter rather than pad with invented content.
 3. TONE AND REGISTER: Elevate the speaker's voice. The tone must be authoritative, engaging, and precise. Use active voice and strong verbs. Avoid passive, academic dryness.
 4. FORBIDDEN CLICHÉS: You are strictly forbidden from using standard AI transition phrases and clichés, including but not limited to: "In conclusion," "Let's delve into," "A tapestry of," "Navigating the landscape," "It's important to note," "Furthermore," and "In today's fast-paced world."
-5. EM DASH ABSOLUTE BAN: Never use an em dash (—) anywhere in the output. No spaced em dashes ( — ), no unspaced em dashes (—), no double hyphens (--) used as em dashes. Rewrite every sentence that would need one: split into two sentences, use a comma, or use a colon.
+5. EM DASH ABSOLUTE BAN: Never use an em dash (—) anywhere in the output. No spaced em dashes ( — ), no unspaced em dashes (—), no double hyphens (--) used as em dashes. Rewrite every sentence that would need one using a comma, colon, semicolon, or subordinate clause ("which," "who," "although," "because," "while," "since"). Splitting into two sentences is the last resort — only when both halves stand alone as strong, complete thoughts.
 6. HUMANIZATION — ANTI-AI DETECTION (enforce on every paragraph before returning):
    - Use contractions naturally (it's, you're, that's, don't, isn't, won't) — they occur in natural prose.
    - Avoid "X is not just A; it is B" and "X is not merely A, it is B" sentence frames.
@@ -149,6 +149,12 @@ export async function POST(req: NextRequest) {
   }
 
   const { assignment } = input;
+  const authorConfig = input.authorConfig;
+  const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
+    ? `\n\n════════════════════════════════════════════
+AUTHOR BOOK CONFIGURATION (highest priority)
+════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}`
+    : "";
   const excerptBlock = assignment.transcriptExcerpts
     .map((t, i) => `[EXCERPT ${i + 1}]\n${t}`)
     .join("\n\n---\n\n");
@@ -268,8 +274,8 @@ ${READER_NORMALIZATION_RULES}`,
 
     const deduplicatedSystem =
       (assignment.alreadyCoveredPoints ?? []).length > 0
-        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — ABSOLUTE PROHIBITION\n════════════════════════════════════════════\nThe following ideas, claims, opening sentences, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST NOT re-introduce, re-explain, re-state, or re-develop ANY of them — even with different wording. If a transcript excerpt references these, acknowledge with at most one transitional phrase and move immediately to new material. Do not give them a paragraph, example, story, or dedicated treatment:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
-        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}`;
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — ABSOLUTE PROHIBITION\n════════════════════════════════════════════\nThe following ideas, claims, opening sentences, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST NOT re-introduce, re-explain, re-state, or re-develop ANY of them — even with different wording. If a transcript excerpt references these, acknowledge with at most one transitional phrase and move immediately to new material. Do not give them a paragraph, example, story, or dedicated treatment:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}`;
 
     const { object } = await generateObject({
       model: deepSeekModel,
