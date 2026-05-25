@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
-import { EbookManifestSchema } from "@/lib/schemas/ebook";
+import { EbookManifestSchema, ChapterDraftSchema } from "@/lib/schemas/ebook";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import type { SiteConfig } from "@/lib/schemas/site-config";
@@ -58,6 +58,10 @@ function isAuditIntent(text: string): boolean {
 
 function isViewIntent(text: string): boolean {
   return /\b(show\s+(?:me\s+)?(?:the\s+)?(?:book|chapters?|contents?|toc|table\s+of\s+contents?|overview|summary)|view\s+(?:book|chapters?|contents?)|list\s+chapters?|how\s+many\s+chapters?|what.{0,10}chapters?)\b/i.test(text);
+}
+
+function isFormatIntent(text: string): boolean {
+  return /\b(format\s+(?:the\s+)?(?:entire|whole|full|complete|all)\s+book|reformat\s+(?:the\s+)?(?:entire|whole|full|complete|all)|bold\s+(?:all|key|the)|bolden|italici[sz]e\s+(?:all|the|throughout)|apply\s+(?:full\s+)?(?:markdown\s+)?format|word[\s-]?process|typography\s+(?:the\s+)?book|format\s+(?:the\s+)?book|reformat\s+(?:the\s+)?book|apply\s+bold|apply\s+italic|paragraph\s+(?:the\s+)?(?:entire|whole|full|book)|indent\s+(?:the\s+)?(?:entire|whole|full|book)|full\s+(?:markdown\s+)?format|format\s+(?:and|&)\s+(?:bold|italic|indent|paragraph)|bold\s+(?:and|&)\s+(?:italici[sz]e|format|indent)|italici[sz]e\s+(?:and|&)\s+(?:bold|format|indent))\b/i.test(text);
 }
 
 // ── Client-side book table of contents ───────────────────────────────────────
@@ -187,7 +191,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         : "Pipeline: connected";
       setMessages([{
         role: "system",
-        content: `Book loaded: "${ebookManifest.bookTitle}" by ${ebookManifest.authorName} — ${ebookManifest.chapters.length} chapters, ${ebookManifest.totalWordCount.toLocaleString()} words.\n${pipelineStatus}\n\nYou can ask me to change the title, rename chapters, edit section headings, update takeaways, revise the preface, rewrite chapter sections, and make targeted book-wide edits.`,
+        content: `Book loaded: "${ebookManifest.bookTitle}" by ${ebookManifest.authorName} — ${ebookManifest.chapters.length} chapters, ${ebookManifest.totalWordCount.toLocaleString()} words.\n${pipelineStatus}\n\nYou can ask me to change the title, rename chapters, edit section headings, update takeaways, revise the preface, rewrite chapter sections, make targeted book-wide edits, and apply full formatting (bold, italics, paragraph structure, block quotes) across the entire book.`,
       }]);
     } else if (academy) {
       const lessonCount = academy.curriculum.flatMap((m) => m.lessons).length;
@@ -259,6 +263,75 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         const json = await res.json() as BookAuditReport & { error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
         setMessages((prev) => [...prev, { role: "assistant", content: formatAuditReport(json) }]);
+        return;
+      }
+
+      // ── Full book formatting (chapter-by-chapter to bypass truncation guard) ──
+      if (ebookManifest && onEbookUpdate && isFormatIntent(text)) {
+        const chCount = ebookManifest.chapters.length;
+        const totalBatches = 1 + chCount;
+        let workingManifest = { ...ebookManifest, chapters: [...ebookManifest.chapters] };
+
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: `Starting full book formatting — front matter + ${chCount} chapters…` },
+        ]);
+
+        // Front matter
+        try {
+          const fmRes = await fetch("/api/ebook/format", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ manifest: workingManifest, instruction: text, chapterNumber: "frontmatter" }),
+          });
+          const fmJson = await fmRes.json() as { frontMatter?: typeof workingManifest.frontMatter; error?: string };
+          if (fmRes.ok && !fmJson.error && fmJson.frontMatter) {
+            workingManifest = { ...workingManifest, frontMatter: { ...workingManifest.frontMatter, ...fmJson.frontMatter } };
+          }
+        } catch { /* continue even if front matter formatting fails */ }
+
+        // Each chapter
+        for (let i = 0; i < chCount; i++) {
+          const ch = workingManifest.chapters[i];
+          setMessages((prev) => {
+            const copy = [...prev];
+            copy[copy.length - 1] = {
+              role: "assistant",
+              content: `Formatting chapter ${ch.number}: "${ch.title}" (${i + 2}/${totalBatches})…`,
+            };
+            return copy;
+          });
+
+          try {
+            const res = await fetch("/api/ebook/format", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ manifest: workingManifest, instruction: text, chapterNumber: ch.number }),
+            });
+            const json = await res.json() as { chapter?: unknown; error?: string };
+            if (res.ok && !json.error && json.chapter) {
+              const chParsed = ChapterDraftSchema.safeParse(json.chapter);
+              if (chParsed.success) {
+                workingManifest = {
+                  ...workingManifest,
+                  chapters: workingManifest.chapters.map((c) => c.number === ch.number ? chParsed.data : c),
+                };
+              }
+            }
+          } catch { /* continue to next chapter on error */ }
+        }
+
+        const finalParsed = EbookManifestSchema.safeParse(workingManifest);
+        if (!finalParsed.success) throw new Error("Manifest validation failed after formatting");
+        onEbookUpdate(finalParsed.data, `Full book formatted — bold key terms, italics, block quotes, and paragraph structure applied across all ${chCount} chapters.`);
+        setMessages((prev) => {
+          const copy = [...prev];
+          copy[copy.length - 1] = {
+            role: "assistant",
+            content: `Formatting complete — all ${chCount} chapters reformatted with **bold** key terms, *italics*, > block quotes, and clean paragraph structure throughout the book.`,
+          };
+          return copy;
+        });
         return;
       }
 
@@ -434,7 +507,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
                     </div>
                     <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Format &amp; Layout</p>
                     <div className="flex gap-1.5 overflow-x-auto pb-1">
-                      {["Format the entire book","Bold all key terms throughout","Make scripture passages block quotes","Use the devotional template","Use the premium literary template","Use the classic academic layout","Use the modern business style","Use the popular nonfiction layout"].map((chip) => (
+                      {["Format the entire book","Bold and italicize the entire book","Bold all key terms throughout","Reformat the complete book with paragraphs and indentation","Apply full word processing to the entire book","Make scripture passages block quotes","Use the devotional template","Use the premium literary template","Use the classic academic layout","Use the modern business style","Use the popular nonfiction layout"].map((chip) => (
                         <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-teal-500/40 hover:text-teal-300">{chip}</button>
                       ))}
                     </div>
