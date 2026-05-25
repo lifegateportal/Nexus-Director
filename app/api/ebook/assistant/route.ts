@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import {
   EbookManifestSchema,
   SectionDraftSchema,
   ChapterDraftSchema,
   FrontBackMatterSchema,
+  BookTemplateEnum,
 } from "@/lib/schemas/ebook";
 import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
 
@@ -41,6 +42,8 @@ const EbookChangeSchema = z.object({
   frontMatter: FrontBackMatterSchema.optional(),
   chapters: z.array(ChapterDraftSchema).optional(),
   updatedSections: z.array(SectionDraftSchema).optional(), // targeted section edits
+  /** Layout/print template for export */
+  selectedTemplate: BookTemplateEnum.optional(),
   summary: z.string(), // one-sentence description of what changed
 });
 
@@ -121,10 +124,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: deepSeekReasonerModel,
       schema: EbookChangeSchema,
-      mode: "tool",
-      temperature: 0.15,
+      mode: "json",
       system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
 
 ════════════════════════════════════════════
@@ -172,11 +174,88 @@ SECTION OPERATIONS (return only changed sections via updatedSections):
   "fix the tone in section N.M"       → updatedSections with tone adjusted, same content
   "remove audience language from section N.M" → updatedSections with congregation/live-event language removed
 
-BOOK-WIDE OPERATIONS:
+════════════════════════════════════════════
+FORMATTING & CONTENT STRUCTURE
+════════════════════════════════════════════
+You have full control over how content is formatted within sections using Markdown.
+All section bodies support: ## headings, ### sub-headings, **bold**, *italic*, > block quotes, - bullet lists, 1. numbered lists, --- dividers.
+
+FORMATTING OPERATIONS (use updatedSections for targeted, chapters for book-wide):
+  "format section N.M"                → restructure body with proper ## headings, **bold** key terms, > block quotes for scripture
+  "format all sections in chapter N" → return full chapters array with all section bodies reformatted
+  "format the entire book"            → return full chapters array, every section body reformatted
+  "bold all key terms in chapter N"   → updatedSections: rewrite body adding **bold** around key theological/subject terms
+  "add a divider before each heading" → updatedSections: insert --- before each ## heading in the body
+  "make scripture passages block quotes" → updatedSections: wrap all indented scripture in > prefix
+  "use numbered lists for the takeaways" → update keyTakeaways to use numbered items
+  "restructure section N.M as a listicle" → updatedSections: rewrite body as intro + numbered list + closing
+  "add a pull quote to section N.M"   → updatedSections: insert a > block quote of the strongest sentence at the start
+
+FORMATTING STANDARDS — apply when formatting:
+  - Chapter intro/conclusion: flowing prose, no headings
+  - Section body structure: optional ## heading → prose paragraphs → optional > pull quote → optional --- divider → prose continuation
+  - Key terms: **bold** on first meaningful use per section
+  - Scripture (inline, under 40 words): "quoted text" (Book Chapter:Verse, Translation)
+  - Scripture (block, 40+ words): > indented block, reference on next line
+  - Lists: use only when the content is genuinely list-like; never convert narrative prose into bullets
+  - Headings inside sections: use ## for major concept breaks, ### for sub-points — only where the content warrants it
+
+════════════════════════════════════════════
+STRUCTURAL LAYOUT — MOVE, MERGE, REORDER
+════════════════════════════════════════════
+You can restructure the book's architecture. Always return the FULL chapters array when making structural changes.
+
+  "move section N.M to chapter X"     → remove section from chapter N, insert at end of chapter X, renumber sectionNumbers
+  "move section N.M to position P in chapter X" → insert at position P (1-based), renumber sectionNumbers
+  "swap sections N.M and N.K"         → exchange positions within a chapter, update sectionNumbers
+  "reorder sections in chapter N: M, K, L" → reorder sections to the given sequence, renumber sectionNumbers
+  "merge sections N.M and N.K"        → combine bodies with a --- divider, keep heading of N.M, remove N.K, renumber
+  "split section N.M"                 → divide body at a natural break, create two sections, renumber
+  "move chapter N to position X"      → reorder the chapters array, renumber chapter.number fields
+  "split chapter N into two chapters" → divide at the natural midpoint (half the sections each), give each a title
+
+RENUMBERING RULE — NON-NEGOTIABLE:
+  After any structural change, renumber ALL sectionNumbers within each chapter sequentially starting from 1.
+  After chapter reordering, renumber ALL chapter.number fields sequentially starting from 1.
+  Also update every section's chapterNumber field if sections moved to a different chapter.
+
+════════════════════════════════════════════
+EXPORT LAYOUT TEMPLATE
+════════════════════════════════════════════
+You control which visual template is used when the book is exported to PDF, EPUB, and DOCX.
+Set "selectedTemplate" to one of these values:
+
+  "devotional"          — Warm, centered chapter titles, open paragraph spacing, wide margins.
+                          Best for: sermons, spiritual growth, faith-based teaching.
+  "classic-academic"    — University press style (Chicago/Oxford), justified text, paragraph indents, formal.
+                          Best for: theology, doctrine, academic commentary.
+  "modern-business"     — Clean sans-serif, bold chapter labels, open white space.
+                          Best for: leadership, strategy, professional development books.
+  "popular-nonfiction"  — Bestseller style, left-aligned, punchy chapter headers, accessible.
+                          Best for: broad audience teaching, motivational, accessible faith.
+  "premium-literary"    — High-end serif typography, generous leading, premium aesthetic.
+                          Best for: memoirs, narrative theology, high-production ministry books.
+
+TEMPLATE TRIGGERS:
+  "use the devotional template"        → selectedTemplate: "devotional"
+  "use classic academic layout"        → selectedTemplate: "classic-academic"
+  "use modern business style"          → selectedTemplate: "modern-business"
+  "use popular nonfiction layout"      → selectedTemplate: "popular-nonfiction"
+  "use premium literary style"         → selectedTemplate: "premium-literary"
+  "make it look like a published book" → selectedTemplate: "premium-literary"
+  "formal academic layout"             → selectedTemplate: "classic-academic"
+  "church book / sermon notes style"   → selectedTemplate: "devotional"
+  "clean modern look"                  → selectedTemplate: "modern-business"
+
+════════════════════════════════════════════
+BOOK-WIDE OPERATIONS
+════════════════════════════════════════════
   "fix all live-audience language"    → return full chapters array with all sections cleaned
   "remove all greeting/crowd phrases" → return full chapters array
   "standardise all section headings"  → return full chapters array with consistent heading format
   "add takeaways to all chapters"     → return full chapters array with keyTakeaways filled in
+  "format the entire book"            → return full chapters array with all bodies formatted to standards
+  "bold key terms throughout"         → return full chapters array with **bold** applied to first-use terms
 
 ════════════════════════════════════════════
 CONTENT PRESERVATION — CRITICAL
@@ -197,6 +276,7 @@ OUTPUT RULES
 - If updatedSections is returned, include ONLY the changed sections — the client merges them by chapterNumber + sectionNumber
 - The body field in updatedSections MUST be the FULL rewritten prose — never truncate
 - frontMatter: if returned, include ALL fields (preface, introduction, conclusion, aboutAuthor, resourcesList)
+- selectedTemplate: only include if the user explicitly asked to change the layout or template
 - Always write a concise one-sentence "summary" of exactly what changed
 - If the instruction is ambiguous, make the most useful interpretation and explain in summary
 - If asked to do something outside your authority or that violates fidelity law, explain why in the summary and return no changes`,
@@ -267,6 +347,7 @@ OUTPUT RULES
       ...(object.subtitle !== undefined && { subtitle: object.subtitle }),
       ...(object.authorName !== undefined && { authorName: object.authorName }),
       ...(object.frontMatter !== undefined && { frontMatter: object.frontMatter }),
+      ...(object.selectedTemplate !== undefined && { selectedTemplate: object.selectedTemplate }),
       chapters: mergedChapters,
     };
 

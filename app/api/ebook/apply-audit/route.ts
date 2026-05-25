@@ -83,8 +83,10 @@ type ReportInput = z.infer<typeof RequestSchema>["report"];
 // ─── Location parser ──────────────────────────────────────────────────────────
 
 function parseLocation(loc: string): { chapterNum: number | null; sectionNum: number | null } {
-  const ch = /chapter\s+(\d+)/i.exec(loc);
-  const sc = /section\s+(\d+)/i.exec(loc);
+  // Matches: "Chapter N", "Ch N", "Ch. N" (audit emits "Ch N § M: Heading")
+  const ch = /\bch(?:apter)?\.?\s+(\d+)/i.exec(loc);
+  // Matches: "Section N", "§ N", "§N"
+  const sc = /(?:\bsection\s+|§\s*)(\d+)/i.exec(loc);
   return {
     chapterNum: ch ? parseInt(ch[1]) : null,
     sectionNum: sc ? parseInt(sc[1]) : null,

@@ -16,14 +16,9 @@ const RequestSchema = z.object({
 const MarkersSchema = z.object({
   teachingStartPhrase: z.string().default("").describe("First 80-120 chars of the sentence where core teaching begins (verbatim)"),
   teachingEndPhrase: z.string().default("").describe("Last 80-120 chars of the final teaching sentence before closing prayer/altar call (verbatim)"),
-  removedCategories: z.array(
-    z.enum([
-      "opening-prayer", "closing-prayer", "announcement", "housekeeping",
-      "altar-call", "offering-appeal", "greeting-pleasantries",
-      "gratitude-and-acknowledgements", "live-audience-address",
-      "off-topic-tangent", "technical-break",
-    ])
-  ).default([]),
+  // Accept any strings — the LLM returns human-readable labels, not enum slugs,
+  // and these are only used as display text in the summary. No switch logic depends on them.
+  removedCategories: z.array(z.string()).default([]),
   summary: z.string().default(""),
 });
 
@@ -103,7 +98,8 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
     } catch {
       _parsed = {};
     }
-    const object = MarkersSchema.parse(_parsed);
+    const _result = MarkersSchema.safeParse(_parsed);
+    const object = _result.success ? _result.data : MarkersSchema.parse({});
 
     // Reconstruct cleaned transcript using the markers (string-match, no LLM output of full text)
     let cleaned = transcript;

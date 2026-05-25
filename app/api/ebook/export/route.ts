@@ -36,13 +36,13 @@ export async function POST(req: NextRequest) {
 
     // ── Generate EPUB ─────────────────────────────────────────────────────────
     if (formats.epub) {
-      const epubBuffer = await generateEpubBuffer(manifest);
+      const epubBuffer = await generateEpubBuffer(manifest, template);
       results.epubUrl = await uploadOrStream(epubBuffer, `${prefix}.epub`, "application/epub+zip");
     }
 
-    // ── Generate DOCX ─────────────────────────────────────────────────────────
+    // ── Generate DOCX ───────────────────────────────────────────────────────────
     if (formats.docx) {
-      const docxBuffer = await generateDocxBuffer(manifest);
+      const docxBuffer = await generateDocxBuffer(manifest, template);
       results.docxUrl = await uploadOrStream(
         docxBuffer,
         `${prefix}.docx`,

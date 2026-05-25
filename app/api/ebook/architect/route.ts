@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
       const result = await generateObject({
         model: deepSeekModel,
         schema: MinimalArchitectureSchema,
-        mode: "tool",
+        mode: "json",
         temperature: 0.2,
         system: `# ROLE
 You are an elite structural editor for a top-tier publishing house. Your job is to map raw, sanitized audio transcript segments into a clean chapter architecture for a published book series.

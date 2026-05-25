@@ -103,8 +103,8 @@ export const SectionAssignmentSchema = z.object({
 // ─── Section Draft (output of write-section) ─────────────────────────────────
 
 export const SectionDraftSchema = z.object({
-  chapterNumber: z.number(),
-  sectionNumber: z.number(),
+  chapterNumber: z.number().default(0),  // optional when nested inside a ChapterDraft
+  sectionNumber: z.number().default(0),
   heading: z.string().default(""),
   body: z.string().default(""),
   wordCount: z.number().default(0),
@@ -148,6 +148,16 @@ export const FrontBackMatterSchema = z.object({
 
 // ─── Full Ebook Manifest ──────────────────────────────────────────────────────
 
+export const BOOK_TEMPLATE_IDS = [
+  "classic-academic",
+  "modern-business",
+  "devotional",
+  "popular-nonfiction",
+  "premium-literary",
+] as const;
+
+export const BookTemplateEnum = z.enum(["classic-academic", "modern-business", "devotional", "popular-nonfiction", "premium-literary"]);
+
 export const EbookManifestSchema = z.object({
   jobId: z.string(),
   bookTitle: z.string(),
@@ -158,6 +168,8 @@ export const EbookManifestSchema = z.object({
   totalWordCount: z.number(),
   allQuotes: z.array(QuoteSchema).default([]),
   generatedAt: z.string().datetime(),
+  /** Which PDF/EPUB layout template to use at export time */
+  selectedTemplate: BookTemplateEnum.default("devotional"),
 });
 
 // ─── Job State (IndexedDB persistence) ───────────────────────────────────────
