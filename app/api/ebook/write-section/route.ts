@@ -185,6 +185,8 @@ Return:
 - body: polished reader-facing prose
 - claimLedger: list of major claims in body and the excerpt numbers (1-based) that support each claim.
 
+CONTENT COVERAGE REQUIREMENT: ${assignment.targetWordCount} words is the MINIMUM floor, not a ceiling. Exhaust every distinct key point, story, illustration, and argument present in the transcript excerpts before closing the section. Do NOT truncate content to hit a target — write until the source material is fully represented.
+
 Now write the section prose:`;
 
   const PlanSchema = z.object({

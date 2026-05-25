@@ -166,6 +166,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showChips, setShowChips] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -384,196 +385,94 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
           </button>
         </div>
 
-        {/* Suggestion chips — ebook mode */}
-        {ebookManifest && (
-          <div className="flex-shrink-0 border-b border-slate-800 px-3 py-2.5">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Audit &amp; Review</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {([
-                ["Full audit", "Audit the book"],
-                ["View contents", "Show me the table of contents"],
-                ["Repetition check", "Check for concept duplicates and repeated content"],
-                ["Overused words", "Show overused words in the book"],
-                ["Similar sections", "Show structurally similar sections"],
-              ] as [string, string][]).map(([label, prompt]) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => { setInput(prompt); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-emerald-800/60 bg-emerald-950/30 px-3 py-1.5 text-[11px] text-emerald-400 transition hover:border-emerald-500/60 hover:text-emerald-300"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Metadata</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Change the book title",
-                "Update the subtitle",
-                "Revise the preface",
-                "Rewrite the introduction",
-                "Update the conclusion",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-500/40 hover:text-cyan-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Chapters &amp; Sections</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Rename chapter 1",
-                "Rewrite the intro of chapter 1",
-                "Replace the reflection questions in chapter 1",
-                "Add takeaways to all chapters",
-                "Rewrite section 1.1",
-                "Fix live-audience language in section 1.1",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Book-Wide Fixes</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Fix all live-audience language",
-                "Remove all greeting phrases",
-                "Standardise all section headings",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-amber-500/40 hover:text-amber-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Format &amp; Layout</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Format the entire book",
-                "Bold all key terms throughout",
-                "Make scripture passages block quotes",
-                "Use the devotional template",
-                "Use the premium literary template",
-                "Use the classic academic layout",
-                "Use the modern business style",
-                "Use the popular nonfiction layout",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-teal-500/40 hover:text-teal-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Structure</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Move section 1.2 to chapter 2",
-                "Reorder sections in chapter 1",
-                "Merge sections 2.1 and 2.2",
-                "Move chapter 1 to position 3",
-                "Split chapter 1 into two chapters",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-purple-500/40 hover:text-purple-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
+        {/* Quick-action chips — collapsed by default to give chat messages room */}
+        {(ebookManifest || (academy && !ebookManifest)) && (
+          <div className="flex-shrink-0 border-b border-slate-800">
+            <button
+              type="button"
+              onClick={() => setShowChips((v) => !v)}
+              className="flex w-full items-center justify-between px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <span>Quick actions</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={`h-3.5 w-3.5 transition-transform ${showChips ? "rotate-180" : ""}`}>
+                <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {showChips && (
+              <div className="overflow-y-auto px-3 pb-3 max-h-56">
+                {ebookManifest && (
+                  <>
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Audit &amp; Review</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {([
+                        ["Full audit", "Audit the book"],
+                        ["View contents", "Show me the table of contents"],
+                        ["Repetition check", "Check for concept duplicates and repeated content"],
+                        ["Overused words", "Show overused words in the book"],
+                        ["Similar sections", "Show structurally similar sections"],
+                      ] as [string, string][]).map(([label, prompt]) => (
+                        <button key={label} type="button" onClick={() => { setInput(prompt); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-emerald-800/60 bg-emerald-950/30 px-3 py-1.5 text-[11px] text-emerald-400 transition hover:border-emerald-500/60 hover:text-emerald-300">{label}</button>
+                      ))}
+                    </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Metadata</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Change the book title","Update the subtitle","Revise the preface","Rewrite the introduction","Update the conclusion"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-500/40 hover:text-cyan-300">{chip}</button>
+                      ))}
+                    </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Chapters &amp; Sections</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Rename chapter 1","Rewrite the intro of chapter 1","Replace the reflection questions in chapter 1","Add takeaways to all chapters","Rewrite section 1.1","Fix live-audience language in section 1.1"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300">{chip}</button>
+                      ))}
+                    </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Book-Wide Fixes</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Fix all live-audience language","Remove all greeting phrases","Standardise all section headings"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-amber-500/40 hover:text-amber-300">{chip}</button>
+                      ))}
+                    </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Format &amp; Layout</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Format the entire book","Bold all key terms throughout","Make scripture passages block quotes","Use the devotional template","Use the premium literary template","Use the classic academic layout","Use the modern business style","Use the popular nonfiction layout"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-teal-500/40 hover:text-teal-300">{chip}</button>
+                      ))}
+                    </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Structure</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Move section 1.2 to chapter 2","Reorder sections in chapter 1","Merge sections 2.1 and 2.2","Move chapter 1 to position 3","Split chapter 1 into two chapters"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-purple-500/40 hover:text-purple-300">{chip}</button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {academy && !ebookManifest && (
+                  <>
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Content</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Add key takeaways to all lessons","Add action items to every lesson","Rewrite notes with proper headings","Add quiz questions to all lessons","Add learning objectives to all modules","Expand the glossary for all modules","Make the notes more detailed and analytical"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-500/40 hover:text-cyan-300">{chip}</button>
+                      ))}
+                    </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Visual &amp; Theme</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Change theme to amber","Change theme to emerald","Change theme to violet","Change theme to rose","Change theme to solar (light mode)","Use a split hero layout","Use a minimal layout","Use a centered layout"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300">{chip}</button>
+                      ))}
+                    </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Landing Page</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Add testimonials from students","Add a FAQ section","Add an instructor bio","Add an announcement banner","Change the CTA button text","Add social media links"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-sky-500/40 hover:text-sky-300">{chip}</button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Suggestion chips — academy mode */}
-        {academy && !ebookManifest && (
-          <div className="flex-shrink-0 border-b border-slate-800 px-3 py-2.5">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Content</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Add key takeaways to all lessons",
-                "Add action items to every lesson",
-                "Rewrite notes with proper headings",
-                "Add quiz questions to all lessons",
-                "Add learning objectives to all modules",
-                "Expand the glossary for all modules",
-                "Make the notes more detailed and analytical",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-500/40 hover:text-cyan-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Visual &amp; Theme</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Change theme to amber",
-                "Change theme to emerald",
-                "Change theme to violet",
-                "Change theme to rose",
-                "Change theme to solar (light mode)",
-                "Use a split hero layout",
-                "Use a minimal layout",
-                "Use a centered layout",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Landing Page</p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {[
-                "Add testimonials from students",
-                "Add a FAQ section",
-                "Add an instructor bio",
-                "Add an announcement banner",
-                "Change the CTA button text",
-                "Add social media links",
-              ].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => { setInput(chip); inputRef.current?.focus(); }}
-                  className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-sky-500/40 hover:text-sky-300"
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Message history */}
         <div

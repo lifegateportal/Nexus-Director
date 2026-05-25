@@ -219,37 +219,69 @@ function writeScriptureBlock(doc: any, quote: { text: string; reference?: string
   doc.moveDown(0.6);
 }
 
+/**
+ * Strip markdown syntax so PDFKit renders plain text instead of raw markers.
+ *
+ * - Heading lines (## / ###) are dropped entirely — the heading was already
+ *   rendered above the body by writeChapter / writeFrontMatter.
+ * - Horizontal rule lines are dropped.
+ * - Bold (** / __) and italic (* / _) markers are removed, preserving the
+ *   inner text so emphasis words still appear — just not surrounded by *.
+ */
+function stripMarkdownForPdf(paragraph: string): string {
+  const trimmed = paragraph.trim();
+  if (/^#{1,6}\s+/.test(trimmed)) return ""; // heading line — drop
+  if (/^[-*_]{3,}\s*$/.test(trimmed)) return ""; // horizontal rule — drop
+  return paragraph
+    .replace(/\*\*\*(.+?)\*\*\*/gs, "$1")          // bold-italic
+    .replace(/\*\*(.+?)\*\*/gs, "$1")              // bold
+    .replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, "$1") // italic
+    .replace(/__(.+?)__/gs, "$1")                  // bold underscore
+    .replace(/(?<!_)_([^_\n]+?)_(?!_)/g, "$1")    // italic underscore
+    .trim();
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }) {
   const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
-  paragraphs.forEach((paragraph, index) => {
+  // Track rendered index separately so dropped heading lines don't shift the
+  // firstParagraph italic treatment onto the wrong paragraph.
+  let renderedIndex = 0;
+  paragraphs.forEach((paragraph) => {
     // Detect AI-generated markdown blockquotes (> prefix) first
     const markdownQuote = parseMarkdownBlockquote(paragraph);
     if (markdownQuote) {
       writeScriptureBlock(doc, markdownQuote, fonts, tpl);
+      renderedIndex++;
       return;
     }
     const matchingQuote = findMatchingBlockQuote(paragraph, quotes);
     if (matchingQuote) {
       writeScriptureBlock(doc, matchingQuote, fonts, tpl);
+      renderedIndex++;
       return;
     }
 
-    const font = options?.italicFirstParagraph && index === 0 ? fonts.serifItalic : fonts.serif;
-    const color = options?.italicFirstParagraph && index === 0 ? "#333333" : "#1a1a1a";
+    // Strip markdown syntax — heading lines return "" and are silently skipped
+    const cleanParagraph = stripMarkdownForPdf(paragraph);
+    if (!cleanParagraph) return;
+
+    const font = options?.italicFirstParagraph && renderedIndex === 0 ? fonts.serifItalic : fonts.serif;
+    const color = options?.italicFirstParagraph && renderedIndex === 0 ? "#333333" : "#1a1a1a";
     const noIndentFirst = options?.noIndentFirstParagraph !== false;
-    const indent = noIndentFirst && index === 0 ? 0 : tpl.paragraphIndent;
+    const indent = noIndentFirst && renderedIndex === 0 ? 0 : tpl.paragraphIndent;
     doc
       .fontSize(tpl.bodyFontSize)
       .font(font)
       .fillColor(color)
-      .text(paragraph, {
+      .text(cleanParagraph, {
         lineGap: tpl.bodyLineGap,
         indent,
         paragraphGap: tpl.paragraphGap,
         align: tpl.bodyAlign,
       });
     doc.moveDown(0.08);
+    renderedIndex++;
   });
 }
 
@@ -575,6 +607,19 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Escapes HTML special characters in a string that already contains safe
+ * <em> / <strong> / <br> tags injected by our own markdown converter.
+ * Those tags are preserved; only the text nodes between them are escaped.
+ */
+function escapeHtmlPreservingEmStrong(str: string): string {
+  // Split on the tags we intentionally injected, escape text segments, rejoin.
+  return str
+    .split(/(<\/?(?:em|strong|br)>)/g)
+    .map((part, i) => (i % 2 === 0 ? escapeHtml(part) : part))
+    .join("");
+}
+
 function paragraphsToHtml(text: string): string {
   return text
     .split(/\n{2,}/)
@@ -597,7 +642,8 @@ function markupInlineScripture(html: string): string {
 
 function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italicFirstParagraph?: boolean }): string {
   const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
-  return paragraphs.map((paragraph, index) => {
+  let renderedIndex = 0;
+  return paragraphs.map((paragraph) => {
     // Detect AI-generated markdown blockquotes (> prefix) first — these are the most
     // reliable because they come directly from the model output.
     const markdownQuote = parseMarkdownEpubBlockquote(paragraph);
@@ -607,6 +653,7 @@ function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italic
       const refText = markdownQuote.reference
         ? `&mdash; ${escapeHtml(markdownQuote.reference)}${markdownQuote.translation ? ` <span class="scripture-translation">(${escapeHtml(markdownQuote.translation)})</span>` : ""}`
         : "";
+      renderedIndex++;
       return `<blockquote class="scripture-block"><div class="scripture-verse">${verseHtml}</div>${refText ? `<div class="scripture-ref">${refText}</div>` : ""}</blockquote>`;
     }
     const matchingQuote = findMatchingBlockQuote(paragraph, quotes);
@@ -616,14 +663,37 @@ function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italic
       const refText = matchingQuote.reference
         ? `&mdash; ${escapeHtml(matchingQuote.reference)}${matchingQuote.translation ? ` <span class="scripture-translation">(${escapeHtml(matchingQuote.translation)})</span>` : ""}`
         : "";
+      renderedIndex++;
       return `<blockquote class="scripture-block"><div class="scripture-verse">${verseHtml}</div>${refText ? `<div class="scripture-ref">${refText}</div>` : ""}</blockquote>`;
     }
+
+    // Drop markdown heading lines — they duplicate the section heading already
+    // rendered by the EPUB chapter structure above the body.
+    if (/^#{1,6}\s+/.test(paragraph)) return "";
+    // Drop bare horizontal rules
+    if (/^[-*_]{3,}\s*$/.test(paragraph)) return "";
+
+    // Convert inline markdown to HTML tags so *word* renders as <em>word</em>
+    // instead of appearing with literal asterisks in the EPUB reader.
+    // Apply BEFORE escapeHtml because escapeHtml doesn’t touch * characters,
+    // so the order is: markdown→HTML tags, then escapeHtml for the text content.
+    const withHtmlMarkup = paragraph
+      .replace(/\*\*\*(.+?)\*\*\*/gs, "<strong><em>$1</em></strong>")
+      .replace(/\*\*(.+?)\*\*/gs, "<strong>$1</strong>")
+      .replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, "<em>$1</em>")
+      .replace(/__(.+?)__/gs, "<strong>$1</strong>")
+      .replace(/(?<!_)_([^_\n]+?)_(?!_)/g, "<em>$1</em>");
+
     const classes = ["book-paragraph"];
-    if (index === 0) classes.push("no-indent");
-    if (options?.italicFirstParagraph && index === 0) classes.push("chapter-intro");
-    const escapedPara = markupInlineScripture(escapeHtml(paragraph));
+    if (renderedIndex === 0) classes.push("no-indent");
+    if (options?.italicFirstParagraph && renderedIndex === 0) classes.push("chapter-intro");
+    // markupInlineScripture + escapeHtml work on the tag-converted string.
+    // Text nodes inside our injected tags were not yet escaped, so run a targeted
+    // escape that preserves the <em>/<strong> wrapper tags we just added.
+    const escapedPara = markupInlineScripture(escapeHtmlPreservingEmStrong(withHtmlMarkup));
+    renderedIndex++;
     return `<p class="${classes.join(" ")}">${escapedPara}</p>`;
-  }).join("\n");
+  }).filter(Boolean).join("\n");
 }
 
 // EPUB-specific markdown blockquote parser (same logic as PDF parseMarkdownBlockquote)
@@ -924,18 +994,49 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     return [...verseParagraphs, ...refParagraphs];
   }
 
+  /**
+   * Parses inline markdown in a paragraph into an array of TextRun objects with
+   * proper bold/italic formatting so Word renders them correctly.
+   * Handles ***bold-italic***, **bold**, *italic*, __bold__, _italic_.
+   */
+  function parseRunsForDocx(text: string, baseSize: number): TextRun[] {
+    const runs: TextRun[] = [];
+    const pattern = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|(?<!\*)\*([^*\n]+?)\*(?!\*)|__(.+?)__|(?<!_)_([^_\n]+?)_(?!_))/gs;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        runs.push(new TextRun({ text: text.slice(lastIndex, match.index), size: baseSize }));
+      }
+      if (match[2])      runs.push(new TextRun({ text: match[2], bold: true, italics: true, size: baseSize }));
+      else if (match[3]) runs.push(new TextRun({ text: match[3], bold: true,               size: baseSize }));
+      else if (match[4]) runs.push(new TextRun({ text: match[4],              italics: true, size: baseSize }));
+      else if (match[5]) runs.push(new TextRun({ text: match[5], bold: true,               size: baseSize }));
+      else if (match[6]) runs.push(new TextRun({ text: match[6],              italics: true, size: baseSize }));
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) {
+      runs.push(new TextRun({ text: text.slice(lastIndex), size: baseSize }));
+    }
+    return runs.length > 0 ? runs : [new TextRun({ text, size: baseSize })];
+  }
+
   function textToStyledParagraphs(text: string, noIndentFirst = false): Paragraph[] {
     return text
       .split(/\n{2,}/)
       .map((para) => para.trim())
       .filter(Boolean)
       .flatMap((para, i) => {
+        // Drop heading lines — the section heading is already rendered above the body
+        if (/^#{1,6}\s+/.test(para)) return [];
+        // Drop horizontal rules
+        if (/^[-*_]{3,}\s*$/.test(para)) return [];
         // Detect markdown blockquote for scripture
         const mdQuote = parseMarkdownBlockquote(para);
         if (mdQuote) return docxScriptureBlock(mdQuote);
         return [
           new Paragraph({
-            children: [new TextRun({ text: para, size: bodyHalfPt })],
+            children: parseRunsForDocx(para, bodyHalfPt),
             alignment: bodyAlign,
             spacing: { after: paraSpacingAfter },
             indent: noIndentFirst && i === 0 ? undefined : { firstLine: paraIndentTwips },

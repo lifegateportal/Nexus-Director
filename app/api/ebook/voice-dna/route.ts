@@ -33,23 +33,29 @@ export async function POST(req: NextRequest) {
     const { text } = await generateText({
       model: deepSeekModel,
       temperature: 0.2,
-      maxTokens: 1024,
+      maxTokens: 4096,
       system: `You are a linguistic analyst specializing in capturing an author's unique voice and teaching DNA.
 Analyze the provided transcript sample and extract a precise Voice DNA profile.
 
 CRITICAL: Extract ONLY patterns genuinely evidenced in this transcript.
 Do not invent or generalize — every entry must be directly supported by the words present.
 
+ARRAY SIZE LIMITS — strictly enforced:
+- signaturePhrases: at most 8 items (most frequently repeated verbatim phrases only)
+- preferredTerminology: at most 10 items
+- rhetoricalPatterns: at most 6 items
+- avoidWords: at most 30 items total (baseline 22 + up to 8 author-specific)
+
 Focus on:
-- signaturePhrases: exact phrases repeated (min 2 occurrences). Include verbatim.
-- preferredTerminology: domain-specific words or concepts the author uses consistently.
+- signaturePhrases: exact phrases repeated (min 2 occurrences). Include verbatim. MAX 8.
+- preferredTerminology: domain-specific words or concepts the author uses consistently. MAX 10.
 - toneProfile: emotional and relational tone (e.g. "pastoral, direct, warm, scholarly").
 - sentencePattern: must be exactly one of: "short-punchy", "long-explanatory", or "mixed".
-- rhetoricalPatterns: teaching devices (e.g. "repeats key point three times", "uses rhetorical questions").
+- rhetoricalPatterns: teaching devices (e.g. "repeats key point three times", "uses rhetorical questions"). MAX 6.
 - teachingStyle: how the author opens topics, develops arguments, and lands points.
 - avoidWords: Always start with this mandatory baseline of forbidden AI writing clichés, then add any words the author demonstrably never uses on top:
   BASELINE (always include all of these): ["In conclusion", "delve into", "tapestry", "navigating", "It's important to note", "Furthermore", "Moreover", "In today's fast-paced world", "It is crucial", "It is worth noting", "At the end of the day", "Game-changer", "Paradigm shift", "Deep dive", "Unpack", "Moving forward", "Robust", "Leverage", "Synergy", "It goes without saying", "The truth is,", "The fact of the matter is"]
-  Then append author-specific words genuinely absent from their speech.
+  Then append up to 8 author-specific words genuinely absent from their speech.
 
 Respond with ONLY a valid JSON object matching this exact shape:
 {
@@ -67,7 +73,21 @@ Respond with ONLY a valid JSON object matching this exact shape:
     // Extract the first {...} JSON block — handles leading text, code fences, or truncation artifacts
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error(`Voice DNA response contained no JSON object. Raw: ${text.slice(0, 200)}`);
-    const raw = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+
+    // Attempt to parse; if truncated, close any open brackets and retry once
+    let raw: Record<string, unknown>;
+    try {
+      raw = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    } catch {
+      // Truncated JSON — close unclosed arrays and objects and retry
+      let partial = jsonMatch[0];
+      const openArrays = (partial.match(/\[/g) ?? []).length - (partial.match(/\]/g) ?? []).length;
+      const openObjects = (partial.match(/\{/g) ?? []).length - (partial.match(/\}/g) ?? []).length;
+      // Remove trailing comma or incomplete token before closing
+      partial = partial.replace(/,\s*$/, "").replace(/,\s*"[^"]*$/, "");
+      partial += "]".repeat(Math.max(0, openArrays)) + "}".repeat(Math.max(0, openObjects));
+      raw = JSON.parse(partial) as Record<string, unknown>;
+    }
 
     // Coerce sentencePattern to a valid enum value
     if (typeof raw.sentencePattern === "string") {
@@ -76,6 +96,12 @@ Respond with ONLY a valid JSON object matching this exact shape:
       else if (sp.includes("long") || sp.includes("explanatory")) raw.sentencePattern = "long-explanatory";
       else raw.sentencePattern = "mixed";
     }
+
+    // Hard-cap arrays so an over-generous model can never cause a truncation loop
+    if (Array.isArray(raw.signaturePhrases))    raw.signaturePhrases    = (raw.signaturePhrases    as string[]).slice(0, 8);
+    if (Array.isArray(raw.preferredTerminology)) raw.preferredTerminology = (raw.preferredTerminology as string[]).slice(0, 10);
+    if (Array.isArray(raw.rhetoricalPatterns))  raw.rhetoricalPatterns  = (raw.rhetoricalPatterns  as string[]).slice(0, 6);
+    if (Array.isArray(raw.avoidWords))          raw.avoidWords          = (raw.avoidWords          as string[]).slice(0, 30);
 
     const object = VoiceDNASchema.parse(raw);
     return NextResponse.json(object, { status: 200 });

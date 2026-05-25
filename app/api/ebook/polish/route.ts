@@ -36,9 +36,19 @@ function fallbackPolishOutput(chapter: z.infer<typeof PolishChapterRequestSchema
         `What should the reader carry forward from this chapter?`,
       ];
 
+  // Intro: derive from headings and key points — never copy the body prose.
+  const headingsSummary = sections
+    .map((s) => s.heading?.trim())
+    .filter(Boolean)
+    .join(", ");
+  const fallbackIntro = headingsSummary
+    ? `This chapter examines: ${headingsSummary}.`
+    : chapter.title || "";
+
   return {
-    intro: stripAudienceLanguage(firstBody || chapter.title || ""),
+    intro: stripAudienceLanguage(fallbackIntro),
     conclusion: stripAudienceLanguage(lastBody || firstBody || chapter.title || ""),
+
     keyTakeaways: takeaways.length > 0 ? takeaways.map((item) => stripAudienceLanguage(item)) : [stripAudienceLanguage(chapter.title || "")].filter(Boolean),
     reflectionQuestions: reflectionQuestions.map((item) => stripAudienceLanguage(item)).filter(Boolean),
   };
@@ -56,10 +66,14 @@ export async function POST(req: NextRequest) {
   const { input: chapter } = input;
 
   try {
-    // Send section headings + first 200 chars of each body (not full prose)
+    // Send section headings + key takeaways only — NOT body prose.
+    // Sending body prose caused the LLM to mirror the section-1 opening verbatim as the intro.
     const sectionsSummary = (chapter.sections ?? [])
-      .map((s) => `Section ${s.sectionNumber} — ${s.heading}:\n${(s.body ?? "").slice(0, 200)}…`)
-      .join("\n\n");
+      .map((s) => {
+        const kp = (s.keyTakeaways ?? []).slice(0, 3).join("; ");
+        return `Section ${s.sectionNumber} — ${s.heading}${kp ? `: ${kp}` : ""}`;
+      })
+      .join("\n");
 
     const totalWordCount = (chapter.sections ?? []).reduce((acc, s) => acc + (s.wordCount ?? 0), 0);
 
@@ -81,8 +95,13 @@ ABSOLUTE CONTENT RULE: Every sentence must come from the provided transcript con
 Do NOT add new ideas, examples, or explanations not present in the transcript.
 
 Your tasks:
-1. INTRO: 2–4 sentences opening the chapter using the author's own words/phrases.
+1. INTRO: 2–4 sentences that FRAME what this chapter covers, written in the author's voice.
+   CRITICAL: Do NOT copy, quote, or paraphrase the opening sentences of Section 1.
+   The intro must be a distinct orienting passage — a door the reader walks through before
+   entering Section 1's prose. It should name the chapter's central question or tension
+   without restating any sentence that will appear in the body.
 2. CONCLUSION: 2–4 sentences closing the chapter, drawing on what was actually said.
+   Do NOT repeat the intro verbatim.
 3. KEY TAKEAWAYS: 3–6 bullet statements taken VERBATIM or near-verbatim from the chapter.
 4. REFLECTION QUESTIONS: 3–4 questions arising naturally from what the author actually taught.
 

@@ -107,7 +107,16 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
     const start = (object.teachingStartPhrase ?? "").trim();
     if (start.length > 20) {
       const idx = transcript.indexOf(start.slice(0, 60));
-      if (idx > 10) cleaned = transcript.slice(idx);
+      if (idx > 10) {
+        // Re-inject the nearest preceding [Slot-N] header so the content-map
+        // parser doesn't lose the first slot when greetings/prayers are trimmed.
+        const before = transcript.slice(0, idx);
+        const allHeaders = before.match(/\[Slot-\d+\]/g);
+        const lastHeader = allHeaders ? allHeaders[allHeaders.length - 1] : null;
+        cleaned = lastHeader
+          ? `${lastHeader}\n${transcript.slice(idx)}`
+          : transcript.slice(idx);
+      }
     }
 
     const end = (object.teachingEndPhrase ?? "").trim();
