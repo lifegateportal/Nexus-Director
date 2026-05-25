@@ -117,8 +117,7 @@ AUDIENCE & FORMAT
 ════════════════════════════════════════════
 • Remove crowd cues and stage prompts (e.g., "say amen", "look at your neighbor", applause calls, house-response commands)
 • Rewrite direct live-room address ("today I want to tell you", "as you sit here") into book language for an individual reader
-• PARAGRAPH DISCIPLINE: Each paragraph is a SEALED UNIT of ONE idea — 3 to 5 sentences maximum. When a new point, example, scripture, or argument begins, you MUST start a new paragraph. Never bundle multiple teaching points into a single paragraph. Paragraphs that exceed 6 sentences are a hard failure.
-• Separate every paragraph with a BLANK LINE in your output (two newline characters between paragraphs). A missing blank line between paragraphs is a hard failure.
+• PARAGRAPH DISCIPLINE: You are returning paragraphs as a JSON ARRAY — each array element is exactly one paragraph. ONE idea per paragraph, 3 to 5 sentences. When a new point, scripture quotation, example, or argument begins, it must be a new array element. Never put two paragraphs in one array element. Never split a single paragraph across two elements.
 • Target the specified word count based on available content — do not pad to reach it
 
 ${SOURCE_LOCK_RULES}
@@ -193,8 +192,8 @@ TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
 
 Return:
-- body: polished reader-facing prose
-- claimLedger: list of major claims in body and the excerpt numbers (1-based) that support each claim.
+- paragraphs: an array of strings where EACH ELEMENT IS ONE PARAGRAPH of polished prose. Every paragraph is a separate array item. Never put more than one paragraph in a single array element. Do not use \n or \n\n inside any element — each element is exactly one paragraph.
+- claimLedger: list of major claims and the excerpt numbers (1-based) that support each claim.
 
 CONTENT COVERAGE REQUIREMENT: ${assignment.targetWordCount} words is the MINIMUM floor, not a ceiling. Exhaust every distinct key point, story, illustration, and argument present in the transcript excerpts before closing the section. Do NOT truncate content to hit a target — write until the source material is fully represented.
 
@@ -208,7 +207,9 @@ Now write the section prose:`;
   });
 
   const SectionBodySchema = z.object({
-    body: z.string().default("").describe("The polished prose for this section, using only the provided transcript content"),
+    paragraphs: z.array(z.string()).default([]).describe(
+      "Each element is exactly one paragraph of polished prose. Never embed newlines inside an element. Each paragraph is a standalone array item."
+    ),
     claimLedger: z.array(z.object({
       claim: z.string().default(""),
       excerptNumbers: z.array(z.number().int().positive()).default([]),
@@ -265,7 +266,8 @@ ${READER_NORMALIZATION_RULES}`,
       system: deduplicatedSystem,
       prompt: `${prompt}\n\nPARAGRAPH PLAN (must follow if provided):\n${JSON.stringify(paragraphPlan)}`,
     });
-    const body = stripAudienceLanguage(normalizeReaderFacingProse((object.body ?? "").trim()) || fallbackSectionBody(assignment));
+    const rawBody = (object.paragraphs ?? []).map((p) => p.trim()).filter(Boolean).join("\n\n") || fallbackSectionBody(assignment);
+    const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
     return NextResponse.json({ body, claimLedger: object.claimLedger ?? [] }, { status: 200 });
   } catch (err) {
     const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(fallbackSectionBody(assignment)));
