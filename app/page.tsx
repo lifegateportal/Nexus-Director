@@ -118,6 +118,11 @@ export default function HomePage() {
     addLog({ level: "success", message: `Director: ${summary}`, model: "curator" });
   }, [addLog]);
 
+  // Keep ebookManifest in sync whenever the ebook pipeline finishes or is edited
+  const handleEbookManifestReady = useCallback((manifest: EbookManifest) => {
+    setEbookManifest(manifest);
+  }, []);
+
   const handleSaveProject = useCallback(async (name: string) => {
     const id = currentProjectId || generateProjectId();
     const snapshot: ProjectSnapshot = {
@@ -132,6 +137,7 @@ export default function HomePage() {
       blueprint: blueprint ?? null,
       logicResult: logicResult ?? null,
       uiResult: uiResult ?? null,
+      ebookManifest: ebookManifest ?? null,
     };
     try {
       await saveProject(snapshot);
@@ -142,7 +148,7 @@ export default function HomePage() {
       const msg = err instanceof Error ? err.message : "Save failed";
       addLog({ level: "error", message: `Could not save project: ${msg}` });
     }
-  }, [currentProjectId, projects, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, addLog]);
+  }, [currentProjectId, projects, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, ebookManifest, addLog]);
 
   const handleLoadProject = useCallback((id: string) => {
     const p = projects.find((proj) => proj.id === id);
@@ -156,8 +162,10 @@ export default function HomePage() {
     setChatHistory(p.chatHistory);
     setPanelLoadKey(p.id);
     setCurrentProjectId(p.id);
+    if (p.ebookManifest) setEbookManifest(p.ebookManifest);
     if (p.blueprint) setStage("done");
-    setActiveNav("overview");
+    // Navigate to ebook tab if the project has a book; otherwise overview
+    setActiveNav(p.ebookManifest ? "ebook" : "overview");
     // Update the shared localStorage keys so preview pages also see the loaded data
     if (p.academy) localStorage.setItem("nexus_academy_preview", JSON.stringify(p.academy));
     localStorage.setItem("nexus_site_config", JSON.stringify(p.siteConfig));
@@ -411,7 +419,7 @@ export default function HomePage() {
                   <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
                     <EbookPipeline
                       ebookManifest={ebookManifest}
-                      onManifestReady={setEbookManifest}
+                      onManifestReady={handleEbookManifestReady}
                       onPipelineSnapshotChange={setEbookSnapshot}
                     />
                   </div>
