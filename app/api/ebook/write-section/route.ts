@@ -7,7 +7,7 @@ import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
-export const maxDuration = 90;
+export const maxDuration = 300;
 
 function fallbackSectionBody(input: z.infer<typeof WriteSectionRequestSchema>["assignment"]): string {
   const cleanedExcerpts = input.transcriptExcerpts
@@ -223,11 +223,14 @@ Now write the section prose:`;
       : "";
 
     try {
+      // Cap the planner at 45 seconds so it never eats into the writer's budget
+      const plannerAbort = AbortSignal.timeout(45_000);
       const { object: plan } = await generateObject({
         model: deepSeekModel,
         schema: PlanSchema,
         mode: "json",
         temperature: 0.15,
+        abortSignal: plannerAbort,
         system: `You are a structural editor planning the paragraph-level architecture for a single book section.
 
 BESTSELLER ARC — apply within this section where the content supports it:

@@ -6,7 +6,7 @@ import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
-export const maxDuration = 90;
+export const maxDuration = 180;
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;

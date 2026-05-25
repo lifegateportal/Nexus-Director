@@ -7,7 +7,7 @@ import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
-export const maxDuration = 90;
+export const maxDuration = 300;
 
 // Slim output — section bodies are already written; LLM only adds framing + takeaways
 const PolishOutputSchema = z.object({

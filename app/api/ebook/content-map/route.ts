@@ -5,7 +5,7 @@ import { deepSeekModel } from "@/lib/ai-providers";
 import { ContentMapRequestSchema, QuoteSchema } from "@/lib/schemas/ebook";
 
 export const runtime = "nodejs";
-export const maxDuration = 240;
+export const maxDuration = 300;
 
 // Max words to send to the LLM per slot.
 // 12 000 covers the vast majority of sermon recordings (~60–90 min) without
