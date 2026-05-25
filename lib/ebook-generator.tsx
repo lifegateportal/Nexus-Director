@@ -1161,6 +1161,22 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         spacing: { before: 0, after: 300 },
       })
     );
+    // Chapter intro — italic opening paragraph, matches PDF/EPUB rendering
+    if (chapter.intro?.trim()) {
+      normalizeParagraphBreaks(chapter.intro)
+        .split(/\n{2,}/)
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .forEach((introPara) => {
+          children.push(
+            new Paragraph({
+              children: [new TextRun({ text: introPara, italics: true, size: bodyHalfPt })],
+              alignment: bodyAlign,
+              spacing: { after: paraSpacingAfter },
+            })
+          );
+        });
+    }
     for (const section of chapter.sections) {
       if (section.heading) {
         children.push(
