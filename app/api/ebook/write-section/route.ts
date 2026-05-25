@@ -35,7 +35,7 @@ function normalizeReaderFacingProse(text: string): string {
   return text
     .replace(/\b(turn to your neighbor|say amen|clap your hands|lift your hands)\b/gi, "")
     .replace(/\b(as you sit here today|in this room today|right here in this place)\b/gi, "")
-    .replace(/\s{2,}/g, " ")
+    .replace(/[ \t]{2,}/g, " ")   // collapse only horizontal whitespace, never newlines
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
