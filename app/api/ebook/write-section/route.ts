@@ -117,7 +117,8 @@ AUDIENCE & FORMAT
 ════════════════════════════════════════════
 • Remove crowd cues and stage prompts (e.g., "say amen", "look at your neighbor", applause calls, house-response commands)
 • Rewrite direct live-room address ("today I want to tell you", "as you sit here") into book language for an individual reader
-• Separate paragraphs with a blank line
+• PARAGRAPH DISCIPLINE: Each paragraph is a SEALED UNIT of ONE idea — 3 to 5 sentences maximum. When a new point, example, scripture, or argument begins, you MUST start a new paragraph. Never bundle multiple teaching points into a single paragraph. Paragraphs that exceed 6 sentences are a hard failure.
+• Separate every paragraph with a BLANK LINE in your output (two newline characters between paragraphs). A missing blank line between paragraphs is a hard failure.
 • Target the specified word count based on available content — do not pad to reach it
 
 ${SOURCE_LOCK_RULES}

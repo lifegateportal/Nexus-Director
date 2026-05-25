@@ -220,6 +220,73 @@ function writeScriptureBlock(doc: any, quote: { text: string; reference?: string
 }
 
 /**
+ * Normalize paragraph breaks in LLM-generated body text.
+ *
+ * Problems addressed:
+ *   1. LLM sometimes outputs \n (single newline) between paragraphs inside
+ *      JSON strings instead of \n\n. Sentence-ending punctuation followed by
+ *      a single newline and a capital letter → expanded to \n\n.
+ *   2. LLM occasionally writes 10–15 sentence wall-of-text as one paragraph.
+ *      Any paragraph over 100 words is split at sentence boundaries into
+ *      ~80-word chunks so the renderer always has visible paragraph breaks.
+ */
+function normalizeParagraphBreaks(text: string): string {
+  // Step 1: normalise line endings and collapse 3+ blank lines
+  const cleaned = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    // Step 2: expand single-newline paragraph breaks the LLM sometimes emits
+    .replace(/([.!?'"\u201d])\n(?!\n)(?=[A-Z\u201c])/g, "$1\n\n");
+
+  // Step 3: split over-long paragraphs intelligently
+  // Prefer transition-sentence boundaries over arbitrary word counts.
+  const TRANSITION_START = /^(But |Yet |So |Now |Notice |Consider |Here |This |These |That |Those |And yet |In fact |In other words |For example |For instance |The truth |What this |What God |When God |When we |When you |He didn\'t |He didn\'t |God didn\'t |Jesus didn\'t |Paul didn\'t |It is not |It\'s not |It wasn\'t )/i;
+  const HARD_LIMIT = 160; // only force-split paragraphs beyond this
+  const SOFT_TARGET = 100; // preferred max words per chunk when a split is needed
+
+  const paras = cleaned.split(/\n{2,}/);
+  const result: string[] = [];
+  for (const para of paras) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+    if (wordCount <= HARD_LIMIT) {
+      result.push(trimmed);
+      continue;
+    }
+
+    // Split at sentence-ending punctuation followed by whitespace and a capital
+    const sentences = trimmed.split(/(?<=[.!?]["'\u201d]?)\s+(?=[A-Z\u201c"])/);
+
+    // Pass 1: try to split at transition sentences first
+    const chunks: string[][] = [[]];
+    let chunkWords = 0;
+    for (const sentence of sentences) {
+      const sw = sentence.split(/\s+/).filter(Boolean).length;
+      const isTransition = TRANSITION_START.test(sentence);
+      // Break before a transition sentence when the current chunk is substantial
+      if (isTransition && chunkWords >= 50) {
+        chunks.push([sentence]);
+        chunkWords = sw;
+      } else if (!isTransition && chunkWords >= SOFT_TARGET) {
+        // No transition found — break at any sentence boundary once past target
+        chunks.push([sentence]);
+        chunkWords = sw;
+      } else {
+        chunks[chunks.length - 1].push(sentence);
+        chunkWords += sw;
+      }
+    }
+
+    for (const chunk of chunks) {
+      if (chunk.length > 0) result.push(chunk.join(" "));
+    }
+  }
+  return result.join("\n\n");
+}
+
+/**
  * Strip markdown syntax so PDFKit renders plain text instead of raw markers.
  *
  * - Heading lines (## / ###) are dropped entirely — the heading was already
@@ -243,7 +310,7 @@ function stripMarkdownForPdf(paragraph: string): string {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }) {
-  const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  const paragraphs = normalizeParagraphBreaks(text).split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
   // Track rendered index separately so dropped heading lines don't shift the
   // firstParagraph italic treatment onto the wrong paragraph.
   let renderedIndex = 0;
@@ -641,7 +708,7 @@ function markupInlineScripture(html: string): string {
 }
 
 function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italicFirstParagraph?: boolean }): string {
-  const paragraphs = text.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  const paragraphs = normalizeParagraphBreaks(text).split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
   let renderedIndex = 0;
   return paragraphs.map((paragraph) => {
     // Detect AI-generated markdown blockquotes (> prefix) first — these are the most
@@ -1022,7 +1089,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
   }
 
   function textToStyledParagraphs(text: string, noIndentFirst = false): Paragraph[] {
-    return text
+    return normalizeParagraphBreaks(text)
       .split(/\n{2,}/)
       .map((para) => para.trim())
       .filter(Boolean)
