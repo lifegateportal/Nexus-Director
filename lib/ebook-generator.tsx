@@ -1190,6 +1190,51 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       }
       children.push(...textToStyledParagraphs(section.body, true));
     }
+
+    // Chapter conclusion
+    if (chapter.conclusion?.trim()) {
+      children.push(...textToStyledParagraphs(chapter.conclusion, true));
+    }
+
+    // Key Takeaways
+    if ((chapter.keyTakeaways ?? []).length > 0) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: "KEY TAKEAWAYS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
+          spacing: { before: 280, after: 120 },
+        })
+      );
+      for (const t of (chapter.keyTakeaways ?? [])) {
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text: `• ${t}`, size: bodyHalfPt })],
+            alignment: bodyAlign,
+            spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+          })
+        );
+      }
+    }
+
+    // Reflection Questions
+    if ((chapter.reflectionQuestions ?? []).length > 0) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: "REFLECTION QUESTIONS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
+          spacing: { before: 280, after: 120 },
+        })
+      );
+      (chapter.reflectionQuestions ?? []).forEach((q, i) => {
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text: `${i + 1}. ${q}`, size: bodyHalfPt })],
+            alignment: bodyAlign,
+            spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+          })
+        );
+      });
+    }
+
+    // Page break after all chapter content (before next chapter or back matter)
     children.push(new Paragraph({ children: [new PageBreak()] }));
   }
 
@@ -1204,8 +1249,24 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
   if (frontMatter.aboutAuthor?.trim()) {
     children.push(
       new Paragraph({ text: "About the Author", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
-      ...textToStyledParagraphs(frontMatter.aboutAuthor, true)
+      ...textToStyledParagraphs(frontMatter.aboutAuthor, true),
+      new Paragraph({ children: [new PageBreak()] })
     );
+  }
+
+  if ((frontMatter.resourcesList ?? []).length > 0) {
+    children.push(
+      new Paragraph({ text: "Resources", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
+    );
+    for (const r of (frontMatter.resourcesList ?? [])) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: `• ${r}`, size: bodyHalfPt })],
+          alignment: bodyAlign,
+          spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+        })
+      );
+    }
   }
 
   const doc = new DocxDocument({
