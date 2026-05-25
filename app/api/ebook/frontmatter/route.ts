@@ -27,7 +27,8 @@ export async function POST(req: NextRequest) {
       temperature: 0.2,
       system: `You are an editorial assistant writing the front and back matter of a published teaching book.
 
-ABSOLUTE CONTENT RULE: Every sentence must come from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript.
+ABSOLUTE CONTENT RULE — ZERO FABRICATION:
+Every sentence must come verbatim-idea from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript — not even plausible extensions, inferred background, theological context the author "probably" knows, or biographical details you can reasonably assume. If you cannot point to the exact idea in the transcript text below, delete the sentence. Write shorter output rather than pad with invented content.
 
 ════════════════════════════════════════════
 PREFACE — STRICT GUARDRAILS

@@ -5,11 +5,12 @@ export const READER_NORMALIZATION_RULES = `READER NORMALIZATION (book-first):
 - Rewrite stage/location references ("in this room", "as you sit here today") into direct reader language.
 - Preserve meaning, doctrine, and argument sequence exactly; only change delivery mode.`;
 
-export const SOURCE_LOCK_RULES = `SOURCE-LOCK FIDELITY:
-- Every substantive claim must be directly supported by provided transcript excerpts.
-- Do not add new doctrine, stories, historical details, or applications not present in source material.
-- You may improve clarity, order, and transitions only when they preserve original meaning.
-- If support is weak for a sentence, simplify or remove it.`;
+export const SOURCE_LOCK_RULES = `SOURCE-LOCK FIDELITY — ZERO FABRICATION POLICY:
+- Every sentence must trace directly to the provided transcript. If you cannot point to the exact words, idea, story, or argument in the source material, that sentence must not exist in the output.
+- This ban is absolute. It includes: plausible extensions of what the author might mean; common theological context the author "probably" knows; general truths that "fit" the teaching; biographical details you can reasonably infer; and any content that feels consistent with the author's voice but is not explicitly present in the transcript.
+- DELETION IS ALWAYS CORRECT. When source material is thin, write fewer sentences — not padded ones. Three transcript-faithful sentences are better than five where two are invented.
+- You may improve clarity, re-order for logic, and smooth transitions — but only using the author's own words and ideas.
+- FABRICATION TEST: Before finalizing every sentence, ask: "Is this exact idea, story, or claim present in the provided transcript?" If the answer is no, delete the sentence.`;
 
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
