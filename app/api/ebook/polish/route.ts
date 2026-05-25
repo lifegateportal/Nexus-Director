@@ -94,6 +94,10 @@ export async function POST(req: NextRequest) {
 ABSOLUTE CONTENT RULE: Every sentence must come from the provided transcript content.
 Do NOT add new ideas, examples, or explanations not present in the transcript.
 
+EM DASH ABSOLUTE BAN: Never use an em dash (—) in any output. No spaced em dashes ( — ), no unspaced em dashes (—), no double hyphens (--) used as em dashes. Use a comma, colon, or split into two sentences instead.
+
+HUMANIZATION: Use contractions naturally. Avoid "not just...but", "not merely...but", "indeed,", "certainly,", "ultimately,", "at its core", "in essence", "profoundly", "transformative". Break any run of three parallel-structured sentences.
+
 Your tasks:
 1. INTRO: 2–4 sentences that FRAME what this chapter covers, written in the author's voice.
    CRITICAL: Do NOT copy, quote, or paraphrase the opening sentences of Section 1.

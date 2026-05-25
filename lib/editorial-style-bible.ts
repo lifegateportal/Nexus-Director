@@ -13,26 +13,47 @@ export const SOURCE_LOCK_RULES = `SOURCE-LOCK FIDELITY:
 
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
+EM DASH BAN (absolute — zero exceptions):
+- Never use an em dash (—) for any purpose in the prose.
+- Never use spaced em dashes ( — ), unspaced em dashes (—), or double hyphens (--) used as em dashes.
+- Rewrite every sentence that would require an em dash: split into two sentences, use a comma, or use a colon where appropriate.
+
 PARAGRAPH CRAFT:
-- No paragraph should exceed 5 sentences. Short paragraphs (1–2 sentences) are not weakness — they are emphasis.
+- No paragraph should exceed 5 sentences. Short paragraphs (1–2 sentences) are not weakness; they are emphasis.
 - Vary opening words across consecutive paragraphs. Never start two adjacent paragraphs with the same word or phrase.
 - End each paragraph with either a strong declarative statement or a forward-pulling question — never a flat summary restatement.
+- Occasionally let a paragraph close on an incomplete thought. A fragment. It signals voice, not error.
 
 SENTENCE RHYTHM:
 - Mix sentence lengths deliberately: long sentences explain, short sentences land the blow.
 - No three consecutive sentences should be the same approximate length.
 - Avoid passive constructions. Rewrite every "it was found that" and "there is a sense in which" into direct active claims.
+- Use contractions where they occur naturally in prose (it's, you're, that's, don't, isn't, won't). They read human; stiff formal constructions read robotic.
 
 FORBIDDEN PHRASES (hard ban — delete or rewrite every instance):
-"In conclusion" | "It's important to note" | "It is crucial to remember" | "Let's delve into" | "A tapestry of" | "Navigating the landscape" | "In today's fast-paced world" | "Furthermore" | "Moreover" | "It is worth noting" | "At the end of the day" | "Game-changer" | "Paradigm shift" | "Deep dive" | "Unpack" | "Moving forward" | "Robust" | "Leverage" | "Synergy" | "It goes without saying" | "The truth is," | "The fact of the matter is"
+"In conclusion" | "It's important to note" | "It is crucial to remember" | "Let's delve into" | "A tapestry of" | "Navigating the landscape" | "In today's fast-paced world" | "Furthermore" | "Moreover" | "It is worth noting" | "At the end of the day" | "Game-changer" | "Paradigm shift" | "Deep dive" | "Unpack" | "Moving forward" | "Robust" | "Leverage" | "Synergy" | "It goes without saying" | "The truth is," | "The fact of the matter is" | "Indeed," | "Certainly," | "Ultimately," | "At its core," | "In essence," | "Simply put," | "Not just...but" | "Not merely...but" | "This is not merely" | "profoundly" | "deeply meaningful" | "transformative" | "journey" (used metaphorically) | "vibrant" | "fostering" | "crucial" | "vital" (overused)
+
+PAIRED INTENSIFIER BAN:
+- Never join two adjectives with "and" when either alone would be stronger: "clear and compelling" → "compelling"; "rich and complex" → "complex"; "deep and meaningful" → choose one word.
 
 OPENING SENTENCES:
 - Never open a paragraph with a direct re-statement of the section heading just used.
 - Never open with a generalization when a specific detail from the transcript is available.
+- Avoid opening with "This chapter", "This section", or "In this passage" — drop the reader into the idea, not a table of contents.
 
 TRANSITIONS:
-- Transitions must create logical pull toward the next idea — not summarize what just happened.
-- Mid-chapter summary transitions ("So, as we have seen...", "To summarize...") are forbidden.`;
+- Transitions must create logical pull toward the next idea, not summarize what just happened.
+- Mid-chapter summary transitions ("So, as we have seen...", "To summarize...") are forbidden.
+- Never stack two rhetorical questions in back-to-back sentences.
+
+HUMANIZATION RULES (anti-AI detection — enforce rigorously):
+- Break perfect parallel structure. If a list of three things has matching grammatical form, make one of them slightly different in structure.
+- Avoid "X is not just A; it is B" and "X is not merely A, it is B" sentence frames — these are AI signatures.
+- Avoid the double-comma appositive: "Love, the foundation of all things, is..." — rewrite as a separate sentence.
+- Never follow a big claim with "This means that..." or "What this tells us is..." — land the implication directly.
+- Avoid ending three or more consecutive paragraphs with a question.
+- Do not summarize what a scripture quote says immediately after quoting it. Trust the reader.
+`;
 
 const AUDIENCE_PATTERNS = [
 	/\blook at your neighbor\b/gi,
@@ -78,6 +99,13 @@ export const NON_BOOK_CUE_RE = /\b(say amen|look at your neighbor|clap your hand
 function cleanBookText(input: string): string {
 	return input
 		.replace(/\b(Amen|hallelujah|praise the lord|my god)\b/gi, "")
+		// Remove em dashes: replace with comma for mid-sentence, period+space before capital
+		.replace(/\s*\u2014\s*([A-Z])/g, ". $1")
+		.replace(/\s*\u2014\s*/g, ", ")
+		// Clean up double commas or comma-period sequences left after em dash removal
+		.replace(/,\s*,/g, ",")
+		.replace(/\.\s*,/g, ".")
+		.replace(/,\s*\./g, ".")
 		.replace(/\s{2,}/g, " ")
 		.replace(/\n{3,}/g, "\n\n")
 		.replace(/[ \t]+\n/g, "\n")

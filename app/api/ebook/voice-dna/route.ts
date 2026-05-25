@@ -54,7 +54,7 @@ Focus on:
 - rhetoricalPatterns: teaching devices (e.g. "repeats key point three times", "uses rhetorical questions"). MAX 6.
 - teachingStyle: how the author opens topics, develops arguments, and lands points.
 - avoidWords: Always start with this mandatory baseline of forbidden AI writing clichés, then add any words the author demonstrably never uses on top:
-  BASELINE (always include all of these): ["In conclusion", "delve into", "tapestry", "navigating", "It's important to note", "Furthermore", "Moreover", "In today's fast-paced world", "It is crucial", "It is worth noting", "At the end of the day", "Game-changer", "Paradigm shift", "Deep dive", "Unpack", "Moving forward", "Robust", "Leverage", "Synergy", "It goes without saying", "The truth is,", "The fact of the matter is"]
+  BASELINE (always include all of these): ["In conclusion", "delve into", "tapestry", "navigating", "It's important to note", "Furthermore", "Moreover", "In today's fast-paced world", "It is crucial", "It is worth noting", "At the end of the day", "Game-changer", "Paradigm shift", "Deep dive", "Unpack", "Moving forward", "Robust", "Leverage", "Synergy", "It goes without saying", "The truth is,", "The fact of the matter is", "Indeed,", "Certainly,", "Ultimately,", "At its core,", "In essence,", "Simply put,", "profoundly", "transformative", "vibrant", "fostering", "journey (metaphorical)", "not just...but", "not merely...but", "This is not merely"]
   Then append up to 8 author-specific words genuinely absent from their speech.
 
 Respond with ONLY a valid JSON object matching this exact shape:
