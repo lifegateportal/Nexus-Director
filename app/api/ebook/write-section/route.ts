@@ -57,6 +57,11 @@ You will receive transcribed audio text. Expect the following flaws:
 3. TONE AND REGISTER: Elevate the speaker's voice. The tone must be authoritative, engaging, and precise. Use active voice and strong verbs. Avoid passive, academic dryness.
 4. FORBIDDEN CLICHÉS: You are strictly forbidden from using standard AI transition phrases and clichés, including but not limited to: "In conclusion," "Let's delve into," "A tapestry of," "Navigating the landscape," "It's important to note," "Furthermore," and "In today's fast-paced world."
 5. FORMATTING: Output strictly in Markdown. Use hierarchical headings (## for main sections, ### for subsections) to visually break up the text. Never use HTML or \`<br>\` tags.
+6. SECTION BOUNDARY — ABSOLUTE RULE: Each section is a sealed unit. You MUST NOT preview, introduce, foreshadow, or summarize content that belongs to a future section. This includes any sentence that:
+   - Names or paraphrases a point the next section will make
+   - Begins developing an argument that has no transcript support in THIS section's excerpts
+   - Uses phrases like "We will see…", "As we explore next…", "This leads us to examine…", "In the coming pages…", or any forward reference.
+   Closing sentences may create forward momentum ONLY through an unresolved question, a tension, or a logical implication drawn entirely from the current section's own content. They must not disclose what the following section contains.
 
 # EXECUTION SEQUENCE
 Before generating the final output, follow this internal sequence:
@@ -157,7 +162,12 @@ export async function POST(req: NextRequest) {
   const coveredBlock = "";
 
   const nextSectionBlock = assignment.nextSectionHeading
-    ? `\nFORWARD BRIDGE: Close this section with a sentence or short paragraph that creates natural narrative pull toward the next section: "${assignment.nextSectionHeading}". Do not name the next section directly or use meta-language like "in the next section." Build logical momentum that makes the reader want to continue.`
+    ? `\nFORWARD BRIDGE — STRICT LIMITS: The final sentence of this section may create forward reading momentum, but ONLY through an unresolved question, an open tension, or a logical implication that arises naturally from THIS section's own content. The next section is titled "${assignment.nextSectionHeading}" — use this ONLY as directional context for tone. You MUST NOT:
+  • Preview, introduce, or summarize any content from that next section
+  • Name the next section or its heading
+  • Begin developing any argument not grounded in this section's transcript excerpts
+  • Use bridge phrases like "Next, we will see…", "In the following section…", "This leads us to explore…"
+The closing sentence is a door that swings open — not a trailer for what lies behind it.`
     : "";
 
   const hookBlock = assignment.sectionNumber === 1
