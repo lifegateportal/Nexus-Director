@@ -284,6 +284,48 @@ const styles = StyleSheet.create({
     color: "#999999",
     fontFamily: "Times-Roman",
   },
+
+  // ── Chapter epigraph ──────────────────────────────────────────────────────
+  chapterEpigraph: {
+    fontSize: 10.5,
+    fontFamily: "Times-Italic",
+    color: "#555555",
+    textAlign: "center",
+    marginTop: 4,
+    marginBottom: 4,
+    marginLeft: 36,
+    marginRight: 36,
+    lineHeight: 1.55,
+  },
+  chapterEpigraphRule: {
+    width: 24,
+    height: 1,
+    backgroundColor: "#999999",
+    marginBottom: 28,
+    marginTop: 8,
+    alignSelf: "center",
+  },
+
+  // ── Premise line ──────────────────────────────────────────────────────────
+  premiseLine: {
+    fontSize: 12,
+    fontFamily: "Times-Italic",
+    color: "#1a1a1a",
+    textAlign: "center",
+    marginBottom: 26,
+    marginLeft: 18,
+    marginRight: 18,
+    lineHeight: 1.65,
+  },
+
+  // ── Scripture index entry ─────────────────────────────────────────────────
+  scriptureIndexEntry: {
+    fontSize: 10.5,
+    fontFamily: "Times-Roman",
+    lineHeight: 1.55,
+    color: "#111111",
+    marginBottom: 5,
+  },
 });
 
 // ─── PDF helpers ──────────────────────────────────────────────────────────────
@@ -330,6 +372,15 @@ function ChapterPage({ chapter, quotes }: { chapter: ChapterDraft; quotes: Quote
     React.createElement(Text, { style: styles.chapterLabel }, `Chapter ${chapter.number}`),
     React.createElement(Text, { style: styles.chapterTitle }, chapter.title),
     React.createElement(View, { style: styles.chapterRule }),
+    // Epigraph (optional)
+    ...(chapter.epigraph ? [
+      React.createElement(Text, { style: styles.chapterEpigraph }, chapter.epigraph),
+      React.createElement(View, { style: styles.chapterEpigraphRule }),
+    ] : []),
+    // Premise line (optional)
+    ...(chapter.premiseLine ? [
+      React.createElement(Text, { style: styles.premiseLine }, chapter.premiseLine),
+    ] : []),
     // Chapter intro — first paragraph no indent
     ...renderBodyText(chapter.intro, quotes, true).filter(Boolean),
     // Sections
@@ -467,6 +518,25 @@ function buildPdfDocument(manifest: EbookManifest) {
             ...renderBodyText(frontMatter.aboutAuthor, allQuotes).filter(Boolean)
           ),
         ]
+      : []),
+
+    // ── Scripture Index ──
+    ...((frontMatter.scriptureIndex ?? []).length > 0
+      ? [
+          React.createElement(
+            Page,
+            { size: "A4", style: styles.page },
+            React.createElement(Text, { style: styles.matterTitle }, "Scripture Index"),
+            ...(frontMatter.scriptureIndex ?? []).map((entry, i) =>
+              React.createElement(Text, { key: String(i), style: styles.scriptureIndexEntry }, entry)
+            ),
+            React.createElement(
+              Text,
+              { style: styles.pageNumber, render: ({ pageNumber }: { pageNumber: number }) => `${pageNumber}` },
+              null
+            )
+          ),
+        ]
       : [])
   );
 }
@@ -512,6 +582,8 @@ function chapterToHtml(chapter: ChapterDraft): string {
   return `
 <p class="chapter-label">Chapter ${chapter.number}</p>
 <h2>${chapter.title}</h2>
+${chapter.epigraph ? `<blockquote class="chapter-epigraph">${chapter.epigraph}</blockquote>` : ""}
+${chapter.premiseLine ? `<p class="premise-line">${chapter.premiseLine}</p>` : ""}
 <p class="no-indent">${chapter.intro}</p>
 ${sections}
 <div class="divider">\u2726&nbsp;&nbsp;\u2726&nbsp;&nbsp;\u2726</div>
@@ -558,6 +630,17 @@ cite.quote-ref { display: block; font-size: 0.82em; color: #666; margin-top: 0.3
 .reflections { margin-top: 1.5em; }
 .reflections ol { padding-left: 1.4em; }
 .reflections li { margin-bottom: 0.7em; font-style: italic; color: #333; text-indent: 0; }
+
+/* ── Chapter epigraph ── */
+.chapter-epigraph { margin: 0.5em 3em; font-style: italic; color: #555; font-size: 0.9em; border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; padding: 0.5em 0; text-align: center; }
+.chapter-epigraph p { text-indent: 0; }
+
+/* ── Premise line ── */
+.premise-line { font-style: italic; color: #222; text-align: center; font-size: 1.05em; margin: 0.5em 1em 1.5em; text-indent: 0; }
+
+/* ── Scripture index ── */
+.scripture-index { list-style: none; padding-left: 0; margin-top: 1em; }
+.scripture-index li { font-size: 0.88em; padding: 0.2em 0; border-bottom: 1px solid #eee; text-indent: 0; }
 `;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -610,6 +693,14 @@ export async function generateEpubBuffer(manifest: EbookManifest): Promise<Buffe
               .filter(Boolean)
               .map((p) => `<p>${p.trim()}</p>`)
               .join("\n")}`,
+          },
+        ]
+      : []),
+    ...((frontMatter.scriptureIndex ?? []).length > 0
+      ? [
+          {
+            title: "Scripture Index",
+            data: `<h1>Scripture Index</h1><ul class="scripture-index">${(frontMatter.scriptureIndex ?? []).map((e) => `<li>${e}</li>`).join("")}</ul>`,
           },
         ]
       : []),
@@ -705,6 +796,26 @@ export async function generateDocxBuffer(manifest: EbookManifest): Promise<Buffe
       })
     );
 
+    if (chapter.epigraph) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: chapter.epigraph, italics: true, size: 21, color: "555555" })],
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 80, after: 160 },
+        })
+      );
+    }
+
+    if (chapter.premiseLine) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: chapter.premiseLine, italics: true, size: 24 })],
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 60, after: 200 },
+        })
+      );
+    }
+
     for (const section of chapter.sections) {
       if (section.heading) {
         children.push(
@@ -742,6 +853,24 @@ export async function generateDocxBuffer(manifest: EbookManifest): Promise<Buffe
         spacing: { before: 400, after: 240 },
       }),
       ...textToParagraphs(frontMatter.aboutAuthor)
+    );
+  }
+
+  if (frontMatter.scriptureIndex && frontMatter.scriptureIndex.length > 0) {
+    children.push(
+      new Paragraph({ children: [new PageBreak()] }),
+      new Paragraph({
+        text: "Scripture Index",
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 400, after: 240 },
+      }),
+      ...frontMatter.scriptureIndex.map(
+        (entry) =>
+          new Paragraph({
+            children: [new TextRun({ text: entry, size: 22 })],
+            spacing: { after: 100 },
+          })
+      )
     );
   }
 

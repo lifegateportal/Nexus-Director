@@ -2,7 +2,7 @@ import type { ChapterDraft, ContentMap, FrontBackMatter } from "@/lib/schemas/eb
 import { NON_BOOK_CUE_RE } from "@/lib/editorial-style-bible";
 
 export type QualityIssue = {
-  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP";
+  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP" | "EM_DASH_FOUND" | "AI_SIGNATURE_WORD" | "PASSIVE_VOICE_HIGH" | "THEMATIC_DRIFT";
   severity: "warn" | "error";
   message: string;
 };
@@ -34,6 +34,16 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 }
 
 const SERIES_RECAP_RE = /\b(this\s+month'?s\s+theme|our\s+monthly\s+theme|series\s+theme|as\s+i\s+said\s+last\s+(week|message|time)|from\s+our\s+last\s+message|in\s+the\s+previous\s+message|continuing\s+this\s+series|part\s+\d+\s+of\s+this\s+series)\b/gi;
+
+const EM_DASH_RE = /\u2014/g;
+const AI_SIGNATURE_RE = /\b(delv(?:e|ing|ed)|tapestry|transformative|vibrant|foster(?:ing|s|ed|er)|synergy|furthermore|moreover|paradigm\s+shift|profoundly|at\s+its\s+core|in\s+essence|simply\s+put|in\s+conclusion)\b/gi;
+const PASSIVE_RE = /\b(?:is|are|was|were|be|been|being)\s+\w+(?:ed|en)\b/g;
+
+function passiveVoiceDensity(text: string): number {
+  const sentences = text.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 10);
+  if (sentences.length === 0) return 0;
+  return (text.match(PASSIVE_RE) ?? []).length / sentences.length;
+}
 
 function normalizeRecapSentence(input: string): string {
   return input
@@ -107,6 +117,58 @@ export function evaluateBookQuality(input: {
           continue;
         }
         seenRecapSentences.add(normalized);
+      }
+
+      // ── C1: Em dash detection ─────────────────────────────────────────────
+      const emDashCount = (body.match(EM_DASH_RE) ?? []).length;
+      if (emDashCount > 0) {
+        issues.push({
+          code: "EM_DASH_FOUND",
+          severity: "error",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} contains ${emDashCount} em dash(es).`,
+        });
+        score -= Math.min(10, emDashCount * 2);
+      }
+
+      // ── C1: AI signature word detection ──────────────────────────────────
+      const aiMatches = body.match(AI_SIGNATURE_RE) ?? [];
+      if (aiMatches.length > 0) {
+        const found = [...new Set(aiMatches.map((m) => m.toLowerCase()))].slice(0, 4).join(", ");
+        issues.push({
+          code: "AI_SIGNATURE_WORD",
+          severity: "warn",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} contains AI-signature word(s): ${found}.`,
+        });
+        score -= Math.min(8, aiMatches.length * 2);
+      }
+
+      // ── C2: Passive voice density ─────────────────────────────────────────
+      const density = passiveVoiceDensity(body);
+      if (density > 0.18) {
+        issues.push({
+          code: "PASSIVE_VOICE_HIGH",
+          severity: "warn",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} has high passive voice density (${(density * 100).toFixed(0)}% of sentences).`,
+        });
+        score -= 3;
+      }
+    }
+
+    // ── B3: Thematic spine check ───────────────────────────────────────────
+    if (input.contentMap.coreThesis) {
+      const chapterFullText = chapter.sections.map((s) => s.body ?? "").join(" ");
+      const thesisTokens = tokenize(input.contentMap.coreThesis);
+      if (thesisTokens.size > 0) {
+        const chapterTokens = tokenize(chapterFullText);
+        const matchCount = [...thesisTokens].filter((t) => chapterTokens.has(t)).length;
+        if (matchCount / thesisTokens.size < 0.15) {
+          issues.push({
+            code: "THEMATIC_DRIFT",
+            severity: "warn",
+            message: `Chapter ${chapter.number} may drift from the book's core thesis (${(matchCount / thesisTokens.size * 100).toFixed(0)}% thesis-token coverage).`,
+          });
+          score -= 5;
+        }
       }
     }
   }

@@ -120,6 +120,7 @@ export const ChapterPolishInputSchema = z.object({
   chapterSegmentTexts: z.array(z.string()),     // raw transcript for this chapter
   voiceDNA: VoiceDNASchema,
   quotesInChapter: z.array(QuoteSchema).default([]),
+  previousChapterConclusion: z.string().optional(), // closing prose of preceding chapter for connective tissue
 });
 
 // ─── Chapter Draft (output of polish) ────────────────────────────────────────
@@ -128,6 +129,8 @@ export const ChapterDraftSchema = z.object({
   number: z.number(),
   title: z.string().default(""),
   intro: z.string().default(""),
+  epigraph: z.string().default(""),        // opening scripture/quote set before body text
+  premiseLine: z.string().default(""),    // one-sentence chapter hook between title and body
   sections: z.array(SectionDraftSchema),
   conclusion: z.string().default(""),
   keyTakeaways: z.array(z.string()).default([]),
@@ -144,6 +147,7 @@ export const FrontBackMatterSchema = z.object({
   conclusion: z.string(),
   aboutAuthor: z.string().nullable(),           // null if not mentioned in audio
   resourcesList: z.array(z.string()).default([]), // resources mentioned in the audio
+  scriptureIndex: z.array(z.string()).default([]), // sorted list of all scripture references used
 });
 
 // ─── Full Ebook Manifest ──────────────────────────────────────────────────────

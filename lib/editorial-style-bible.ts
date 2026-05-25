@@ -54,6 +54,11 @@ HUMANIZATION RULES (anti-AI detection — enforce rigorously):
 - Never follow a big claim with "This means that..." or "What this tells us is..." — land the implication directly.
 - Avoid ending three or more consecutive paragraphs with a question.
 - Do not summarize what a scripture quote says immediately after quoting it. Trust the reader.
+
+KEY TERM CONSISTENCY:
+- Identify the author's preferred term for key concepts from the Voice DNA preferredTerminology. Use that exact term throughout — never swap in a synonym for variety.
+- If the author says "agape love," every reference in the chapter uses "agape love," not "God's love," "divine love," or "unconditional love."
+- Inconsistent terminology is a mark of unpolished writing. Standardize on the author's own words.
 `;
 
 const AUDIENCE_PATTERNS = [

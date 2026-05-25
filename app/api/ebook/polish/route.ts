@@ -15,6 +15,8 @@ const PolishOutputSchema = z.object({
   conclusion: z.string().default(""),
   keyTakeaways: z.array(z.string()).default([]),
   reflectionQuestions: z.array(z.string()).default([]),
+  epigraph: z.string().default(""),
+  premiseLine: z.string().default(""),
 });
 
 function fallbackPolishOutput(chapter: z.infer<typeof PolishChapterRequestSchema>["input"]): z.infer<typeof PolishOutputSchema> {
@@ -80,9 +82,20 @@ export async function POST(req: NextRequest) {
     // Trim VoiceDNA to key fields only to keep the prompt small and response fast
     const voiceDNASlim = {
       signaturePhrases: (chapter.voiceDNA?.signaturePhrases ?? []).slice(0, 6),
-      toneMarkers: (chapter.voiceDNA?.toneMarkers ?? []).slice(0, 4),
-      avoidWords: (chapter.voiceDNA?.avoidWords ?? []).slice(0, 6),
+      toneProfile: chapter.voiceDNA?.toneProfile ?? "",
+      preferredTerminology: (chapter.voiceDNA?.preferredTerminology ?? []).slice(0, 6),
+      avoidWords: (chapter.voiceDNA?.avoidWords ?? []).slice(0, 8),
     };
+
+    const epigraphCandidates = (chapter.quotesInChapter ?? [])
+      .filter((q) => q.type === "scripture")
+      .slice(0, 5)
+      .map((q) => `"${q.text.slice(0, 120)}" \u2014 ${q.reference}${q.translation ? ` (${q.translation})` : ""}`)
+      .join("\n");
+
+    const prevChapterBlock = chapter.previousChapterConclusion
+      ? `\n\nPREVIOUS CHAPTER CLOSING (connective tissue — do NOT repeat, only continue the arc):\n${chapter.previousChapterConclusion.slice(0, 350)}`
+      : "";
 
     let object: z.infer<typeof PolishOutputSchema>;
     try {
@@ -99,22 +112,27 @@ EM DASH ABSOLUTE BAN: Never use an em dash (—) in any output. No spaced em das
 HUMANIZATION: Use contractions naturally. Avoid "not just...but", "not merely...but", "indeed,", "certainly,", "ultimately,", "at its core", "in essence", "profoundly", "transformative". Break any run of three parallel-structured sentences.
 
 Your tasks:
-1. INTRO: 2–4 sentences that FRAME what this chapter covers, written in the author's voice.
+1. EPIGRAPH: From the provided scripture candidates, pick the ONE most resonant opening quote for this chapter. Return it formatted as: "Quote text." — Reference (Translation). If no candidate strongly fits or none are provided, return an empty string. Never invent a quote.
+2. PREMISE LINE: Write ONE bold declarative sentence (not a question, not a list preview) stating what is at stake in this chapter. Read like a thesis, not a table of contents. Max 25 words. Drawn entirely from the chapter content.
+3. INTRO: 2–4 sentences that FRAME what this chapter covers, written in the author's voice.
    CRITICAL: Do NOT copy, quote, or paraphrase the opening sentences of Section 1.
    The intro must be a distinct orienting passage — a door the reader walks through before
    entering Section 1's prose. It should name the chapter's central question or tension
    without restating any sentence that will appear in the body.
-2. CONCLUSION: 2–4 sentences closing the chapter, drawing on what was actually said.
+   CONNECTIVE TISSUE: If a "PREVIOUS CHAPTER CLOSING" is provided, the intro's opening should feel like a natural forward step from that closing — not a restatement, but a continuation of the arc.
+4. CONCLUSION: 2–4 sentences closing the chapter, drawing on what was actually said.
    Do NOT repeat the intro verbatim.
-3. KEY TAKEAWAYS: 3–6 bullet statements taken VERBATIM or near-verbatim from the chapter.
-4. REFLECTION QUESTIONS: 3–4 questions arising naturally from what the author actually taught.
+5. KEY TAKEAWAYS: 3–6 bullet statements taken VERBATIM or near-verbatim from the chapter content.
+6. REFLECTION QUESTIONS: 3–4 questions that are SPECIFIC, PERSONAL, and ACTIONABLE.
+   REQUIRED: Each question must reference a concrete claim, story, or scripture from this chapter.
+   FORBIDDEN generic forms: "How does X shape the message?", "What is the main message?", "What should the reader carry forward?", "How can you apply this?".
+   REQUIRED: Name the specific idea, then ask about its implication in the reader's real life. Example: "Peter says diligence is required, not passive waiting — where in your life are you waiting for God to act when He has already told you to move?"
 
-VOICE: Use the author's signature phrases and tone. Do not use words in the avoidWords list.
+VOICE: Use the author's signature phrases and preferred terminology consistently. Never swap a synonym for variety when the author has a preferred term. Do not use words in the avoidWords list.
 
 READER NORMALIZATION:
-- Remove live-audience language and stage commands (e.g., "say amen", "look at your neighbor", altar prompts, crowd-response cues).
-- Rewrite spoken-room references into reader-facing prose suitable for a book.
-- Keep the meaning and theology unchanged while making the text read like writing, not a live sermon transcript.
+- Remove live-audience language and stage commands.
+- Rewrite spoken-room references into reader-facing prose.
 
 ${SOURCE_LOCK_RULES}
 
@@ -123,8 +141,8 @@ ${READER_NORMALIZATION_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}
 
 Respond with ONLY a valid JSON object — no markdown, no code blocks, no explanation:
-{"intro":"...","conclusion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."]}`,
-        prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}`,
+{"intro":"...","conclusion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."],"epigraph":"...","premiseLine":"..."}`,
+        prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}${epigraphCandidates ? `\n\nSCRIPTURE CANDIDATES FOR EPIGRAPH (pick the most resonant ONE, or return empty string if none fits):\n${epigraphCandidates}` : ""}${prevChapterBlock}`,
       });
       const _jsonMatch = text.match(/\{[\s\S]*\}/);
       object = PolishOutputSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
@@ -143,6 +161,8 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
       conclusion: stripAudienceLanguage(object.conclusion ?? ""),
       keyTakeaways: (object.keyTakeaways ?? []).map((t) => stripAudienceLanguage(t)),
       reflectionQuestions: (object.reflectionQuestions ?? []).map((q) => stripAudienceLanguage(q)),
+      epigraph: object.epigraph ?? "",
+      premiseLine: object.premiseLine ?? "",
       number: chapter.number,
       title: chapter.title,
       sections: chapter.sections,

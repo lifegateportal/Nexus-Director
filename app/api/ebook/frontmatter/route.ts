@@ -106,6 +106,18 @@ ${transcript.slice(-3000)}`,
       conclusion: stripAudienceLanguage(object.conclusion ?? ""),
       aboutAuthor: object.aboutAuthor ? stripAudienceLanguage(object.aboutAuthor) : null,
       resourcesList: (object.resourcesList ?? []).map((r) => stripAudienceLanguage(r)),
+      scriptureIndex: (() => {
+        const seenRefs = new Set<string>();
+        return (input.architecture?.chapters ?? [])
+          .flatMap((c) => c.quotesInChapter ?? [])
+          .filter((q) => q.type === "scripture" && q.reference?.trim())
+          .sort((a, b) => a.reference.localeCompare(b.reference))
+          .reduce<string[]>((acc, q) => {
+            const entry = `${q.reference}${q.translation ? ` (${q.translation})` : ""}`;
+            if (!seenRefs.has(entry)) { seenRefs.add(entry); acc.push(entry); }
+            return acc;
+          }, []);
+      })(),
     }, { status: 200 });
   } catch (err) {
     const opening = transcript.slice(0, 2600).trim();
@@ -117,6 +129,7 @@ ${transcript.slice(-3000)}`,
       conclusion: stripAudienceLanguage(closing || opening || "Conclusion unavailable."),
       aboutAuthor: null,
       resourcesList: [],
+      scriptureIndex: [],
     }, { status: 200 });
   }
 }

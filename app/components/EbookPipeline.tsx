@@ -1915,6 +1915,9 @@ export function EbookPipeline({
             chapterSegmentTexts: [], // not used by the route; omit to reduce payload
             voiceDNA,
             quotesInChapter: (chapterBlueprint.quotesInChapter ?? []).slice(0, 8),
+            previousChapterConclusion: polishedChapters.length > 0
+              ? polishedChapters[polishedChapters.length - 1].conclusion
+              : undefined,
           },
         });
 
