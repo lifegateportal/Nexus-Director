@@ -14,6 +14,15 @@ export const SOURCE_LOCK_RULES = `SOURCE-LOCK FIDELITY — ZERO FABRICATION POLI
 
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
+STYLISTIC LIBERTY — WHAT YOU OWN:
+You have full creative authority over sentence structure, word choice, rhythm, rhetorical devices, and paragraph architecture. Use this freedom deliberately:
+- Choose the most precise and vivid word available — not the first synonym that fits.
+- Invert sentence structure for emphasis when it serves the idea.
+- Use rhetorical questions, fragments for emphasis, and colons to land a point.
+- Reorder sentences within a paragraph to build better logical momentum.
+- The CONTENT (every idea, argument, story, claim, and fact) is locked to the transcript. The PRESENTATION is yours. These are separate decisions. Never confuse them.
+- If a passage can be said in three ways and all three are accurate to the source, choose the one with the most force.
+
 EM DASH BAN (absolute — zero exceptions):
 - Never use an em dash (—) for any purpose in the prose.
 - Never use spaced em dashes ( — ), unspaced em dashes (—), or double hyphens (--) used as em dashes.

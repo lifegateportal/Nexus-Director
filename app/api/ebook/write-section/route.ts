@@ -281,7 +281,7 @@ ${READER_NORMALIZATION_RULES}`,
       model: deepSeekModel,
       schema: SectionBodySchema,
       mode: "json",
-      temperature: 0.25,
+      temperature: 0.7,
       system: deduplicatedSystem,
       prompt: `${prompt}\n\nPARAGRAPH PLAN (must follow if provided):\n${JSON.stringify(paragraphPlan)}`,
     });
