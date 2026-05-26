@@ -116,7 +116,7 @@ function cleanBookText(input: string): string {
 		.replace(/,\s*,/g, ",")
 		.replace(/\.\s*,/g, ".")
 		.replace(/,\s*\./g, ".")
-		.replace(/\s{2,}/g, " ")
+		.replace(/[ \t]{2,}/g, " ")  // Only collapse horizontal whitespace — never newlines
 		.replace(/\n{3,}/g, "\n\n")
 		.replace(/[ \t]+\n/g, "\n")
 		.replace(/\n[ \t]+/g, "\n")
@@ -124,13 +124,17 @@ function cleanBookText(input: string): string {
 }
 
 function pruneNonBookSentences(input: string): string {
-	const parts = input
-		.split(/(?<=[.!?])\s+|\n+/)
-		.map((part) => part.trim())
-		.filter(Boolean);
-
-	const kept = parts.filter((part) => !NON_BOOK_SENTENCE_PATTERNS.some((pattern) => pattern.test(part)));
-	return cleanBookText(kept.join(" "));
+	// Preserve paragraph boundaries — process each paragraph independently
+	const paragraphs = input.split(/\n{2,}/);
+	const cleaned = paragraphs.map((paragraph) => {
+		const parts = paragraph
+			.split(/(?<=[.!?])\s+/)
+			.map((part) => part.trim())
+			.filter(Boolean);
+		const kept = parts.filter((part) => !NON_BOOK_SENTENCE_PATTERNS.some((pattern) => pattern.test(part)));
+		return kept.join(" ");
+	}).filter(Boolean);
+	return cleanBookText(cleaned.join("\n\n"));
 }
 
 function normalizeForRecapMatch(input: string): string[] {
@@ -154,28 +158,33 @@ function jaccardSimilarity(a: string[], b: string[]): number {
 }
 
 export function pruneRedundantSeriesRecaps(input: string): string {
-	const sentences = input
-		.split(/(?<=[.!?])\s+|\n+/)
-		.map((sentence) => sentence.trim())
-		.filter(Boolean);
+	// Preserve paragraph boundaries — process each paragraph independently
+	const paragraphs = input.split(/\n{2,}/);
+	const cleanedParagraphs = paragraphs.map((paragraph) => {
+		const sentences = paragraph
+			.split(/(?<=[.!?])\s+/)
+			.map((sentence) => sentence.trim())
+			.filter(Boolean);
 
-	const kept: string[] = [];
-	const recapSignatures: string[][] = [];
+		const kept: string[] = [];
+		const recapSignatures: string[][] = [];
 
-	for (const sentence of sentences) {
-		if (!RECAP_CUE_RE.test(sentence)) {
-			kept.push(sentence);
-			continue;
+		for (const sentence of sentences) {
+			if (!RECAP_CUE_RE.test(sentence)) {
+				kept.push(sentence);
+				continue;
+			}
+			const signature = normalizeForRecapMatch(sentence);
+			const isDuplicate = recapSignatures.some((existing) => jaccardSimilarity(existing, signature) >= 0.7);
+			if (!isDuplicate) {
+				recapSignatures.push(signature);
+				kept.push(sentence);
+			}
 		}
-		const signature = normalizeForRecapMatch(sentence);
-		const isDuplicate = recapSignatures.some((existing) => jaccardSimilarity(existing, signature) >= 0.7);
-		if (!isDuplicate) {
-			recapSignatures.push(signature);
-			kept.push(sentence);
-		}
-	}
+		return kept.join(" ");
+	}).filter(Boolean);
 
-	return cleanBookText(kept.join(" "));
+	return cleanBookText(cleanedParagraphs.join("\n\n"));
 }
 
 export function stripNonBookLanguage(input: string): string {
