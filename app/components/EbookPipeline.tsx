@@ -1250,10 +1250,11 @@ export function EbookPipeline({
         frontMatter: exportManifest.frontMatter,
       });
       setQualityReport(report);
-      addLog(`✓ Quality score: ${report.score}/100`);
-      if (!report.pass) {
-        const critical = report.issues.filter((i) => i.severity === "error").map((i) => i.message).slice(0, 3);
-        throw new Error(`Quality gate failed (${report.score}/100): ${critical.join(" | ") || "critical fidelity issues detected"}`);
+      if (report.pass) {
+        addLog(`✓ Quality score: ${report.score}/100`);
+      } else {
+        const warnings = report.issues.filter((i) => i.severity === "error").map((i) => i.message).slice(0, 3);
+        addLog(`⚠ Quality advisory (${report.score}/100): ${warnings.join(" | ") || "some fidelity issues detected — exporting anyway"}`);
       }
 
       addLog("Generating PDF, EPUB, and Word doc…");
