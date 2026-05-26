@@ -1654,6 +1654,22 @@ export function EbookPipeline({
           .map((t) => `[${t.label}]\n${t.text}`)
           .join("\n\n═══════════════════════════════════════\n\n");
         addLog(`Master transcript assembled — ${countWords(masterTranscript).toLocaleString()} raw words`);
+
+        // ── Stage 1b: Glossary sanitization — zero-cost regex ASR correction ─
+        try {
+          type SanitizeResult = { sanitizedTranscript: string; replacements: { wrong: string; correct: string; count: number }[] };
+          const sanitizeResult = await postJson<SanitizeResult>("/api/ebook/sanitize", { masterTranscript });
+          if (sanitizeResult.replacements.length > 0) {
+            const fixes = sanitizeResult.replacements.map((r) => `"${r.wrong}" → "${r.correct}" (×${r.count})`).join(", ");
+            addLog(`✓ Glossary sanitized — ${sanitizeResult.replacements.length} ASR correction${sanitizeResult.replacements.length !== 1 ? "s" : ""}: ${fixes}`);
+            masterTranscript = sanitizeResult.sanitizedTranscript;
+          } else {
+            addLog("✓ Glossary check — no ASR corrections needed");
+          }
+        } catch {
+          addLog("⚠ Glossary sanitization skipped — proceeding with raw transcript");
+        }
+
         acc.masterTranscript = masterTranscript;
         acc.transcripts = transcriptResults;
         await checkpoint("filtering");
