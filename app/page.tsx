@@ -12,6 +12,7 @@ import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { ProjectsPanel } from "@/app/components/ProjectsPanel";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
+import { EbookJobStateSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 import { LogicTransformResultSchema } from "@/lib/schemas/blueprint";
 import { UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
@@ -30,6 +31,7 @@ import {
   generateProjectId,
 } from "@/lib/project-store";
 import type { ProjectSnapshot, ChatMessage } from "@/lib/project-store";
+import { listEbookProjects, deleteEbookProject } from "@/lib/ebook-project-store";
 
 const INITIAL_MODELS: ModelState[] = [
   { name: "Gemini",   handle: "gemini",   role: "Analyst",           status: "standby" },
@@ -56,6 +58,8 @@ export default function HomePage() {
   // Ebook pipeline state — lifted so the AI assistant can read and edit the book
   const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
   const [ebookSnapshot, setEbookSnapshot] = useState<EbookPipelineSnapshot | null>(null);
+  // Incrementing this remounts <EbookPipeline> so it re-reads localStorage after a project load
+  const [ebookPipelineKey, setEbookPipelineKey] = useState(0);
 
   // Project persistence
   const [projects,        setProjects]        = useState<ProjectSnapshot[]>([]);
@@ -66,7 +70,34 @@ export default function HomePage() {
   // Load persisted state client-side only (avoids SSR hydration mismatch)
   useEffect(() => {
     void (async () => {
-      try { setProjects(await listProjects()); } catch { /* ignore */ }
+      try {
+        const main = await listProjects();
+        // Also load ebook-only projects from the /ebook page store and convert them
+        // so they appear alongside academy projects in the Saved Workspaces panel.
+        let ebook: ProjectSnapshot[] = [];
+        try {
+          const ebookProjects = await listEbookProjects();
+          const mainIds = new Set(main.map((p) => p.id));
+          ebook = ebookProjects
+            .filter((ep) => !mainIds.has(ep.id))
+            .map((ep) => ({
+              id: ep.id,
+              name: ep.name,
+              createdAt: ep.createdAt,
+              updatedAt: ep.updatedAt,
+              academy: null,
+              siteConfig: SiteConfigSchema.parse({}),
+              deliveryInstructions: "",
+              chatHistory: [],
+              blueprint: null,
+              logicResult: null,
+              uiResult: null,
+              ebookManifest: null,
+              ebookJobState: ep.jobState,
+            }));
+        } catch { /* ignore */ }
+        setProjects([...main, ...ebook]);
+      } catch { /* ignore */ }
       try {
         setDeliveryInstructions(localStorage.getItem("nexus_delivery_instructions") ?? "");
         const raw = localStorage.getItem("nexus_site_config");
@@ -123,8 +154,16 @@ export default function HomePage() {
     setEbookManifest(manifest);
   }, []);
 
+  const EBOOK_JOB_KEY = "nexus_ebook_job_state";
+
   const handleSaveProject = useCallback(async (name: string) => {
     const id = currentProjectId || generateProjectId();
+    // Read the live ebook job state from localStorage (pipeline auto-saves there)
+    let ebookJobState = null;
+    try {
+      const raw = localStorage.getItem(EBOOK_JOB_KEY);
+      if (raw) ebookJobState = EbookJobStateSchema.parse(JSON.parse(raw) as unknown);
+    } catch { /* ignore — job state is optional */ }
     const snapshot: ProjectSnapshot = {
       id,
       name,
@@ -138,6 +177,7 @@ export default function HomePage() {
       logicResult: logicResult ?? null,
       uiResult: uiResult ?? null,
       ebookManifest: ebookManifest ?? null,
+      ebookJobState,
     };
     try {
       await saveProject(snapshot);
@@ -163,9 +203,16 @@ export default function HomePage() {
     setPanelLoadKey(p.id);
     setCurrentProjectId(p.id);
     if (p.ebookManifest) setEbookManifest(p.ebookManifest);
+    // Restore full ebook pipeline state so the pipeline can resume from where it left off
+    if (p.ebookJobState) {
+      try {
+        localStorage.setItem(EBOOK_JOB_KEY, JSON.stringify(p.ebookJobState));
+        setEbookPipelineKey((k) => k + 1); // remount pipeline to pick up restored state
+      } catch { /* ignore quota errors */ }
+    }
     if (p.blueprint) setStage("done");
     // Navigate to ebook tab if the project has a book; otherwise overview
-    setActiveNav(p.ebookManifest ? "ebook" : "overview");
+    setActiveNav(p.ebookManifest || p.ebookJobState ? "ebook" : "overview");
     // Update the shared localStorage keys so preview pages also see the loaded data
     if (p.academy) localStorage.setItem("nexus_academy_preview", JSON.stringify(p.academy));
     localStorage.setItem("nexus_site_config", JSON.stringify(p.siteConfig));
@@ -174,8 +221,20 @@ export default function HomePage() {
   }, [projects, addLog]);
 
   const handleDeleteProject = useCallback(async (id: string) => {
-    await deleteProject(id);
-    setProjects(await listProjects());
+    // Try both stores — the project may be in the main store, the ebook store, or both
+    await Promise.allSettled([deleteProject(id), deleteEbookProject(id)]);
+    const main = await listProjects();
+    const ebookProjects = await listEbookProjects().catch(() => []);
+    const mainIds = new Set(main.map((p) => p.id));
+    const ebookConverted: ProjectSnapshot[] = ebookProjects
+      .filter((ep) => !mainIds.has(ep.id))
+      .map((ep) => ({
+        id: ep.id, name: ep.name, createdAt: ep.createdAt, updatedAt: ep.updatedAt,
+        academy: null, siteConfig: SiteConfigSchema.parse({}), deliveryInstructions: "",
+        chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
+        ebookManifest: null, ebookJobState: ep.jobState,
+      }));
+    setProjects([...main, ...ebookConverted]);
     if (currentProjectId === id) setCurrentProjectId("");
   }, [currentProjectId]);
 
@@ -418,6 +477,7 @@ export default function HomePage() {
                 ) : activeNav === "ebook" ? (
                   <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
                     <EbookPipeline
+                      key={ebookPipelineKey}
                       ebookManifest={ebookManifest}
                       onManifestReady={handleEbookManifestReady}
                       onPipelineSnapshotChange={setEbookSnapshot}

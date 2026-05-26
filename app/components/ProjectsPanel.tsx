@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { ProjectSnapshot } from "@/lib/project-store";
+import type { EbookProject } from "@/lib/ebook-project-store";
 
 type ProjectsPanelProps = {
   projects: ProjectSnapshot[];
@@ -44,13 +46,65 @@ export function ProjectsPanel({
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const parsed = JSON.parse(ev.target?.result as string) as ProjectSnapshot;
-        if (!parsed.id || !parsed.name) throw new Error("Invalid project file.");
-        // Give it a fresh ID so it doesn't overwrite an existing project
-        onImport({ ...parsed, id: `proj-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, updatedAt: new Date().toISOString() });
+        const parsed = JSON.parse(ev.target?.result as string) as Record<string, unknown>;
+        const freshId = `proj-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const defaultSiteConfig = SiteConfigSchema.parse({});
+        let snapshot: ProjectSnapshot;
+
+        if ("jobState" in parsed && parsed.jobState && typeof parsed.jobState === "object") {
+          // EbookProject format — exported from the /ebook Projects tab
+          const ep = parsed as unknown as EbookProject;
+          snapshot = {
+            id: freshId,
+            name: (ep.name || ep.bookTitle || "Imported Ebook") as string,
+            createdAt: (ep.createdAt ?? new Date().toISOString()) as string,
+            updatedAt: new Date().toISOString(),
+            academy: null,
+            siteConfig: defaultSiteConfig,
+            deliveryInstructions: "",
+            chatHistory: [],
+            blueprint: null,
+            logicResult: null,
+            uiResult: null,
+            ebookManifest: null,
+            ebookJobState: ep.jobState,
+          };
+        } else if (
+          // Raw EbookJobState — e.g. pasted from localStorage
+          "status" in parsed && "transcripts" in parsed
+        ) {
+          const rawJob = parsed as unknown as EbookProject["jobState"];
+          snapshot = {
+            id: freshId,
+            name: "Imported Ebook",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            academy: null,
+            siteConfig: defaultSiteConfig,
+            deliveryInstructions: "",
+            chatHistory: [],
+            blueprint: null,
+            logicResult: null,
+            uiResult: null,
+            ebookManifest: null,
+            ebookJobState: rawJob,
+          };
+        } else if (parsed.id && parsed.name) {
+          // Standard ProjectSnapshot format
+          snapshot = {
+            ...(parsed as unknown as ProjectSnapshot),
+            id: freshId,
+            updatedAt: new Date().toISOString(),
+          };
+        } else {
+          throw new Error("Unrecognised file format.");
+        }
+
+        onImport(snapshot);
         setImportError(null);
-      } catch {
-        setImportError("Could not read file — make sure it's a valid Nexus project export.");
+      } catch (err) {
+        const detail = err instanceof Error ? ` (${err.message})` : "";
+        setImportError(`Could not read file — make sure it's a valid Nexus project or ebook export.${detail}`);
       }
     };
     reader.readAsText(file);
@@ -117,9 +171,13 @@ export function ProjectsPanel({
                 <div className="min-w-0">
                   <p className="truncate font-semibold text-slate-100">{p.name}</p>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    {p.academy
-                      ? `${p.academy.curriculum.length} module${p.academy.curriculum.length !== 1 ? "s" : ""} · ${p.academy.curriculum.flatMap((m) => m.lessons).length} lessons`
-                      : "No academy"}
+                    {p.ebookManifest
+                      ? `${p.ebookManifest.chapters.length} chapter${p.ebookManifest.chapters.length !== 1 ? "s" : ""} · ${p.ebookManifest.totalWordCount.toLocaleString()} words`
+                      : p.ebookJobState
+                        ? `Ebook in progress · ${p.ebookJobState.status ?? ""}`
+                        : p.academy
+                          ? `${p.academy.curriculum.length} module${p.academy.curriculum.length !== 1 ? "s" : ""} · ${p.academy.curriculum.flatMap((m) => m.lessons).length} lessons`
+                          : null}
                     {" · "}
                     {new Date(p.updatedAt).toLocaleDateString(undefined, {
                       month: "short",
