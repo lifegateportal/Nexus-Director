@@ -1,22 +1,106 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
+import { EbookProjectsPanel } from "@/app/components/EbookProjectsPanel";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import { EbookManifestSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest, EbookJobState } from "@/lib/schemas/ebook";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
+import {
+  listEbookProjects,
+  saveEbookProject,
+  deleteEbookProject,
+  generateEbookProjectId,
+} from "@/lib/ebook-project-store";
+import type { EbookProject } from "@/lib/ebook-project-store";
+
+const JOB_STATE_KEY = "nexus_ebook_job_state";
 
 export default function EbookPage() {
   const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
   const [ebookPipelineSnapshot, setEbookPipelineSnapshot] = useState<EbookPipelineSnapshot | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [projectsPanelOpen, setProjectsPanelOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const [siteConfig] = useState<SiteConfig>(() => SiteConfigSchema.parse({}));
   const importInputRef = useRef<HTMLInputElement>(null);
+
+  // Project persistence
+  const [projects, setProjects] = useState<EbookProject[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string>("");
+  // Incrementing this key remounts <EbookPipeline> so it re-reads localStorage on load
+  const [pipelineKey, setPipelineKey] = useState(0);
+
+  useEffect(() => {
+    void listEbookProjects().then(setProjects).catch(() => {});
+  }, []);
+
+  const suggestedName = ebookPipelineSnapshot?.bookTitle ?? ebookManifest?.bookTitle ?? "";
+  const canSave = ebookPipelineSnapshot !== null || ebookManifest !== null;
+
+  const handleSaveProject = useCallback(async (name: string) => {
+    try {
+      const raw = localStorage.getItem(JOB_STATE_KEY);
+      if (!raw) return;
+      const jobState = EbookJobStateSchema.parse(JSON.parse(raw) as unknown);
+      const id = currentProjectId || generateEbookProjectId();
+      const project: EbookProject = {
+        id,
+        name,
+        createdAt: currentProjectId
+          ? (projects.find((p) => p.id === id)?.createdAt ?? new Date().toISOString())
+          : new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        bookTitle: jobState.architecture?.bookTitle ?? name,
+        chapterCount: jobState.chapters?.length ?? 0,
+        totalWordCount: (jobState.chapters ?? []).reduce((s, c) => s + (c.totalWordCount ?? 0), 0),
+        status: jobState.status,
+        jobState,
+      };
+      await saveEbookProject(project);
+      setCurrentProjectId(id);
+      setProjects(await listEbookProjects());
+      setImportSuccess(`"${name}" saved.`);
+      setImportError(null);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Save failed.");
+      setImportSuccess(null);
+    }
+  }, [currentProjectId, projects]);
+
+  const handleLoadProject = useCallback((id: string) => {
+    const p = projects.find((proj) => proj.id === id);
+    if (!p) return;
+    try {
+      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(p.jobState));
+      setCurrentProjectId(p.id);
+      setEbookManifest(null);
+      setProjectsPanelOpen(false);
+      setImportSuccess(`"${p.name}" loaded — resuming pipeline.`);
+      setImportError(null);
+      // Remount pipeline so it picks up the restored localStorage state
+      setPipelineKey((k) => k + 1);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Load failed.");
+    }
+  }, [projects]);
+
+  const handleDeleteProject = useCallback(async (id: string) => {
+    await deleteEbookProject(id);
+    setProjects(await listEbookProjects());
+    if (currentProjectId === id) setCurrentProjectId("");
+  }, [currentProjectId]);
+
+  const handleImportProject = useCallback(async (project: EbookProject) => {
+    await saveEbookProject(project);
+    setProjects(await listEbookProjects());
+    setImportSuccess(`"${project.name}" imported.`);
+    setImportError(null);
+  }, []);
 
   const buildManifestFromJob = useCallback((job: EbookJobState): EbookManifest | null => {
     if (!job.architecture || !job.frontMatter || !job.contentMap) return null;
@@ -119,53 +203,73 @@ export default function EbookPage() {
             </div>
           </div>
 
-          {/* Nexus Director AI button — appears once production completes */}
-          {ebookManifest && (
-            <>
-              <button
-                type="button"
-                onClick={() => setAssistantOpen(true)}
-                className="flex items-center gap-2 min-h-[44px] rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-300 transition hover:border-cyan-400/60 hover:bg-cyan-500/15 active:scale-[0.97]"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
-                  <path d="M9 12h6M12 9v6" strokeLinecap="round" />
-                </svg>
-                Director AI
-              </button>
-              <button
-                type="button"
-                onClick={handleExportJson}
-                className="flex items-center gap-2 min-h-[44px] rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-300 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 active:scale-[0.97]"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                  <path d="M12 3v12" strokeLinecap="round" />
-                  <polyline points="17 12 12 17 7 12" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
-                </svg>
-                Export JSON
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => importInputRef.current?.click()}
-            className="flex items-center gap-2 min-h-[44px] rounded-xl border border-slate-700 bg-slate-900/70 px-3.5 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300 active:scale-[0.97]"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" strokeLinecap="round" strokeLinejoin="round" />
-              <polyline points="17 8 12 3 7 8" strokeLinecap="round" strokeLinejoin="round" />
-              <line x1="12" y1="3" x2="12" y2="15" strokeLinecap="round" />
-            </svg>
-            Import JSON
-          </button>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".json,application/json"
-            className="hidden"
-            onChange={handleImportJson}
-          />
+          <div className="flex items-center gap-2">
+            {/* Projects toggle */}
+            <button
+              type="button"
+              onClick={() => setProjectsPanelOpen((o) => !o)}
+              className={`flex items-center gap-2 min-h-[44px] rounded-xl border px-3.5 py-2 text-xs font-semibold transition active:scale-[0.97] ${projectsPanelOpen ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-300" : "border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-300"}`}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                <rect x="2" y="7" width="20" height="14" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="hidden sm:inline">Projects</span>
+              {projects.length > 0 && (
+                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-cyan-500/25 px-1 text-[10px] font-bold text-cyan-300">
+                  {projects.length}
+                </span>
+              )}
+            </button>
+
+            {/* Nexus Director AI button — appears once production completes */}
+            {ebookManifest && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setAssistantOpen(true)}
+                  className="flex items-center gap-2 min-h-[44px] rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-300 transition hover:border-cyan-400/60 hover:bg-cyan-500/15 active:scale-[0.97]"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
+                    <path d="M9 12h6M12 9v6" strokeLinecap="round" />
+                  </svg>
+                  <span className="hidden sm:inline">Director AI</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportJson}
+                  className="flex items-center gap-2 min-h-[44px] rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-300 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 active:scale-[0.97]"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                    <path d="M12 3v12" strokeLinecap="round" />
+                    <polyline points="17 12 12 17 7 12" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
+                  </svg>
+                  <span className="hidden sm:inline">Export</span>
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              className="flex items-center gap-2 min-h-[44px] rounded-xl border border-slate-700 bg-slate-900/70 px-3.5 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300 active:scale-[0.97]"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" strokeLinecap="round" strokeLinejoin="round" />
+                <polyline points="17 8 12 3 7 8" strokeLinecap="round" strokeLinejoin="round" />
+                <line x1="12" y1="3" x2="12" y2="15" strokeLinecap="round" />
+              </svg>
+              <span className="hidden sm:inline">Import</span>
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleImportJson}
+            />
+          </div>
         </div>
       </div>
 
@@ -180,9 +284,25 @@ export default function EbookPage() {
         </div>
       )}
 
+      {/* Projects panel — slides in below header */}
+      {projectsPanelOpen && (
+        <div className="mx-auto mt-4 max-w-3xl px-4 lg:px-8">
+          <EbookProjectsPanel
+            projects={projects}
+            suggestedName={suggestedName}
+            canSave={canSave}
+            onSave={handleSaveProject}
+            onLoad={handleLoadProject}
+            onDelete={handleDeleteProject}
+            onImport={handleImportProject}
+          />
+        </div>
+      )}
+
       {/* Pipeline */}
       <div className="mx-auto max-w-3xl px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:px-8 lg:pt-6">
         <EbookPipeline
+          key={pipelineKey}
           ebookManifest={ebookManifest}
           onManifestReady={handleManifestReady}
           onPipelineSnapshotChange={handlePipelineSnapshotChange}
@@ -204,3 +324,4 @@ export default function EbookPage() {
     </main>
   );
 }
+
