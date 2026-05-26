@@ -211,11 +211,15 @@ ${hookBlock}
 TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
 
+SECTION SCOPE RULE — READ BEFORE WRITING:
+Your section is: "${assignment.heading}"${assignment.nextSectionHeading ? `\nThe NEXT section is: "${assignment.nextSectionHeading}"` : ""}
+Write ONLY content that belongs to THIS section's heading and key points. If any excerpt contains sentences that transition into or introduce the next section's topic, STOP before those sentences. Do not write them. A transcript boundary does not override a section boundary.
+
+CONTENT COVERAGE REQUIREMENT: Exhaust every distinct key point, story, illustration, and argument that belongs to THIS section's scope. Skip any excerpt content that clearly belongs to the next section. Write shorter rather than bleed forward.
+
 Return:
 - paragraphs: an array of strings where EACH ELEMENT IS ONE PARAGRAPH of polished prose. Every paragraph is a separate array item. Never put more than one paragraph in a single array element. Do not use \n or \n\n inside any element — each element is exactly one paragraph.
 - claimLedger: list of major claims and the excerpt numbers (1-based) that support each claim.
-
-CONTENT COVERAGE REQUIREMENT: ${assignment.targetWordCount} words is the MINIMUM floor, not a ceiling. Exhaust every distinct key point, story, illustration, and argument present in the transcript excerpts before closing the section. Do NOT truncate content to hit a target — write until the source material is fully represented.
 
 Now write the section prose:`;
 
@@ -263,7 +267,7 @@ Each paragraph in your plan must have a clear narrative purpose and be supported
 
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}`,
-        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
+        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}${assignment.nextSectionHeading ? `\nNEXT SECTION (do NOT plan paragraphs about this): "${assignment.nextSectionHeading}"` : ""}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
       });
       paragraphPlan = plan.paragraphPlan ?? [];
     } catch {
