@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { EbookManifestSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest } from "@/lib/schemas/ebook";
@@ -210,7 +210,7 @@ function findLexicalRepetitions(segments: SegmentMeta[]): Omit<RepetitionEntry, 
 
   for (const seg of segments) {
     const seen = new Set<string>();
-    for (const phrase of [...extractNgrams(seg.text, 4), ...extractNgrams(seg.text, 5)]) {
+    for (const phrase of [...extractNgrams(seg.text, 3), ...extractNgrams(seg.text, 4), ...extractNgrams(seg.text, 5)]) {
       if (seen.has(phrase)) continue;
       seen.add(phrase);
       const sentences = seg.text.split(/(?<=[.!?])\s+/);
@@ -225,7 +225,7 @@ function findLexicalRepetitions(segments: SegmentMeta[]): Omit<RepetitionEntry, 
   }
 
   return Array.from(phraseMap.entries())
-    .filter(([, v]) => v.count >= 3)
+    .filter(([, v]) => v.count >= 2)
     .map(([phrase, v]) => ({ phrase, count: v.count, occurrences: v.occurrences }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 20);
@@ -271,7 +271,7 @@ async function runSemanticAudit(
 }> {
   // Build a compact section index for the LLM — location label + first 280 chars
   const sectionIndex = segments
-    .map((s, i) => `[${i + 1}] ${s.location}\n${s.text.trim().slice(0, 280)}${s.text.length > 280 ? "…" : ""}`)
+    .map((s, i) => `[${i + 1}] ${s.location}\n${s.text.trim().slice(0, 600)}${s.text.length > 600 ? "…" : ""}`)
     .join("\n\n");
 
   // Summarise algorithmically flagged pairs so the LLM knows where to look
@@ -328,7 +328,7 @@ Respond ONLY with valid JSON (no markdown fences, no commentary outside the JSON
 }`;
 
   try {
-    const { text } = await generateText({ model: deepSeekModel, temperature: 0.2, prompt, maxTokens: 4096 });
+    const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 8000 });
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { conceptDuplicates: [], phraseAmendments: [], wordAmendments: [] };
     return JSON.parse(jsonMatch[0]) as {
