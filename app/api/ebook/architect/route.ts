@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ArchitectRequestSchema } from "@/lib/schemas/ebook";
 
 export const runtime = "nodejs";
@@ -153,10 +153,9 @@ export async function POST(req: NextRequest) {
     let minimal: z.infer<typeof MinimalArchitectureSchema>;
     try {
       const result = await generateObject({
-        model: deepSeekModel,
+        model: deepSeekReasonerModel,
         schema: MinimalArchitectureSchema,
         mode: "json",
-        temperature: 0.2,
         system: `# ROLE
 You are an elite structural editor for a top-tier publishing house. Your job is to map raw, sanitized audio transcript segments into a clean chapter architecture for a published book series.
 
