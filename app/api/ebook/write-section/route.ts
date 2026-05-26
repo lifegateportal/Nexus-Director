@@ -170,7 +170,7 @@ AUTHOR BOOK CONFIGURATION (highest priority)
       : "";
 
   const continuityBlock = assignment.previousSectionEnding
-    ? `\nPREVIOUS SECTION ENDING (for prose continuity — do NOT repeat this):\n${assignment.previousSectionEnding}`
+    ? `\nSECTION BRIDGE: The previous section ended with this sentence: "${assignment.previousSectionEnding}" — if the opening of this section benefits from it, write ONE brief connecting sentence that picks up the thread naturally. Do NOT repeat, recap, paraphrase, or expand on that ending. One sentence maximum — then move immediately into this section's own content.`
     : "";
 
   // coveredBlock is intentionally empty here — the dedup constraint is injected into

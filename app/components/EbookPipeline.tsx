@@ -1794,8 +1794,13 @@ export function EbookPipeline({
       );
       const allSections: SectionDraft[] = [...acc.sections];
       let completedCount = allSections.length;
+      const getLastSentence = (text: string) => {
+        const lastPara = text.split("\n\n").filter(Boolean).slice(-1)[0] ?? "";
+        const sentences = lastPara.match(/[^.!?]+[.!?]+/g) ?? [];
+        return sentences[sentences.length - 1]?.trim() ?? "";
+      };
       let previousEnding = allSections.length > 0
-        ? (allSections[allSections.length - 1].body ?? "").split("\n\n").slice(-2).join("\n\n")
+        ? getLastSentence(allSections[allSections.length - 1].body ?? "")
         : "";
 
       // Accumulate key points from already-completed sections so the writer
@@ -1861,7 +1866,7 @@ export function EbookPipeline({
         };
         allSections.push(draft);
         completedCount++;
-        previousEnding = (body ?? "").split("\n\n").slice(-2).join("\n\n");
+        previousEnding = getLastSentence(body ?? "");
 
         // Permanent dedup: accumulate the first sentence of EVERY paragraph (not just
         // the first 3) so middle-of-chapter stories and illustrations are also registered
