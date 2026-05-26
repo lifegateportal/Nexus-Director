@@ -2,7 +2,7 @@ import type { AcademyPackage } from "@/lib/schemas/academy";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import type { IngestResult, LogicTransformResult } from "@/lib/schemas/blueprint";
 import type { UiManifestResult } from "@/lib/schemas/ui-manifest";
-import type { EbookManifest } from "@/lib/schemas/ebook";
+import type { EbookManifest, EbookJobState } from "@/lib/schemas/ebook";
 
 export type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
@@ -20,6 +20,8 @@ export type ProjectSnapshot = {
   uiResult: UiManifestResult | null;
   /** Completed ebook manifest — present when the book pipeline has finished */
   ebookManifest?: EbookManifest | null;
+  /** Full ebook pipeline job state — enables resume from any stage */
+  ebookJobState?: EbookJobState | null;
 };
 
 // ── IndexedDB storage (no 5MB quota limit) ───────────────────────────────────

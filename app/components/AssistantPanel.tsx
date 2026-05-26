@@ -264,10 +264,21 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
 
       // ── Route to ebook assistant when a book manifest is loaded ────────────
       if (ebookManifest && onEbookUpdate) {
+        // Send the last 14 turns (7 exchanges) of user/assistant chat so the AI
+        // understands follow-up instructions like "make it longer" or "fix that".
+        const historyForApi = messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .slice(-14)
+          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
         const res = await fetch("/api/ebook/assistant", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ manifest: ebookManifest, instruction: text, pipeline: ebookPipelineSnapshot ?? undefined }),
+          body: JSON.stringify({
+            manifest: ebookManifest,
+            instruction: text,
+            history: historyForApi,
+            pipeline: ebookPipelineSnapshot ?? undefined,
+          }),
         });
         const json = await res.json() as { manifest?: unknown; summary?: string; error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);

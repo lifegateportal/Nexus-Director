@@ -481,6 +481,7 @@ export default function HomePage() {
                       ebookManifest={ebookManifest}
                       onManifestReady={handleEbookManifestReady}
                       onPipelineSnapshotChange={setEbookSnapshot}
+                      onSaveProject={handleSaveProject}
                     />
                   </div>
                 ) : activeNav === "deploy" ? (

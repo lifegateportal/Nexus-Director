@@ -123,6 +123,32 @@ export default function EbookPage() {
 
   const handleEbookUpdate = useCallback((manifest: EbookManifest) => {
     setEbookManifest(manifest);
+    // Write the AI-edited manifest back to localStorage so the pipeline display,
+    // saves, and reloads all reflect the changes immediately.
+    try {
+      const raw = localStorage.getItem(JOB_STATE_KEY);
+      if (raw) {
+        const existing = JSON.parse(raw) as Record<string, unknown>;
+        const updatedJobState = {
+          ...existing,
+          chapters: manifest.chapters,
+          frontMatter: manifest.frontMatter,
+          ...(existing.architecture
+            ? {
+                architecture: {
+                  ...(existing.architecture as Record<string, unknown>),
+                  bookTitle: manifest.bookTitle,
+                  subtitle: manifest.subtitle,
+                  authorName: manifest.authorName,
+                },
+              }
+            : {}),
+        };
+        localStorage.setItem(JOB_STATE_KEY, JSON.stringify(updatedJobState));
+      }
+    } catch {
+      // localStorage unavailable — in-memory state still updated correctly
+    }
   }, []);
 
   const handlePipelineSnapshotChange = useCallback((snapshot: EbookPipelineSnapshot | null) => {

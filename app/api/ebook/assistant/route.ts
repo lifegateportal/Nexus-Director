@@ -13,9 +13,15 @@ import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+const ChatMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().max(8000),
+});
+
 const RequestSchema = z.object({
   manifest: EbookManifestSchema,
   instruction: z.string().min(1).max(4000),
+  history: z.array(ChatMessageSchema).max(20).optional(),
   pipeline: z.object({
     stage: z.string(),
     progress: z.object({ total: z.number().int().nonnegative(), completed: z.number().int().nonnegative() }),
@@ -56,11 +62,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { manifest, instruction, pipeline } = input;
+  const { manifest, instruction, history, pipeline } = input;
 
   const safeExcerpt = (value: string | null | undefined, max = 600) => (value ?? "").slice(0, max);
 
-  // Parse instruction for explicit section references, e.g. "section 2.1", "section 2 §1"
+  // Parse explicit section references from text, e.g. "section 2.1", "section 2 §1"
   // Explicitly named sections are always sent at full length and not subject to the word-count guard.
   function parseExplicitSectionRefs(text: string): Set<string> {
     const refs = new Set<string>();
@@ -73,7 +79,9 @@ export async function POST(req: NextRequest) {
     }
     return refs;
   }
-  const explicitRefs = parseExplicitSectionRefs(instruction);
+  // Gather refs from the full conversation so contextual follow-ups ("make it longer") work
+  const historyText = (history ?? []).map((m) => m.content).join(" ");
+  const explicitRefs = parseExplicitSectionRefs(instruction + " " + historyText);
 
   // Track which sections are truncated so we can restore original content if the AI loses words
   const truncatedSections = new Set<string>();
@@ -222,7 +230,14 @@ OUTPUT RULES
         JSON.stringify(bookSummary, null, 2),
         pipelineSummary ? ["CURRENT PIPELINE STATE:", JSON.stringify(pipelineSummary, null, 2)].join("\n") : "",
         "",
-        "USER INSTRUCTION:",
+        ...(history && history.length > 0
+          ? [
+              "CONVERSATION HISTORY (oldest first — use this to understand follow-up instructions):",
+              history.map((m) => `${m.role === "user" ? "USER" : "DIRECTOR"}: ${m.content}`).join("\n"),
+              "",
+            ]
+          : []),
+        "CURRENT USER INSTRUCTION:",
         instruction,
       ].join("\n"),
     });
