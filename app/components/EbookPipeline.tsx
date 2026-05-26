@@ -1090,10 +1090,13 @@ export function EbookPipeline({
   ebookManifest,
   onManifestReady,
   onPipelineSnapshotChange,
+  onSaveProject,
 }: {
   ebookManifest?: EbookManifest | null;
   onManifestReady?: (manifest: EbookManifest) => void;
   onPipelineSnapshotChange?: (snapshot: EbookPipelineSnapshot | null) => void;
+  /** Called when the user clicks Save inside the pipeline. Receives the chosen project name. */
+  onSaveProject?: (name: string) => void;
 } = {}) {
   const [audioFiles, setAudioFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
   const [transcriptFiles, setTranscriptFiles] = useState<(File | null)[]>([null, null, null, null, null, null]);
@@ -1115,6 +1118,10 @@ export function EbookPipeline({
   const [signalFilterState, setSignalFilterState] = useState<SignalFilterState>("idle");
   const [signalFilterDetail, setSignalFilterDetail] = useState<string | null>(null);
   const [totalWords, setTotalWords] = useState(0);
+  // Save bar state
+  const [showSaveBar, setShowSaveBar] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [savedConfirm, setSavedConfirm] = useState(false);
   const jobIdRef = useRef<string>(newJobId());
   // Mirror of log in a ref so runPipeline (async) can read the current value for checkpoints
   const logRef = useRef<string[]>([]);
@@ -1196,6 +1203,22 @@ export function EbookPipeline({
   setExportUrls(null);
   setQualityReport(null);
   setError(null);
+  setStage("complete");
+  // Build a minimal reviewContext so the export UI is available even without a full job state
+  setReviewContext({
+    contentMap: {
+      totalEstimatedWords: normalized.totalWordCount,
+      overarchingThemes: [],
+      teachingArc: "",
+      coreThesis: "",
+      targetAudience: "",
+      uniqueVocabulary: [],
+      toneMap: "",
+      segments: [],
+      allQuotes: normalized.allQuotes ?? [],
+    },
+    frontMatter: normalized.frontMatter,
+  });
   }, [ebookManifest, recalculateManifestTotal]);
 
   const updateCompletedManifest = useCallback((updater: (current: EbookManifest) => EbookManifest) => {
@@ -1460,7 +1483,19 @@ export function EbookPipeline({
           docxUrl: job.exportUrls.docxUrl || undefined,
         });
       }
-      if (job.status === "complete" && job.architecture && job.frontMatter && job.contentMap) {
+      if (job.status === "complete" && job.architecture && job.frontMatter) {
+        // Build a contentMap stub when the saved job state is missing one (older saves)
+        const contentMap: ContentMap = job.contentMap ?? {
+          totalEstimatedWords: (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0),
+          overarchingThemes: [],
+          teachingArc: "",
+          coreThesis: "",
+          targetAudience: "",
+          uniqueVocabulary: [],
+          toneMap: "",
+          segments: [],
+          allQuotes: [],
+        };
         const manifest: EbookManifest = {
           jobId: job.jobId,
           bookTitle: job.architecture.bookTitle,
@@ -1469,10 +1504,10 @@ export function EbookPipeline({
           frontMatter: job.frontMatter,
           chapters: job.chapters ?? [],
           totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-          allQuotes: job.contentMap.allQuotes ?? [],
+          allQuotes: contentMap.allQuotes ?? [],
           generatedAt: new Date().toISOString(),
         };
-        setReviewContext({ contentMap: job.contentMap, frontMatter: job.frontMatter });
+        setReviewContext({ contentMap, frontMatter: job.frontMatter });
         syncCompletedManifest(manifest);
       }
       const words = (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0);
@@ -2108,7 +2143,64 @@ export function EbookPipeline({
             Upload up to 4 hours of audio. Your voice and content — no additions, no fabrication.
           </p>
         </div>
+        {/* Save Project button — visible once the pipeline has started */}
+        {onSaveProject && stage !== "idle" && (
+          <button
+            type="button"
+            onClick={() => {
+              setSaveName(completedManifest?.bookTitle ?? "My Ebook");
+              setShowSaveBar((v) => !v);
+              setSavedConfirm(false);
+            }}
+            className="flex shrink-0 items-center gap-1.5 min-h-[44px] rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 text-sm font-semibold text-cyan-300 hover:bg-cyan-500/20 transition"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M17 21v-8H7v8M7 3v5h8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Save Project
+          </button>
+        )}
       </div>
+
+      {/* Inline save bar */}
+      {showSaveBar && onSaveProject && (
+        <div className="flex items-center gap-2 rounded-xl border border-cyan-500/25 bg-slate-900/80 px-4 py-3">
+          <input
+            autoFocus
+            value={saveName}
+            onChange={(e) => { setSaveName(e.target.value); setSavedConfirm(false); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && saveName.trim()) {
+                onSaveProject(saveName.trim());
+                setSavedConfirm(true);
+              } else if (e.key === "Escape") {
+                setShowSaveBar(false);
+              }
+            }}
+            placeholder="Project name…"
+            className="flex-1 min-h-[48px] rounded-xl border border-slate-600 bg-slate-800 px-4 text-base text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={!saveName.trim()}
+            onClick={() => {
+              if (saveName.trim()) {
+                onSaveProject(saveName.trim());
+                setSavedConfirm(true);
+              }
+            }}
+            className="min-h-[48px] rounded-xl bg-cyan-600 px-5 text-sm font-semibold text-white hover:bg-cyan-500 disabled:opacity-40"
+          >
+            {savedConfirm ? "✓ Saved" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSaveBar(false)}
+            className="min-h-[48px] min-w-[48px] flex items-center justify-center rounded-xl border border-slate-600 text-slate-400 hover:text-slate-200"
+          >×</button>
+        </div>
+      )}
 
       {/* Audio + Transcript Upload Grid */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
