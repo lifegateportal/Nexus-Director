@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 type NavItem = { id: string; label: string; href?: string };
 
@@ -109,8 +109,25 @@ type NexusNavProps = {
   onSelect: (id: string) => void;
 };
 
+function IconLogout() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points="16 17 21 12 16 7" strokeLinecap="round" strokeLinejoin="round" />
+      <line x1="21" y1="12" x2="9" y2="12" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function NexusNav({ active, onSelect }: NexusNavProps) {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const handleLogout = useCallback(async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+  }, [router]);
+
   const LogoMark = () => (
     <div
       className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 ring-1 ring-cyan-400/50"
@@ -181,6 +198,15 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         </div>
 
         <div className="flex-1" />
+        <button
+          type="button"
+          onClick={handleLogout}
+          aria-label="Log out"
+          title="Log out"
+          className="focus-ring flex min-h-12 w-12 items-center justify-center rounded-xl text-slate-600 hover:bg-rose-500/10 hover:text-rose-400 active:bg-rose-500/15 transition-all duration-150"
+        >
+          <IconLogout />
+        </button>
         <div
           className="mb-2 h-2 w-2 rounded-full bg-emerald-400"
           style={{ boxShadow: "0 0 10px rgba(52,211,153,0.85)" }}
@@ -202,6 +228,17 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
           className="flex flex-col items-center justify-center gap-0.5 px-1 pt-2"
         >
           <LogoMark />
+        </button>
+
+        {/* Logout — far right of mobile bar */}
+        <button
+          type="button"
+          onClick={handleLogout}
+          aria-label="Log out"
+          className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 text-slate-600 hover:text-rose-400 transition-colors"
+        >
+          <IconLogout />
+          <span className="text-[9px] font-medium">Logout</span>
         </button>
 
         {NAV_ITEMS.filter((item) => item.id !== "overview").map((item, i) => {

@@ -10,6 +10,9 @@ const EnvironmentSchema = z.object({
   DEEPSEEK_MODEL: z.string().default("deepseek-chat"),
   CLAUDE_MODEL: z.string().default("claude-haiku-4-5"),
   CURATOR_MODEL: z.string().default("claude-sonnet-4-5"),
+  // Personal login gate — set both to enable password protection
+  AUTH_PASSWORD:       z.string().min(1).optional(),
+  AUTH_COOKIE_SECRET:  z.string().min(16).optional(),
   // Cloudflare R2 — optional, enables cloud video storage
   R2_ACCOUNT_ID:       z.string().optional(),
   R2_ACCESS_KEY_ID:    z.string().optional(),
