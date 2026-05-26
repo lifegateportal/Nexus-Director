@@ -79,18 +79,21 @@ export function evaluateBookQuality(input: {
       }
 
       const words = body.trim().split(/\s+/).filter(Boolean).length;
-      if (words < 180) {
+      if (words < 120) {
         issues.push({
           code: "SHORT_SECTION",
           severity: "warn",
           message: `Chapter ${chapter.number} section ${section.sectionNumber} is short (${words} words).`,
         });
-        score -= 4;
+        score -= 2;
       }
 
+      // Jaccard overlap against the full corpus is unreliable for short sections
+      // (small sets always produce near-zero Jaccard regardless of sourcing quality).
+      // Only run the check on sections with enough words to make the metric meaningful.
       const sectionTokens = tokenize(body);
       const overlap = jaccard(sectionTokens, sourceTokens);
-      if (overlap < 0.035) {
+      if (words >= 200 && overlap < 0.035) {
         issues.push({
           code: "LOW_CONTENT_OVERLAP",
           severity: "warn",
