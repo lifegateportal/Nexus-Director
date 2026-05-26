@@ -173,6 +173,10 @@ AUTHOR BOOK CONFIGURATION (highest priority)
     ? `\nSECTION BRIDGE: The previous section ended with this sentence: "${assignment.previousSectionEnding}" — if the opening of this section benefits from it, write ONE brief connecting sentence that picks up the thread naturally. Do NOT repeat, recap, paraphrase, or expand on that ending. One sentence maximum — then move immediately into this section's own content.`
     : "";
 
+  const alreadyQuotedBlock = (assignment.alreadyQuotedRefs ?? []).length > 0
+    ? `\n\n════════════════════════════════════════════\nSCRIPTURES ALREADY QUOTED IN FULL — DO NOT REPRODUCE\n════════════════════════════════════════════\nThe following scripture and quote references have ALREADY been reproduced verbatim in earlier sections of this book. You MUST NOT quote them in full again. Instead, reference them briefly inline — e.g. "as Paul wrote in 1 Corinthians 12:31" or "returning to Isaiah 55:8". Never re-print the verse text:\n${(assignment.alreadyQuotedRefs ?? []).map((r) => `• ${r}`).join("\n")}`
+    : "";
+
   // coveredBlock is intentionally empty here — the dedup constraint is injected into
   // the system prompt (deduplicatedSystem, below) where it carries maximum LLM weight.
   const coveredBlock = "";
@@ -274,8 +278,8 @@ ${READER_NORMALIZATION_RULES}`,
 
     const deduplicatedSystem =
       (assignment.alreadyCoveredPoints ?? []).length > 0
-        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — ABSOLUTE PROHIBITION\n════════════════════════════════════════════\nThe following ideas, claims, opening sentences, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST NOT re-introduce, re-explain, re-state, or re-develop ANY of them — even with different wording. If a transcript excerpt references these, acknowledge with at most one transitional phrase and move immediately to new material. Do not give them a paragraph, example, story, or dedicated treatment:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
-        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}`;
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — ABSOLUTE PROHIBITION\n════════════════════════════════════════════\nThe following ideas, claims, opening sentences, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST NOT re-introduce, re-explain, re-state, or re-develop ANY of them — even with different wording. If a transcript excerpt references these, acknowledge with at most one transitional phrase and move immediately to new material. Do not give them a paragraph, example, story, or dedicated treatment:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${alreadyQuotedBlock}`;
 
     const { object } = await generateObject({
       model: deepSeekModel,

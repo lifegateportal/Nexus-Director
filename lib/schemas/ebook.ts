@@ -98,6 +98,7 @@ export const SectionAssignmentSchema = z.object({
   nextSectionHeading: z.string().optional(),   // heading of the next section for forward bridge
   targetWordCount: z.number(),
   alreadyCoveredPoints: z.array(z.string()).default([]), // key points covered in earlier sections — do NOT repeat
+  alreadyQuotedRefs: z.array(z.string()).default([]),   // scripture/quote references already reproduced in full — reference only, do not quote again
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────

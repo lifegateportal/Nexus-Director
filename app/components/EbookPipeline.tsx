@@ -1825,6 +1825,14 @@ export function EbookPipeline({
         .filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
         .flatMap((a) => a.keyPoints ?? []);
 
+      // Track scripture/quote references already reproduced in full so later sections
+      // reference rather than re-quote them.
+      const usedQuoteRefs = new Set<string>(
+        assignments
+          .filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
+          .flatMap((a) => (a.quotes ?? []).map((q) => q.reference).filter(Boolean))
+      );
+
       if (completedCount > 0) {
         addLog(`↩ Resuming — ${completedCount} sections already written, continuing from section ${completedCount + 1}`);
         setProgress({ total: totalSections, completed: completedCount });
@@ -1834,10 +1842,14 @@ export function EbookPipeline({
         const key = `${assignment.chapterNumber}-${assignment.sectionNumber}`;
         if (completedSectionKeys.has(key)) continue; // already done
 
+        const currentIdx = assignments.indexOf(assignment);
+        const nextAssignment = assignments[currentIdx + 1];
         const augmented: SectionAssignment = {
           ...assignment,
           previousSectionEnding: previousEnding,
+          nextSectionHeading: nextAssignment?.heading,
           alreadyCoveredPoints: [...coveredKeyPoints],
+          alreadyQuotedRefs: [...usedQuoteRefs],
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -1896,6 +1908,10 @@ export function EbookPipeline({
           ...(claimLedger ?? []).map((c) => c.claim).filter(Boolean),
           ...allParagraphTopics,
         );
+        // Register every quote ref from this section so future sections reference-only
+        for (const q of assignment.quotes ?? []) {
+          if (q.reference) usedQuoteRefs.add(q.reference);
+        }
 
         // Update UI
         setChapters((prev) =>
