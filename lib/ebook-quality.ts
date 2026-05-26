@@ -93,10 +93,10 @@ export function evaluateBookQuality(input: {
       if (overlap < 0.035) {
         issues.push({
           code: "LOW_CONTENT_OVERLAP",
-          severity: "error",
+          severity: "warn",
           message: `Chapter ${chapter.number} section ${section.sectionNumber} has low source overlap (${overlap.toFixed(3)}).`,
         });
-        score -= 12;
+        score -= 6;
       }
 
       const recapSentences = body
