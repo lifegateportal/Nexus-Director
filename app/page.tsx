@@ -563,7 +563,7 @@ export default function HomePage() {
         ebookManifest={ebookManifest}
         onEbookUpdate={(updated, summary) => {
           setEbookManifest(updated);
-          void summary;
+          if (summary) addLog({ level: "success", message: `Director: ${summary}`, model: "curator" });
         }}
         ebookPipelineSnapshot={ebookSnapshot}
         loadedHistory={chatHistory}

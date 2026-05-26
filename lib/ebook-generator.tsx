@@ -296,7 +296,6 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
         paragraphGap: tpl.paragraphGap,
         align: tpl.bodyAlign,
       });
-    doc.moveDown(0.08);
     renderedIndex++;
   });
 }
@@ -334,7 +333,7 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
     doc.fontSize(tpl.sectionSize).font(fonts[tpl.sectionFont]).fillColor(tpl.sectionColor)
       .text(section.heading, { align: tpl.sectionAlign });
     if (tpl.sectionRule) writeDivider(doc, tpl);
-    doc.moveDown(0.2);
+    doc.moveDown(0.5);
     writeRichBody(doc, section.body, quotes, fonts, tpl, { noIndentFirstParagraph: true });
   }
 
@@ -344,21 +343,23 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
-    doc.fontSize(9).font(fonts.sansBold).fillColor(tpl.labelColor).text("KEY TAKEAWAYS");
-    doc.moveDown(0.3);
+    writeDivider(doc, tpl);
+    doc.fontSize(tpl.sectionSize - 1).font(fonts[tpl.sectionFont]).fillColor(tpl.labelColor).text("KEY TAKEAWAYS");
+    doc.moveDown(0.4);
     for (const t of (chapter.keyTakeaways ?? [])) {
-      doc.fontSize(tpl.bodyFontSize - 1).font(fonts.serif).fillColor("#222222").text(`• ${t}`, { lineGap: 3.5 });
+      doc.fontSize(tpl.bodyFontSize).font(fonts.serif).fillColor("#222222").text(`• ${t}`, { lineGap: tpl.bodyLineGap, paragraphGap: 4 });
     }
-    doc.moveDown();
+    doc.moveDown(0.5);
   }
 
   if ((chapter.reflectionQuestions ?? []).length > 0) {
-    doc.fontSize(9).font(fonts.sansBold).fillColor(tpl.labelColor).text("REFLECTION QUESTIONS");
-    doc.moveDown(0.3);
+    writeDivider(doc, tpl);
+    doc.fontSize(tpl.sectionSize - 1).font(fonts[tpl.sectionFont]).fillColor(tpl.labelColor).text("REFLECTION QUESTIONS");
+    doc.moveDown(0.4);
     (chapter.reflectionQuestions ?? []).forEach((q, i) => {
-      doc.fontSize(tpl.bodyFontSize - 1).font(fonts.serif).fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: 3.5 });
+      doc.fontSize(tpl.bodyFontSize).font(fonts.serif).fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: tpl.bodyLineGap, paragraphGap: 4 });
     });
-    doc.moveDown();
+    doc.moveDown(0.5);
   }
 }
 
@@ -576,10 +577,15 @@ body {
   font-size: 1em;
   margin: 6% 8%;
   text-align: ${bodyAlign};
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  adobe-hyphenate: auto;
 }
 p.book-paragraph {
   margin: 0 0 ${paraGap} 0;
   text-indent: ${indent};
+  widows: 2;
+  orphans: 2;
 }
 p.book-paragraph.no-indent {
   text-indent: 0;
@@ -605,11 +611,13 @@ h1.chapter-title {
   margin-bottom: 0.25em;
 }
 h2 {
-  margin-top: 1.55em;
-  margin-bottom: 0.55em;
+  margin-top: 2em;
+  margin-bottom: 0.65em;
   font-size: 1.1em;
   text-align: ${sectionAlign};
   color: ${tpl.sectionColor};
+  page-break-after: avoid;
+  break-after: avoid;
 }
 h3 {
   margin-top: 1.25em;
@@ -642,7 +650,7 @@ blockquote.scripture-block {
   display: block;
   font-style: italic;
   font-size: ${(tpl.scriptureFontSize / tpl.bodyFontSize).toFixed(2)}em;
-  line-height: 2.05;
+  line-height: 1.55;
   margin: 0;
   color: #1a1a1a;
   text-indent: 0;

@@ -60,6 +60,21 @@ export async function POST(req: NextRequest) {
 
   const safeExcerpt = (value: string | null | undefined, max = 600) => (value ?? "").slice(0, max);
 
+  // Parse instruction for explicit section references, e.g. "section 2.1", "section 2 §1"
+  // Explicitly named sections are always sent at full length and not subject to the word-count guard.
+  function parseExplicitSectionRefs(text: string): Set<string> {
+    const refs = new Set<string>();
+    const re = /\bsection\s+(\d+)[.\s§]+(\d+)|(\d+)[.\s§]+(\d+)\s+section\b/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const ch = m[1] ?? m[3];
+      const sc = m[2] ?? m[4];
+      if (ch && sc) refs.add(`${ch}:${sc}`);
+    }
+    return refs;
+  }
+  const explicitRefs = parseExplicitSectionRefs(instruction);
+
   // Track which sections are truncated so we can restore original content if the AI loses words
   const truncatedSections = new Set<string>();
 
@@ -87,7 +102,9 @@ export async function POST(req: NextRequest) {
       totalWordCount: ch.totalWordCount,
       sections: ch.sections.map((s) => {
         const fullBody = s.body ?? "";
-        const isTruncated = fullBody.length > 1200;
+        const isExplicit = explicitRefs.has(`${ch.number}:${s.sectionNumber}`);
+        // Explicit sections are always sent in full; others truncated only if they exceed 4000 chars
+        const isTruncated = !isExplicit && fullBody.length > 4000;
         if (isTruncated) {
           truncatedSections.add(`${ch.number}:${s.sectionNumber}`);
         }
@@ -95,9 +112,9 @@ export async function POST(req: NextRequest) {
           sectionNumber: s.sectionNumber,
           chapterNumber: ch.number,
           heading: s.heading,
-          // Send full body for short sections; excerpt for long ones with a NO-EDIT marker
+          // Send full body for explicit/short sections; excerpt for long background sections
           body: isTruncated
-            ? safeExcerpt(fullBody, 800) + "\n…[TRUNCATED — DO NOT MODIFY THIS SECTION. Return its body field as an empty string so the original is preserved]"
+            ? safeExcerpt(fullBody, 1200) + "\n…[TRUNCATED — DO NOT MODIFY THIS SECTION. Return its body field as an empty string so the original is preserved]"
             : fullBody,
           wordCount: s.wordCount,
         };
@@ -224,8 +241,12 @@ OUTPUT RULES
           // restore the original body to prevent content loss on truncated sections
           const originalWords = (s.body ?? "").split(/\s+/).filter(Boolean).length;
           const returnedWords = (updated.body ?? "").split(/\s+/).filter(Boolean).length;
+          // For explicitly requested sections, trust the AI's non-empty response.
+          // For truncated background sections, restore original if content loss > 25%.
+          const sectionKey = `${ch.number}:${s.sectionNumber}`;
           const bodyToUse =
-            !updated.body || (truncatedSections.has(`${ch.number}:${s.sectionNumber}`) && returnedWords < originalWords * 0.75)
+            !updated.body ||
+            (!explicitRefs.has(sectionKey) && truncatedSections.has(sectionKey) && returnedWords < originalWords * 0.75)
               ? s.body
               : updated.body;
           return { ...updated, body: bodyToUse };
@@ -250,9 +271,9 @@ OUTPUT RULES
             const wasTruncated = truncatedSections.has(key);
             const originalWords = (originalSection.body ?? "").split(/\s+/).filter(Boolean).length;
             const returnedWords = (returnedSection.body ?? "").split(/\s+/).filter(Boolean).length;
-            // Restore original body if: section was truncated AND returned body is empty or lossy
+            // Restore original body if: section was truncated (not explicitly requested) AND body is empty or lossy
             const bodyToUse =
-              wasTruncated && (!returnedSection.body || returnedWords < originalWords * 0.75)
+              !explicitRefs.has(key) && wasTruncated && (!returnedSection.body || returnedWords < originalWords * 0.75)
                 ? originalSection.body
                 : returnedSection.body;
             return { ...returnedSection, body: bodyToUse };
