@@ -271,13 +271,13 @@ async function runSemanticAudit(
 }> {
   // Build a compact section index for the LLM — location label + first 280 chars
   const sectionIndex = segments
-    .map((s, i) => `[${i + 1}] ${s.location}\n${s.text.trim().slice(0, 600)}${s.text.length > 600 ? "…" : ""}`)
+    .map((s, i) => `[${i + 1}] ${s.location}\n${s.text.trim().slice(0, 300)}${s.text.length > 300 ? "…" : ""}`)
     .join("\n\n");
 
   // Summarise algorithmically flagged pairs so the LLM knows where to look
   const flaggedPairsText = similarPairs.length > 0
     ? similarPairs
-        .slice(0, 8)
+        .slice(0, 6)
         .map((p) => `• ${p.locationA} ↔ ${p.locationB} (similarity ${Math.round(p.similarity * 100)}%)`)
         .join("\n")
     : "None detected algorithmically.";
@@ -328,7 +328,7 @@ Respond ONLY with valid JSON (no markdown fences, no commentary outside the JSON
 }`;
 
   try {
-    const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 8000 });
+    const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 24000 });
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { conceptDuplicates: [], phraseAmendments: [], wordAmendments: [] };
     return JSON.parse(jsonMatch[0]) as {
