@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
 
     // ── Generate PDF ──────────────────────────────────────────────────────────
     if (formats.pdf) {
-      const pdfBuffer = await generatePdfBuffer(manifest, template);
+      const pdfBuffer = await generatePdfBuffer(manifest, template, input.printSpec);
       results.pdfUrl = await uploadOrStream(pdfBuffer, `${prefix}.pdf`, "application/pdf");
     }
 

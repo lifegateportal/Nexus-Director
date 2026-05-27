@@ -14,6 +14,36 @@ export const BOOK_TEMPLATE_IDS = [
 
 export type BookTemplateId = (typeof BOOK_TEMPLATE_IDS)[number];
 
+// ─── Print Trim Sizes ─────────────────────────────────────────────────────────
+export type PrintTrimSize = "6x9" | "5.5x8.5";
+
+export type TrimSizeSpec = {
+  label: string;
+  description: string;
+  pageSize: [number, number]; // width × height in points (72pt = 1 inch)
+  margins: { top: number; bottom: number; left: number; right: number };
+  bodyFontSizeAdjust: number; // delta applied to template's base body font size
+};
+
+/** International premium print trim specifications */
+export const TRIM_SIZE_SPECS: Record<PrintTrimSize, TrimSizeSpec> = {
+  "6x9": {
+    label: "6 × 9 in",
+    description: "US Trade — Zondervan, Thomas Nelson, Baker Books",
+    pageSize: [432, 648],
+    // CMOS gutter-aware: inside (left) wider than outside for binding
+    margins: { top: 63, bottom: 72, left: 63, right: 54 },
+    bodyFontSizeAdjust: 0,
+  },
+  "5.5x8.5": {
+    label: "5.5 × 8.5 in",
+    description: "US Digest — Charisma House, Hay House, Faith Words",
+    pageSize: [396, 612],
+    margins: { top: 54, bottom: 63, left: 63, right: 45 },
+    bodyFontSizeAdjust: -0.5,
+  },
+};
+
 export type BookTemplateConfig = {
   id: BookTemplateId;
   name: string;
@@ -22,6 +52,8 @@ export type BookTemplateConfig = {
   // Page
   pageSize: [number, number]; // width × height in points (72pt = 1 inch)
   margins: { top: number; bottom: number; left: number; right: number };
+  // Running headers / footers (can be overridden by PrintSpec)
+  runningHeaders: boolean;
   // Body text
   bodyFontSize: number;
   bodyLineGap: number;
@@ -91,6 +123,7 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     badge: "Chicago / Oxford",
     pageSize: US_TRADE,
     margins: { top: 72, bottom: 90, left: 72, right: 60 },
+    runningHeaders: true,
     bodyFontSize: 11,
     bodyLineGap: 4,
     paragraphGap: 0,
@@ -134,6 +167,7 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     badge: "Portfolio / Penguin",
     pageSize: US_TRADE,
     margins: { top: 72, bottom: 90, left: 72, right: 72 },
+    runningHeaders: true,
     bodyFontSize: 11.5,
     bodyLineGap: 6,
     paragraphGap: 10,
@@ -177,6 +211,7 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     badge: "Zondervan / Nelson",
     pageSize: US_TRADE,
     margins: { top: 72, bottom: 90, left: 68, right: 68 },
+    runningHeaders: true,
     bodyFontSize: 12,
     bodyLineGap: 7,
     paragraphGap: 12,
@@ -220,6 +255,7 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     badge: "Hay House / Random House",
     pageSize: US_TRADE,
     margins: { top: 72, bottom: 90, left: 65, right: 65 },
+    runningHeaders: true,
     bodyFontSize: 11.5,
     bodyLineGap: 5.5,
     paragraphGap: 9,
@@ -263,6 +299,7 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     badge: "Knopf / Farrar Straus",
     pageSize: US_TRADE,
     margins: { top: 80, bottom: 100, left: 80, right: 65 },
+    runningHeaders: true,
     bodyFontSize: 11,
     bodyLineGap: 4.5,
     paragraphGap: 0,

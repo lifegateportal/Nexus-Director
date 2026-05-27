@@ -6,7 +6,9 @@
  */
 
 import type { EbookManifest, ChapterDraft, FrontBackMatter, Quote } from "@/lib/schemas/ebook";
+import type { PrintSpec } from "@/lib/schemas/ebook";
 import { getTemplate } from "@/lib/book-templates";
+import { TRIM_SIZE_SPECS } from "@/lib/book-templates";
 import type { BookTemplateConfig } from "@/lib/book-templates";
 import { existsSync } from "node:fs";
 import {
@@ -75,17 +77,70 @@ function resolvePdfFonts(doc: any): PdfFontSet {
   };
 }
 
+// ─── Running Page Header/Footer ───────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writePageRunningHeader(
+  doc: any,
+  bookTitle: string,
+  chapterTitle: string,
+  bodyPageNumber: number,
+  fonts: PdfFontSet,
+) {
+  const isEven = bodyPageNumber % 2 === 0;
+  const pageW = doc.page.width;
+  const mL = doc.page.margins.left;
+  const mR = doc.page.margins.right;
+  const savedY = doc.y;
+
+  // Running head — book title on verso (even), chapter title on recto (odd)
+  const headText = isEven ? bookTitle : (chapterTitle || bookTitle);
+  doc
+    .fontSize(7)
+    .font(fonts.sans)
+    .fillColor("#aaaaaa")
+    .text(headText.toUpperCase(), mL, 28, { width: pageW - mL - mR, align: "center" });
+
+  // Thin hairline rule below the running head
+  doc
+    .moveTo(mL, 41)
+    .lineTo(pageW - mR, 41)
+    .strokeColor("#e0e0e0")
+    .lineWidth(0.25)
+    .stroke();
+
+  // Page number — centered at bottom, outside the content margin
+  doc
+    .fontSize(8)
+    .font(fonts.serif)
+    .fillColor("#888888")
+    .text(String(bodyPageNumber), mL, doc.page.height - 40, { width: pageW - mL - mR, align: "center" });
+
+  // Reset cursor to where the content area begins
+  doc.y = savedY;
+}
+
 // ─── PDF Generator (pdfkit) ───────────────────────────────────────────────────
 
-export async function generatePdfBuffer(manifest: EbookManifest, templateId?: string): Promise<Buffer> {
+export async function generatePdfBuffer(manifest: EbookManifest, templateId?: string, printSpec?: PrintSpec): Promise<Buffer> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const PDFDocument = (await import("pdfkit")).default as any;
   const tpl = getTemplate(templateId ?? manifest.selectedTemplate);
 
+  // ── Resolve print specifications ──────────────────────────────────────────
+  const resolvedPrintSpec = printSpec ?? manifest.printSpec ?? { trimSize: "6x9" as const, runningHeaders: true };
+  const trimSpec = TRIM_SIZE_SPECS[resolvedPrintSpec.trimSize ?? "6x9"];
+  const showRunningHeaders = resolvedPrintSpec.runningHeaders !== false && tpl.runningHeaders;
+
+  // Merge trim-size overrides on top of template defaults
+  const pageSize = trimSpec.pageSize;
+  const pageMargins = trimSpec.margins;
+  const adjustedBodyFontSize = tpl.bodyFontSize + trimSpec.bodyFontSizeAdjust;
+
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
-      margins: tpl.margins,
-      size: tpl.pageSize,
+      margins: pageMargins,
+      size: pageSize,
       autoFirstPage: true,
     });
     const fonts = resolvePdfFonts(doc);
@@ -93,6 +148,20 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
+
+    // ── Running header state ──────────────────────────────────────────────────
+    const headerCtx = {
+      enabled: false,
+      chapterTitle: "",
+      pageOffset: 0,   // absolute pageNum when body chapters begin
+      pageNum: 0,      // counts every page added (including front matter)
+    };
+    doc.on("pageAdded", () => {
+      headerCtx.pageNum++;
+      if (!showRunningHeaders || !headerCtx.enabled) return;
+      const bodyPage = headerCtx.pageNum - headerCtx.pageOffset;
+      writePageRunningHeader(doc, manifest.bookTitle, headerCtx.chapterTitle, bodyPage, fonts);
+    });
 
     // ── Title page ────────────────────────────────────────────────────────────
     doc
@@ -112,13 +181,18 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       .fontSize(tpl.titlePageAuthorSize).font(fonts.serif).fillColor(tpl.accentColor)
       .text(manifest.authorName, { align: tpl.titlePageAlign });
 
-    writeFrontMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl);
+    writeFrontMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
+
+    // Enable running headers from first chapter page onward
+    headerCtx.enabled = showRunningHeaders;
+    headerCtx.pageOffset = headerCtx.pageNum; // front matter pages already counted
 
     for (const chapter of manifest.chapters) {
-      writeChapter(doc, chapter, manifest.allQuotes ?? [], fonts, tpl);
+      headerCtx.chapterTitle = chapter.title; // set BEFORE addPage so pageAdded sees it
+      writeChapter(doc, chapter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
     }
 
-    writeBackMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl);
+    writeBackMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
     doc.end();
   });
 }
@@ -258,7 +332,8 @@ function stripMarkdownForPdf(paragraph: string): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }) {
+function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }, bodyFontSize?: number) {
+  const fontSize = bodyFontSize ?? tpl.bodyFontSize;
   const paragraphs = normalizeParagraphBreaks(text).split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
   // Track rendered index separately so dropped heading lines don't shift the
   // firstParagraph italic treatment onto the wrong paragraph.
@@ -287,7 +362,7 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
     const noIndentFirst = options?.noIndentFirstParagraph !== false;
     const indent = noIndentFirst && renderedIndex === 0 ? 0 : tpl.paragraphIndent;
     doc
-      .fontSize(tpl.bodyFontSize)
+      .fontSize(fontSize)
       .font(font)
       .fillColor(color)
       .text(cleanParagraph, {
@@ -301,20 +376,20 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeFrontMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig) {
+function writeFrontMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
   doc.addPage();
   doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Preface", { align: tpl.matterTitleAlign });
   writeDivider(doc, tpl);
-  writeRichBody(doc, fm.preface, quotes, fonts, tpl, { noIndentFirstParagraph: true });
+  writeRichBody(doc, fm.preface, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
 
   doc.addPage();
   doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Introduction", { align: tpl.matterTitleAlign });
   writeDivider(doc, tpl);
-  writeRichBody(doc, fm.introduction, quotes, fonts, tpl, { noIndentFirstParagraph: true });
+  writeRichBody(doc, fm.introduction, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig) {
+function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
   doc.addPage();
   doc.moveDown(tpl.chapterPreGap);
   doc.fontSize(tpl.chapterLabelSize).font(fonts[tpl.chapterLabelFont]).fillColor(tpl.chapterLabelColor)
@@ -325,7 +400,7 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
   writeDivider(doc, tpl);
 
   if (chapter.intro) {
-    writeRichBody(doc, chapter.intro, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true });
+    writeRichBody(doc, chapter.intro, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true }, bodyFontSize);
   }
 
   for (const section of chapter.sections) {
@@ -334,12 +409,12 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
       .text(section.heading, { align: tpl.sectionAlign });
     if (tpl.sectionRule) writeDivider(doc, tpl);
     doc.moveDown(0.5);
-    writeRichBody(doc, section.body, quotes, fonts, tpl, { noIndentFirstParagraph: true });
+    writeRichBody(doc, section.body, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
   }
 
   if (chapter.conclusion) {
     writeDivider(doc, tpl);
-    writeRichBody(doc, chapter.conclusion, quotes, fonts, tpl, { noIndentFirstParagraph: true });
+    writeRichBody(doc, chapter.conclusion, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
@@ -347,7 +422,7 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
     doc.fontSize(tpl.sectionSize - 1).font(fonts[tpl.sectionFont]).fillColor(tpl.labelColor).text("KEY TAKEAWAYS");
     doc.moveDown(0.4);
     for (const t of (chapter.keyTakeaways ?? [])) {
-      doc.fontSize(tpl.bodyFontSize).font(fonts.serif).fillColor("#222222").text(`• ${t}`, { lineGap: tpl.bodyLineGap, paragraphGap: 4 });
+      doc.fontSize(bodyFontSize ?? tpl.bodyFontSize).font(fonts.serif).fillColor("#222222").text(`• ${t}`, { lineGap: tpl.bodyLineGap, paragraphGap: 4 });
     }
     doc.moveDown(0.5);
   }
@@ -357,24 +432,24 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
     doc.fontSize(tpl.sectionSize - 1).font(fonts[tpl.sectionFont]).fillColor(tpl.labelColor).text("REFLECTION QUESTIONS");
     doc.moveDown(0.4);
     (chapter.reflectionQuestions ?? []).forEach((q, i) => {
-      doc.fontSize(tpl.bodyFontSize).font(fonts.serif).fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: tpl.bodyLineGap, paragraphGap: 4 });
+      doc.fontSize(bodyFontSize ?? tpl.bodyFontSize).font(fonts.serif).fillColor("#222222").text(`${i + 1}. ${q}`, { lineGap: tpl.bodyLineGap, paragraphGap: 4 });
     });
     doc.moveDown(0.5);
   }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeBackMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig) {
+function writeBackMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
   doc.addPage();
   doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Conclusion", { align: tpl.matterTitleAlign });
   writeDivider(doc, tpl);
-  writeRichBody(doc, fm.conclusion, quotes, fonts, tpl, { noIndentFirstParagraph: true });
+  writeRichBody(doc, fm.conclusion, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
 
   if (fm.aboutAuthor) {
     doc.addPage();
     doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("About the Author", { align: tpl.matterTitleAlign });
     writeDivider(doc, tpl);
-    writeRichBody(doc, fm.aboutAuthor, quotes, fonts, tpl, { noIndentFirstParagraph: true });
+    writeRichBody(doc, fm.aboutAuthor, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
   }
 
   if ((fm.resourcesList ?? []).length > 0) {
@@ -382,7 +457,7 @@ function writeBackMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: 
     doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Resources", { align: tpl.matterTitleAlign });
     writeDivider(doc, tpl);
     for (const r of (fm.resourcesList ?? [])) {
-      doc.fontSize(tpl.bodyFontSize).font(fonts.serif).fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3.5 });
+      doc.fontSize(bodyFontSize ?? tpl.bodyFontSize).font(fonts.serif).fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3.5 });
     }
   }
 }

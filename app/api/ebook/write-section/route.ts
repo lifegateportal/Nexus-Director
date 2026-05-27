@@ -96,31 +96,47 @@ The author's Voice DNA is provided. You MUST:
 • Never use the words in the avoidWords list
 
 ════════════════════════════════════════════
-SCRIPTURE & QUOTE FORMATTING (Chicago Manual of Style)
+SCRIPTURE & QUOTE FORMATTING (Chicago Manual of Style + Premium Print Standards)
 ════════════════════════════════════════════
-SHORT SCRIPTURE (under 40 words):
-  Integrate inline with quotation marks, followed by the reference in parentheses.
-  Example: "For God so loved the world that he gave his one and only Son" (John 3:16, NIV).
 
-LONG SCRIPTURE (40+ words — block quote):
-  Begin on a new line. Indent the entire passage. No quotation marks.
-  Place the reference (Book Chapter:Verse, Translation) on a new line immediately after.
-  Example:
-    For I know the plans I have for you, declares the Lord,
-    plans to prosper you and not to harm you, plans to give you
-    hope and a future.
-    — Jeremiah 29:11 (NIV)
+DETECTION RULE — This is the most important formatting rule in this prompt:
+Any text enclosed in quotation marks (or reproduced verbatim) that is IMMEDIATELY followed by a Bible book name and chapter:verse citation (e.g. "John 3:16", "Genesis 1:1", "Psalm 23:1–4") is SCRIPTURE. Treat it as scripture regardless of its word count. Do not treat it as ordinary prose or dialogue.
 
-GENERAL QUOTES (attributed to a person):
-  Use quotation marks. Place attribution after the quote.
-  Example: "Quote text here." — Author Name
+SCRIPTURE MUST ALWAYS be visually distinct from the speaker's explanatory words. The reader must never have to guess which words are God's Word and which are the author's commentary.
+
+SHORT SCRIPTURE (under 40 words) WOVEN INTO A SENTENCE:
+  Integrate inline with quotation marks, followed by the reference in parentheses. Use italic emphasis via markdown: *"verse text"* (Book Chapter:Verse, Translation).
+  Example: *"For God so loved the world that he gave his one and only Son"* (John 3:16, NIV).
+
+STANDALONE SHORT SCRIPTURE (under 40 words but quoted as its own statement, not mid-sentence):
+  Use a markdown blockquote:
+  > Verse text here.
+  > — Book Chapter:Verse (Translation)
+
+LONG SCRIPTURE (40+ words — block quote mandatory):
+  Begin the blockquote on its own line. No quotation marks around the block.
+  > For I know the plans I have for you, declares the Lord,
+  > plans to prosper you and not to harm you, plans to give you
+  > hope and a future.
+  > — Jeremiah 29:11 (NIV)
+
+CHAPTER-OPENING VERSE (epigraph — placed before the body of a chapter or section):
+  Use a blockquote. Add a blank line after it before the author's prose begins.
+  > Verse text.
+  > — Book Chapter:Verse (Translation)
+
+TRANSLATION RULE: Always include the translation abbreviation in parentheses — KJV, NIV, ESV, NKJV, NLT, NASB, AMP, MSG, etc. If the speaker stated the translation, use it exactly. If no translation was stated, write (translation unspecified).
+
+NON-SCRIPTURE BLOCK QUOTE (attributed to a person, not the Bible):
+  Use a blockquote WITHOUT the accent-style attribution format.
+  > Quote text here.
+  > — Author Name, Source (if given)
+  Do NOT use italics for non-scripture block quotes.
 
 PROVERBS / UNATTRIBUTED SAYINGS:
-  Use quotation marks. If no attribution is known, do not fabricate one.
+  Use quotation marks only. If no attribution is known, do not fabricate one.
 
-CRITICAL: Reproduce scripture text EXACTLY as the speaker quoted it. Do not paraphrase scripture.
-If the speaker stated a translation (NIV, KJV, ESV, NKJV, etc.), use it exactly.
-If no translation was stated, note "(translation unspecified)" in the reference.
+CRITICAL: Reproduce scripture text EXACTLY as the speaker quoted it. Never paraphrase scripture. Never merge two separate verses into one block unless the speaker quoted them together.
 
 ════════════════════════════════════════════
 AUDIENCE & FORMAT

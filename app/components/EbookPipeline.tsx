@@ -566,6 +566,115 @@ function ChapterCard({
   );
 }
 
+// ─── Print Specification Toggle ───────────────────────────────────────────────
+
+function PrintSpecPanel({
+  trimSize,
+  runningHeaders,
+  onChange,
+}: {
+  trimSize: "6x9" | "5.5x8.5";
+  runningHeaders: boolean;
+  onChange: (spec: { trimSize: "6x9" | "5.5x8.5"; runningHeaders: boolean }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const TRIM_OPTIONS: { value: "6x9" | "5.5x8.5"; label: string; sub: string }[] = [
+    { value: "6x9",     label: "6 × 9 in",    sub: "US Trade (Zondervan, Nelson)" },
+    { value: "5.5x8.5", label: "5.5 × 8.5 in", sub: "US Digest (Charisma, Hay House)" },
+  ];
+
+  return (
+    <div className="w-full rounded-xl border border-slate-700/50 bg-slate-900/60 overflow-hidden">
+      {/* Toggle header */}
+      <button
+        type="button"
+        onClick={() => setOpen((p) => !p)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 min-h-[48px] text-left"
+      >
+        <div className="flex items-center gap-2.5">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-cyan-400 flex-shrink-0">
+            <path d="M4 5h16M4 5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2M4 5V3m16 2V3" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M8 10h8M8 14h5" strokeLinecap="round" />
+          </svg>
+          <span className="text-xs font-semibold uppercase tracking-widest text-slate-200">Print Specifications</span>
+          <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-bold text-cyan-300 uppercase tracking-widest">
+            {trimSize === "6x9" ? "6×9" : "5.5×8.5"} · {runningHeaders ? "Headers on" : "No headers"}
+          </span>
+        </div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={`h-4 w-4 text-slate-500 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}>
+          <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-700/40 px-4 pb-4 pt-3 space-y-4">
+
+          {/* Trim size */}
+          <div>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">Trim Size</p>
+            <div className="grid grid-cols-2 gap-2">
+              {TRIM_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => onChange({ trimSize: opt.value, runningHeaders })}
+                  className={[
+                    "flex flex-col items-start gap-0.5 rounded-xl border px-4 py-3 text-left transition-all min-h-[56px]",
+                    trimSize === opt.value
+                      ? "border-cyan-500/50 bg-cyan-500/10"
+                      : "border-slate-700/50 bg-slate-800/30 hover:border-slate-600",
+                  ].join(" ")}
+                >
+                  <span className={`text-sm font-bold tabular-nums ${trimSize === opt.value ? "text-cyan-300" : "text-slate-200"}`}>{opt.label}</span>
+                  <span className="text-[10px] text-slate-500">{opt.sub}</span>
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] text-slate-600 leading-relaxed">
+              Chicago Manual of Style margins applied automatically. Inside (gutter) margin is wider than outside to allow for binding.
+            </p>
+          </div>
+
+          {/* Running headers */}
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-700/40 bg-slate-800/30 px-4 py-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-200">Running Headers &amp; Page Numbers</p>
+              <p className="mt-0.5 text-[10px] text-slate-500">Book title on left pages · Chapter title on right pages · Page numbers centered at bottom</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={runningHeaders}
+              onClick={() => onChange({ trimSize, runningHeaders: !runningHeaders })}
+              className={[
+                "relative flex-shrink-0 h-6 w-11 rounded-full border transition-all",
+                runningHeaders
+                  ? "border-cyan-500/50 bg-cyan-500/30"
+                  : "border-slate-600/50 bg-slate-700/50",
+              ].join(" ")}
+            >
+              <span className={[
+                "absolute top-0.5 h-5 w-5 rounded-full transition-transform",
+                runningHeaders ? "translate-x-5 bg-cyan-400" : "translate-x-0.5 bg-slate-500",
+              ].join(" ")} />
+            </button>
+          </div>
+
+          {/* Standards badge */}
+          <div className="rounded-xl border border-slate-700/30 bg-slate-800/20 px-4 py-3 text-[10px] text-slate-500 leading-relaxed space-y-1">
+            <p className="font-semibold text-slate-400">International Premium Print Standards Applied</p>
+            <p>· Body text: Georgia {trimSize === "6x9" ? "11pt" : "10.5pt"} · Leading: {trimSize === "6x9" ? "14pt" : "13.5pt"} · Justified alignment</p>
+            <p>· Scripture: full italic block · accent bar · right-aligned citation with translation badge</p>
+            <p>· Non-scripture quote: roman block · em-dash attribution · no accent bar</p>
+            <p>· Chapter-opening epigraph: centered · distinct from body · translation shown</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Agent Activity Log ───────────────────────────────────────────────────────
 
 type LogTag = "INIT" | "INFO" | "DONE" | "ERR" | "STRM";
@@ -1114,6 +1223,7 @@ export function EbookPipeline({
   const [auditRunning, setAuditRunning] = useState(false);
   const [applyingAudit, setApplyingAudit] = useState(false);
   const [exportingBook, setExportingBook] = useState(false);
+  const [printSpec, setPrintSpec] = useState<{ trimSize: "6x9" | "5.5x8.5"; runningHeaders: boolean }>({ trimSize: "6x9", runningHeaders: true });
   const [error, setError] = useState<string | null>(null);
   const [signalFilterState, setSignalFilterState] = useState<SignalFilterState>("idle");
   const [signalFilterDetail, setSignalFilterDetail] = useState<string | null>(null);
@@ -1264,6 +1374,7 @@ export function EbookPipeline({
           manifest: exportManifest,
           formats: { pdf: true, epub: true, docx: true },
           template: exportManifest.selectedTemplate ?? "devotional",
+          printSpec,
         }
       );
       setExportUrls(urls);
@@ -2361,6 +2472,13 @@ export function EbookPipeline({
                 </button>
               </div>
             </div>
+
+            {/* Print Specification Toggle */}
+            <PrintSpecPanel
+              trimSize={printSpec.trimSize}
+              runningHeaders={printSpec.runningHeaders}
+              onChange={setPrintSpec}
+            />
 
             {qualityReport && (
               <div className={`rounded-xl border px-4 py-3 ${qualityReport.pass ? "border-emerald-400/20 bg-emerald-400/5" : "border-amber-400/20 bg-amber-400/5"}`}>

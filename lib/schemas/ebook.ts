@@ -163,6 +163,15 @@ export const BOOK_TEMPLATE_IDS = [
 
 export const BookTemplateEnum = z.enum(["classic-academic", "modern-business", "devotional", "popular-nonfiction", "premium-literary"]);
 
+// ─── Print Specifications ─────────────────────────────────────────────────────
+
+export const PrintSpecSchema = z.object({
+  /** Physical trim size of the printed book */
+  trimSize: z.enum(["6x9", "5.5x8.5"]).default("6x9"),
+  /** Whether to render running headers (book title verso / chapter title recto) and page numbers */
+  runningHeaders: z.boolean().default(true),
+});
+
 export const EbookManifestSchema = z.object({
   jobId: z.string(),
   bookTitle: z.string(),
@@ -175,6 +184,8 @@ export const EbookManifestSchema = z.object({
   generatedAt: z.string().datetime(),
   /** Which PDF/EPUB layout template to use at export time */
   selectedTemplate: BookTemplateEnum.default("devotional"),
+  /** Print trim size and running-header preferences */
+  printSpec: PrintSpecSchema.default({ trimSize: "6x9", runningHeaders: true }),
 });
 
 // ─── Job State (IndexedDB persistence) ───────────────────────────────────────
@@ -256,12 +267,14 @@ export const ExportRequestSchema = z.object({
   manifest: EbookManifestSchema,
   formats: z.object({ pdf: z.boolean(), epub: z.boolean(), docx: z.boolean() }).default({ pdf: true, epub: true, docx: true }),
   template: z.enum(["classic-academic", "modern-business", "devotional", "popular-nonfiction", "premium-literary"]).default("devotional"),
+  printSpec: PrintSpecSchema.optional(),
 });
 
 // ─── TypeScript exports ────────────────────────────────────────────────────────
 
 export type Quote = z.infer<typeof QuoteSchema>;
 export type VoiceDNA = z.infer<typeof VoiceDNASchema>;
+export type PrintSpec = z.infer<typeof PrintSpecSchema>;
 export type ContentSegment = z.infer<typeof ContentSegmentSchema>;
 export type ContentMap = z.infer<typeof ContentMapSchema>;
 export type SectionBlueprint = z.infer<typeof SectionBlueprintSchema>;
