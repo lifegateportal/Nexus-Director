@@ -226,11 +226,14 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
     // ── First pass: track page metadata only — no drawing in this handler ─────
     interface PageMeta { type: "front" | "opener" | "body"; chapterTitle: string; bodyPageNum: number }
     const pageMetas: PageMeta[] = [];
+    let totalPageCounter = 0; // every page including front matter
     let bodyPageCounter = 0;
     let currentChapterTitle = "";
     let nextIsOpener = false;
 
     doc.on("pageAdded", () => {
+      totalPageCounter++;
+
       if (nextIsOpener) {
         bodyPageCounter++;
         pageMetas.push({ type: "opener", chapterTitle: currentChapterTitle, bodyPageNum: bodyPageCounter });
@@ -242,19 +245,18 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
         pageMetas.push({ type: "front", chapterTitle: "", bodyPageNum: 0 });
       }
 
-      // Alternate gutter/outside margins so the binding-side margin is always wider.
-      // Recto (odd body page): gutter on LEFT  — page opens on the right side of the spread
-      // Verso (even body page): gutter on RIGHT — page opens on the left side of the spread
+      // Alternate gutter/outside margins across ALL pages (including front matter)
+      // so the binding-side margin is always wider on every spread.
+      // Recto (odd page): gutter on LEFT  — page opens on the right of the spread
+      // Verso (even page): gutter on RIGHT — page opens on the left of the spread
       //
       // IMPORTANT: PDFKit executes `this.x = this.page.margins.left` BEFORE emitting
       // 'pageAdded' (see pdfkit.js line 5545 vs 5552). We must re-sync doc.x here so
-      // body text starts at the correct alternating margin, not the document default.
-      if (bodyPageCounter > 0) {
-        const isVerso = bodyPageCounter % 2 === 0;
-        doc.page.margins.left  = isVerso ? trimSpec.outsideMargin : trimSpec.gutterMargin;
-        doc.page.margins.right = isVerso ? trimSpec.gutterMargin  : trimSpec.outsideMargin;
-        doc.x = doc.page.margins.left; // re-sync cursor after overriding margins
-      }
+      // text starts at the correct alternating margin, not the document default.
+      const isVerso = totalPageCounter % 2 === 0;
+      doc.page.margins.left  = isVerso ? trimSpec.outsideMargin : trimSpec.gutterMargin;
+      doc.page.margins.right = isVerso ? trimSpec.gutterMargin  : trimSpec.outsideMargin;
+      doc.x = doc.page.margins.left; // re-sync cursor after overriding margins
     });
 
     // ── Title page (first page) ───────────────────────────────────────────────
