@@ -648,16 +648,14 @@ function PrintSpecPanel({
               aria-checked={runningHeaders}
               onClick={() => onChange({ trimSize, runningHeaders: !runningHeaders })}
               className={[
-                "relative flex-shrink-0 h-6 w-11 rounded-full border transition-colors duration-200",
-                runningHeaders
-                  ? "border-cyan-500/60 bg-cyan-500/40"
-                  : "border-slate-600/50 bg-slate-700/50",
+                "relative flex-shrink-0 h-6 w-11 rounded-full transition-colors duration-200",
+                runningHeaders ? "bg-cyan-500" : "bg-slate-600",
               ].join(" ")}
             >
-              <span className={[
-                "absolute top-0.5 h-5 w-5 rounded-full shadow-sm transition-transform duration-200",
-                runningHeaders ? "translate-x-[21px] bg-cyan-400" : "translate-x-0.5 bg-slate-500",
-              ].join(" ")} />
+              <span
+                style={{ left: runningHeaders ? "calc(100% - 1.375rem)" : "0.125rem" }}
+                className="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-[left] duration-200"
+              />
             </button>
           </div>
 
@@ -1389,7 +1387,7 @@ export function EbookPipeline({
       setExportingBook(false);
       setStage("complete");
     }
-  }, [addLog, completedManifest, recalculateManifestTotal, reviewContext, syncCompletedManifest]);
+  }, [addLog, completedManifest, printSpec, recalculateManifestTotal, reviewContext, syncCompletedManifest]);
 
   // ── Book audit ────────────────────────────────────────────────────────────
   const runAudit = useCallback(async () => {
