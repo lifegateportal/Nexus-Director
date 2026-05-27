@@ -53,11 +53,11 @@ type BookAuditReport = {
 
 // ── Intent detectors ─────────────────────────────────────────────────────────
 function isAuditIntent(text: string): boolean {
-  return /\b(audit|full[\s-]?audit|review\s+the\s+book|analyse|analyze|repetit|duplicat|overused\s+words?|similar\s+sections?|quality\s+check|book\s+report|what.{0,12}issues|flag\s+issues|check\s+(?:the\s+)?book|run\s+(?:a\s+)?(?:full\s+)?audit)\b/i.test(text);
+  return /\b(audit|full[\s-]?audit|review\s+the\s+book|analyse|analyze|repetit|duplicat|overused\s+words?|similar\s+sections?|quality\s+check|book\s+report|what.{0,12}issues|flag\s+issues|check\s+(?:the\s+)?book|run\s+(?:a\s+)?(?:full\s+)?audit|what.{0,12}(wrong|problem|broken|needs.{0,8}fix)|find\s+(issues|problems|errors|duplicates?)|scripture.{0,12}repeat|same\s+(verse|scripture|passage).{0,16}twice|sounds?\s+redundant|too\s+repetitive|check\s+for\s+(duplicates?|repetition|issues|problems))\b/i.test(text);
 }
 
 function isViewIntent(text: string): boolean {
-  return /\b(show\s+(?:me\s+)?(?:the\s+)?(?:book|chapters?|contents?|toc|table\s+of\s+contents?|overview|summary)|view\s+(?:book|chapters?|contents?)|list\s+chapters?|how\s+many\s+chapters?|what.{0,10}chapters?)\b/i.test(text);
+  return /\b(show\s+(?:me\s+)?(?:the\s+)?(?:book|chapters?|contents?|toc|table\s+of\s+contents?|overview|summary|outline|structure|sections?|layout)|view\s+(?:book|chapters?|contents?|structure|outline)|list\s+(?:chapters?|sections?|contents?)|how\s+many\s+(chapters?|sections?)|what.{0,10}(chapters?|sections?|in\s+the\s+book)|book\s+(outline|structure|layout|contents?)|what.{0,10}book\s+look|table\s+of\s+contents?)\b/i.test(text);
 }
 
 // ── Client-side book table of contents ───────────────────────────────────────
@@ -280,8 +280,14 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
             pipeline: ebookPipelineSnapshot ?? undefined,
           }),
         });
-        const json = await res.json() as { manifest?: unknown; summary?: string; error?: string };
+        const json = await res.json() as { manifest?: unknown; summary?: string; noChanges?: boolean; error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+        if (json.noChanges) {
+          setMessages((prev) => [...prev, { role: "assistant", content: `${json.summary ?? ""}
+
+⚠️ No manuscript changes were applied. Please rephrase your instruction more specifically — e.g. name the exact chapter or section number you want changed.` }]);
+          return;
+        }
         const parsed = EbookManifestSchema.safeParse(json.manifest);
         if (!parsed.success) throw new Error("Invalid ebook manifest returned from assistant");
         onEbookUpdate(parsed.data, json.summary ?? "Book updated.");

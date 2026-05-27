@@ -39,14 +39,28 @@ const RequestSchema = z.object({
   }).optional(),
 });
 
+// Lightweight patch for chapter-level metadata — use this instead of the full chapters array
+// for any operation that doesn't restructure sections (e.g. edit conclusion, rename, takeaways).
+const ChapterPatchSchema = z.object({
+  chapterNumber: z.number().int().min(1),
+  title: z.string().optional(),
+  intro: z.string().optional(),
+  epigraph: z.string().optional(),
+  premiseLine: z.string().optional(),
+  conclusion: z.string().optional(),
+  keyTakeaways: z.array(z.string()).optional(),
+  reflectionQuestions: z.array(z.string()).optional(),
+});
+
 // The agent returns only what changed — undefined fields = no change
 const EbookChangeSchema = z.object({
   bookTitle: z.string().optional(),
   subtitle: z.string().optional(),
   authorName: z.string().optional(),
   frontMatter: FrontBackMatterSchema.optional(),
-  chapters: z.array(ChapterDraftSchema).optional(),
-  updatedSections: z.array(SectionDraftSchema).optional(), // targeted section edits
+  chapters: z.array(ChapterDraftSchema).optional(),          // ONLY for section reorders / full restructures
+  chapterPatches: z.array(ChapterPatchSchema).optional(),    // preferred for chapter-level field edits
+  updatedSections: z.array(SectionDraftSchema).optional(),   // targeted section edits
   summary: z.string(), // one-sentence description of what changed
 });
 
@@ -66,16 +80,28 @@ export async function POST(req: NextRequest) {
 
   const safeExcerpt = (value: string | null | undefined, max = 600) => (value ?? "").slice(0, max);
 
-  // Parse explicit section references from text, e.g. "section 2.1", "section 2 §1"
+  // Parse explicit section references from text.
+  // Catches: "section 2.1", "section 2§1", "ch2 sec 1", "chapter 2 section 1", "2-1", "2.1"
   // Explicitly named sections are always sent at full length and not subject to the word-count guard.
   function parseExplicitSectionRefs(text: string): Set<string> {
     const refs = new Set<string>();
-    const re = /\bsection\s+(\d+)[.\s§]+(\d+)|(\d+)[.\s§]+(\d+)\s+section\b/gi;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      const ch = m[1] ?? m[3];
-      const sc = m[2] ?? m[4];
-      if (ch && sc) refs.add(`${ch}:${sc}`);
+    const patterns = [
+      // "section 2.1" / "section 2 §1" / "section 2-1"
+      /\bsection\s+(\d+)[.\s§\-]+(\d+)/gi,
+      // "(\d).(\d) section" reverse order
+      /(\d+)[.\s§\-]+(\d+)\s+section\b/gi,
+      // "chapter 2 section 1" / "ch 2 sec 1" / "ch2 s1"
+      /\bch(?:apter)?\s*(\d+)\s+s(?:ec(?:tion)?)?\s*(\d+)/gi,
+      // bare "2.1" preceded/followed by non-digits (to avoid matching dates/decimals)
+      /(?<![\d.\-])(\d+)\.(\d+)(?![\d.\-])/g,
+    ];
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const ch = m[1];
+        const sc = m[2];
+        if (ch && sc) refs.add(`${ch}:${sc}`);
+      }
     }
     return refs;
   }
@@ -148,7 +174,8 @@ export async function POST(req: NextRequest) {
     const { object } = await generateObject({
       model: deepSeekModel,
       schema: EbookChangeSchema,
-      mode: "tool",
+      mode: "json",
+      maxTokens: 8000,
       temperature: 0.15,
       system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
 
@@ -166,6 +193,45 @@ BOOK-SAFETY RULE — ALWAYS APPLY
 - Keep only reader-appropriate teaching prose.
 
 ════════════════════════════════════════════
+NATURAL LANGUAGE MAPPINGS — interpret these colloquial phrases correctly
+════════════════════════════════════════════
+"take out the church talk" / "remove pulpit language" / "congregation chatter" / "audience talk" / "live service language" / "speaker talking to audience"
+  → fix live-audience language (updatedSections for affected sections)
+
+"the ending is weak" / "fix the ending" / "the conclusion drags" / "wrap up chapter X better" / "chapter X needs a better close"
+  → rewrite chapterPatches: conclusion for the named chapter
+
+"remove the conclusions" / "take out the chapter endings" / "no need for summaries" / "cut the chapter summaries"
+  → chapterPatches: conclusion: "" for named chapters
+
+"the intro is weak" / "fix the opening" / "chapter X needs a better hook" / "the start is slow" / "strengthen the beginning"
+  → rewrite chapterPatches: intro (and/or premiseLine) for the named chapter
+
+"tighten up section X" / "clean it up" / "section X flows badly" / "make it read better" / "improve the writing"
+  → updatedSections: rewrite body with tighter prose, same content
+
+"make section X shorter" / "trim section X" / "condense section X" / "too long"
+  → updatedSections: condensed body
+
+"update the author bio" / "change the about section" / "author section needs updating"
+  → frontMatter: update aboutAuthor
+
+"take out the resources" / "remove the reading list" / "delete the resources section"
+  → frontMatter: resourcesList: []
+
+"the scripture is repeated" / "same verse appears twice" / "duplicate Bible verses"
+  → updatedSections: remove the duplicate scripture reference from the later section
+
+"move section X to chapter Y" / "transfer section X" / "section X belongs in chapter Y"
+  → chapters array restructure: remove from source chapter, add to target chapter
+
+"chapter X needs reflection questions" / "add questions at the end of chapter X"
+  → chapterPatches: reflectionQuestions for that chapter
+
+"chapter X needs takeaways" / "key points for chapter X" / "summarise chapter X"
+  → chapterPatches: keyTakeaways for that chapter
+
+════════════════════════════════════════════
 FULL AUTHORITY — WHAT YOU CAN DO
 ════════════════════════════════════════════
 METADATA:
@@ -181,15 +247,17 @@ FRONT MATTER (return full frontMatter object with ALL fields):
   "update the resources list"         → update frontMatter.resourcesList
   Any front matter instruction        → return the COMPLETE frontMatter object with all fields preserved
 
-CHAPTER OPERATIONS (return the full chapters array):
-  "rename chapter N to…"              → update chapters[N-1].title
-  "rewrite the intro of chapter N"    → update chapters[N-1].intro (full prose, not excerpt)
-  "rewrite the conclusion of chapter N" → update chapters[N-1].conclusion
-  "add/replace takeaways in chapter N" → update chapters[N-1].keyTakeaways (5–7 bullet items)
-  "replace reflection questions in chapter N" → update chapters[N-1].reflectionQuestions (4–6 questions)
-  "reorder sections in chapter N"     → reorder chapters[N-1].sections array
+CHAPTER OPERATIONS — use chapterPatches for field edits, chapters array ONLY for section reorders:
+  "rename chapter N to…"               → chapterPatches: [{chapterNumber:N, title:"..."}]
+  "rewrite the intro of chapter N"     → chapterPatches: [{chapterNumber:N, intro:"full prose"}]
+  "rewrite the conclusion of chapter N"→ chapterPatches: [{chapterNumber:N, conclusion:"full prose"}]
+  "remove the conclusion of chapter N" → chapterPatches: [{chapterNumber:N, conclusion:""}]
+  "remove all conclusions"             → chapterPatches: [{chapterNumber:1,conclusion:""},{chapterNumber:2,conclusion:""},…]
+  "add/replace takeaways in chapter N" → chapterPatches: [{chapterNumber:N, keyTakeaways:[…5–7 items]}]
+  "replace reflection questions in chapter N" → chapterPatches: [{chapterNumber:N, reflectionQuestions:[…4–6]}]
+  "reorder sections in chapter N"      → chapters array (only when restructuring section order)
 
-SECTION OPERATIONS (return only changed sections via updatedSections):
+SECTION OPERATIONS — return only changed sections via updatedSections:
   "rename section N.M to…"            → updatedSections: [{chapterNumber:N, sectionNumber:M, heading:…, body:existing}]
   "rewrite section N.M"               → updatedSections: [{chapterNumber:N, sectionNumber:M, heading:existing, body:FULL REWRITE}]
   "expand section N.M"                → updatedSections with longer body using existing content
@@ -198,10 +266,11 @@ SECTION OPERATIONS (return only changed sections via updatedSections):
   "remove audience language from section N.M" → updatedSections with congregation/live-event language removed
 
 BOOK-WIDE OPERATIONS:
-  "fix all live-audience language"    → return full chapters array with all sections cleaned
-  "remove all greeting/crowd phrases" → return full chapters array
-  "standardise all section headings"  → return full chapters array with consistent heading format
-  "add takeaways to all chapters"     → return full chapters array with keyTakeaways filled in
+  "fix all live-audience language"    → updatedSections for every section that contains crowd language
+  "remove all greeting/crowd phrases" → updatedSections for affected sections only
+  "standardise all section headings"  → updatedSections with heading field only (body unchanged)
+  "add takeaways to all chapters"     → chapterPatches: one entry per chapter with keyTakeaways filled in
+  "remove all conclusions"            → chapterPatches: one entry per chapter with conclusion: ""
 
 ════════════════════════════════════════════
 CONTENT PRESERVATION — CRITICAL
@@ -223,8 +292,10 @@ OUTPUT RULES
 - The body field in updatedSections MUST be the FULL rewritten prose — never truncate
 - frontMatter: if returned, include ALL fields (preface, introduction, conclusion, aboutAuthor, resourcesList)
 - Always write a concise one-sentence "summary" of exactly what changed
-- If the instruction is ambiguous, make the most useful interpretation and explain in summary
-- If asked to do something outside your authority or that violates fidelity law, explain why in the summary and return no changes`,
+- If the instruction is ambiguous, make the most useful interpretation and describe what you did in summary
+- ALWAYS attempt the instruction — never refuse or treat instructions as comments
+- If you make ANY change, you MUST include the corresponding change fields (chapterPatches, updatedSections, chapters, frontMatter, etc.). Returning ONLY summary with no change fields = zero manuscript changes. The user will see your summary but the book will be IDENTICAL.
+- Only return empty change fields when the user is asking a question ("show me...", "explain...") — not for edit instructions`,
       prompt: [
         "CURRENT BOOK STRUCTURE:",
         JSON.stringify(bookSummary, null, 2),
@@ -244,6 +315,17 @@ OUTPUT RULES
 
     // Merge updatedSections into the full manifest chapters
     let mergedChapters = manifest.chapters;
+
+    // Apply lightweight chapter-level patches first (title, intro, conclusion, takeaways, etc.)
+    if (object.chapterPatches && object.chapterPatches.length > 0) {
+      mergedChapters = mergedChapters.map((ch) => {
+        const patch = object.chapterPatches!.find((p) => p.chapterNumber === ch.number);
+        if (!patch) return ch;
+        const { chapterNumber: _ignored, ...fields } = patch;
+        return { ...ch, ...fields };
+      });
+    }
+
     if (object.updatedSections && object.updatedSections.length > 0) {
       mergedChapters = manifest.chapters.map((ch) => ({
         ...ch,
@@ -305,6 +387,22 @@ OUTPUT RULES
       ...(object.frontMatter !== undefined && { frontMatter: object.frontMatter }),
       chapters: mergedChapters,
     };
+
+    // Detect whether the AI actually produced any change fields.
+    // If all change fields are absent, the manuscript would be identical to the input —
+    // return noChanges so the client can warn the user instead of silently confirming.
+    const hasChanges =
+      object.chapterPatches?.length ||
+      object.updatedSections?.length ||
+      object.chapters?.length ||
+      object.frontMatter !== undefined ||
+      object.bookTitle !== undefined ||
+      object.subtitle !== undefined ||
+      object.authorName !== undefined;
+
+    if (!hasChanges) {
+      return NextResponse.json({ noChanges: true, summary: object.summary }, { status: 200 });
+    }
 
     const harmonized = harmonizeBookManifest(updatedManifest);
 
