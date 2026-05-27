@@ -20,6 +20,7 @@ import {
   AlignmentType,
   PageBreak,
   BorderStyle,
+  TableOfContents,
 } from "docx";
 
 type PdfFontSet = {
@@ -224,19 +225,32 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
     };
 
     // ── First pass: track page metadata only — no drawing in this handler ─────
-    interface PageMeta { type: "front" | "opener" | "body"; chapterTitle: string; bodyPageNum: number }
+    interface PageMeta { type: "front" | "toc" | "blank" | "opener" | "body"; chapterTitle: string; bodyPageNum: number }
     const pageMetas: PageMeta[] = [];
     let totalPageCounter = 0; // every page including front matter
     let bodyPageCounter = 0;
     let currentChapterTitle = "";
     let nextIsOpener = false;
+    let nextIsBlank  = false; // blank verso page inserted to force next section to recto
+    let nextIsToc    = false; // TOC placeholder page
+    let tocMetaIndex = -1;   // pageMetas index of the TOC page
+    const chapterTocEntries: Array<{ chapterTitle: string; bodyPageNum: number }> = [];
 
     doc.on("pageAdded", () => {
       totalPageCounter++;
 
-      if (nextIsOpener) {
+      if (nextIsBlank) {
+        pageMetas.push({ type: "blank", chapterTitle: "", bodyPageNum: 0 });
+        nextIsBlank = false;
+      } else if (nextIsToc) {
+        tocMetaIndex = pageMetas.length;
+        pageMetas.push({ type: "toc", chapterTitle: "", bodyPageNum: 0 });
+        nextIsToc = false;
+      } else if (nextIsOpener) {
         bodyPageCounter++;
-        pageMetas.push({ type: "opener", chapterTitle: currentChapterTitle, bodyPageNum: bodyPageCounter });
+        const entry = { chapterTitle: currentChapterTitle, bodyPageNum: bodyPageCounter };
+        pageMetas.push({ type: "opener", ...entry });
+        chapterTocEntries.push(entry);
         nextIsOpener = false;
       } else if (bodyPageCounter > 0) {
         bodyPageCounter++;
@@ -246,20 +260,19 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       }
 
       // Alternate gutter/outside margins across ALL pages (including front matter)
-      // so the binding-side margin is always wider on every spread.
-      // Recto (odd page): gutter on LEFT  — page opens on the right of the spread
-      // Verso (even page): gutter on RIGHT — page opens on the left of the spread
-      //
-      // IMPORTANT: PDFKit executes `this.x = this.page.margins.left` BEFORE emitting
-      // 'pageAdded' (see pdfkit.js line 5545 vs 5552). We must re-sync doc.x here so
-      // text starts at the correct alternating margin, not the document default.
       const isVerso = totalPageCounter % 2 === 0;
       doc.page.margins.left  = isVerso ? trimSpec.outsideMargin : trimSpec.gutterMargin;
       doc.page.margins.right = isVerso ? trimSpec.gutterMargin  : trimSpec.outsideMargin;
       doc.x = doc.page.margins.left; // re-sync cursor after overriding margins
     });
 
-    // ── Title page (first page) ───────────────────────────────────────────────
+    // ── Helper: insert blank verso so the NEXT addPage() lands on recto ────────
+    const forceNextRecto = () => {
+      // totalPageCounter is odd → we're on a recto → next natural page = verso → insert blank
+      if (totalPageCounter % 2 !== 0) { nextIsBlank = true; doc.addPage(); }
+    };
+
+    // ── Title page (page 1, recto) ────────────────────────────────────────────
     doc.addPage();
     doc
       .moveDown(tpl.titlePageTopGap)
@@ -278,24 +291,62 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       .fontSize(tpl.titlePageAuthorSize).font(fonts.serif).fillColor(tpl.accentColor)
       .text(manifest.authorName, { align: tpl.titlePageAlign });
 
-    writeFrontMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
+    // ── Copyright page (page 2, verso — back of title page) ──────────────────
+    doc.addPage();
+    writeCopyrightPage(doc, manifest, fonts, tpl);
 
-    // ── Chapter body pages ────────────────────────────────────────────────────
+    // ── Table of Contents placeholder (page 3, recto) ─────────────────────────
+    // Content is filled in the second pass once all page numbers are known.
+    nextIsToc = true;
+    doc.addPage();
+
+    // ── Preface (recto-forced) ────────────────────────────────────────────────
+    forceNextRecto();
+    writePreface(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
+
+    // ── Introduction (recto-forced) ───────────────────────────────────────────
+    forceNextRecto();
+    writeIntroduction(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
+
+    // ── Chapter body pages (each recto-forced) ────────────────────────────────
     for (const chapter of manifest.chapters) {
+      forceNextRecto();
       currentChapterTitle = chapter.title;
-      nextIsOpener = true; // next addPage() call (inside writeChapter) is a chapter opener
+      nextIsOpener = true;
       writeChapter(doc, chapter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
     }
 
-    // Back matter shares the last chapter title in the running head
-    writeBackMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
+    // ── Back matter (each section recto-forced) ───────────────────────────────
+    forceNextRecto();
+    currentChapterTitle = "Conclusion";
+    writeConclusion(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
 
-    // ── Second pass: stamp headers/footers onto each page ─────────────────────
+    if (manifest.frontMatter.aboutAuthor) {
+      forceNextRecto();
+      currentChapterTitle = "About the Author";
+      writeAboutAuthor(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
+    }
+
+    if ((manifest.frontMatter.resourcesList ?? []).length > 0) {
+      forceNextRecto();
+      currentChapterTitle = "Resources";
+      writeResources(doc, manifest.frontMatter, fonts, tpl, adjustedBodyFontSize);
+    }
+
+    // ── Second pass ───────────────────────────────────────────────────────────
+    const { start, count } = doc.bufferedPageRange();
+
+    // 1. Write Table of Contents (must happen before header stamping)
+    if (tocMetaIndex >= 0) {
+      const tocIsVerso = (tocMetaIndex + 1) % 2 === 0;
+      stampTOC(doc, start + tocMetaIndex, manifest, chapterTocEntries, fonts, tpl, _layout, tocIsVerso);
+    }
+
+    // 2. Running headers + page-number footers on all body pages
     if (showRunningHeaders) {
-      const { start, count } = doc.bufferedPageRange();
       for (let i = 0; i < count; i++) {
         const meta = pageMetas[i];
-        if (!meta || meta.type === "front") continue;
+        if (!meta || meta.type === "front" || meta.type === "blank" || meta.type === "toc") continue;
         doc.switchToPage(start + i);
         stampPageHeader(
           doc,
@@ -447,6 +498,69 @@ function stripMarkdownForPdf(paragraph: string): string {
     .trim();
 }
 
+/**
+ * Pre-process inline scripture citations in manuscript text.
+ * Ensures verse text is wrapped in *italic* and the reference in **bold**
+ * before run-based rendering (PDF and DOCX).
+ *
+ * Two patterns handled:
+ *   Pass 1 — parenthetical (reference AFTER quote):
+ *     *"verse text"* (John 3:16, NIV)  →  *"verse"* **(John 3:16, NIV)**
+ *     "verse text"  (1 Corinthians 13:4)  →  *"verse"* **(1 Cor 13:4)**
+ *
+ *   Pass 2 — pre-citation (reference BEFORE quote, preaching/teaching style):
+ *     Hebrews 7:26: "For such a high priest…"  →  **Hebrews 7:26** *"For such…"*
+ *     1 Peter 1:24. "For all flesh…"          →  **1 Peter 1:24** *"For all flesh…"*
+ */
+function markInlineScriptureRefs(text: string): string {
+  // Non-breaking spaces inside a reference keep the entire citation on one line,
+  // preventing PDFKit's justify algorithm from stretching the gap between e.g.
+  // "Matthew" and "5:45" when only those two tokens occupy a justified line.
+  const nbsRef = (ref: string) => ref.replace(/\s/g, "\u00A0");
+
+  // Pass 1: reference in parentheses after the quoted verse
+  let result = text.replace(
+    /(\*?["\u201c][^\u201d"\n]{4,}["\u201d]\*?)\s*(\([A-Z1-9][^)\n]{3,}\d+[^)\n]*\))/g,
+    (_, quote, ref) => {
+      const rawQuote = quote.replace(/^\*|\*$/g, "");
+      return `*${rawQuote}* **${nbsRef(ref)}**`;
+    },
+  );
+  // Pass 2: pre-citation — BibleRef[: or .] "verse text"
+  // Matches: optional-number BookName chapter:verse[–range] followed immediately
+  // by an optional colon or period, then whitespace, then an opening quote.
+  result = result.replace(
+    /\b((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[-\u2013]\d+)?)\s*[:.]?\s*(["\u201c][^\u201d"\n]{4,}["\u201d])/g,
+    (_, ref, quote) => `**${nbsRef(ref)}** *${quote}*`,
+  );
+  return result;
+}
+
+/**
+ * Split a paragraph into styled runs for mixed-font PDFKit rendering.
+ * Returns an empty array when the paragraph is a heading or horizontal rule.
+ */
+function parseRunsForPdf(text: string): Array<{ text: string; italic?: boolean; bold?: boolean }> {
+  const trimmed = text.trim();
+  if (/^#{1,6}\s+/.test(trimmed)) return [];      // heading line — drop
+  if (/^[-*_]{3,}\s*$/.test(trimmed)) return [];  // horizontal rule — drop
+  const runs: Array<{ text: string; italic?: boolean; bold?: boolean }> = [];
+  const pattern = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|(?<!\*)\*([^*\n]+?)\*(?!\*)|__(.+?)__|(?<!_)_([^_\n]+?)_(?!_))/gs;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) runs.push({ text: text.slice(lastIndex, match.index) });
+    if (match[2])      runs.push({ text: match[2], bold: true, italic: true });
+    else if (match[3]) runs.push({ text: match[3], bold: true });
+    else if (match[4]) runs.push({ text: match[4], italic: true });
+    else if (match[5]) runs.push({ text: match[5], bold: true });
+    else if (match[6]) runs.push({ text: match[6], italic: true });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) runs.push({ text: text.slice(lastIndex) });
+  return runs.length > 0 ? runs : [{ text }];
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }, bodyFontSize?: number) {
   const fontSize = bodyFontSize ?? tpl.bodyFontSize;
@@ -469,35 +583,162 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
       return;
     }
 
-    // Strip markdown syntax — heading lines return "" and are silently skipped
-    const cleanParagraph = stripMarkdownForPdf(paragraph);
-    if (!cleanParagraph) return;
-
-    const font = options?.italicFirstParagraph && renderedIndex === 0 ? fonts.serifItalic : fonts.serif;
-    const color = options?.italicFirstParagraph && renderedIndex === 0 ? "#333333" : "#1a1a1a";
     const noIndentFirst = options?.noIndentFirstParagraph !== false;
     const indent = noIndentFirst && renderedIndex === 0 ? 0 : tpl.paragraphIndent;
-    doc
-      .fontSize(fontSize)
-      .font(font)
-      .fillColor(color)
-      .text(cleanParagraph, {
-        lineGap: tpl.bodyLineGap,
-        indent,
-        paragraphGap: tpl.paragraphGap,
-        align: tpl.bodyAlign,
-      });
+    const textOpts = { lineGap: tpl.bodyLineGap, indent, paragraphGap: tpl.paragraphGap, align: tpl.bodyAlign };
+
+    // Italic-first-paragraph (chapter intro): strip markdown and render whole paragraph in italic
+    if (options?.italicFirstParagraph && renderedIndex === 0) {
+      const cleanParagraph = stripMarkdownForPdf(paragraph);
+      if (!cleanParagraph) return;
+      doc.fontSize(fontSize).font(fonts.serifItalic).fillColor("#333333").text(cleanParagraph, textOpts);
+      renderedIndex++;
+      return;
+    }
+
+    // Regular paragraphs: render inline bold/italic markup so scripture is italic
+    // and scripture references (John 3:16) are bolded.
+    const preprocessed = markInlineScriptureRefs(paragraph);
+    const runs = parseRunsForPdf(preprocessed);
+    if (runs.length === 0) return; // heading or rule line — dropped
+
+    // PDFKit's continued:true + align:justify applies word-spacing to each run
+    // independently against the FULL line width rather than the remaining width,
+    // causing extreme gaps in short italic or bold segments mid-paragraph.
+    // Workaround: use left alignment for paragraphs that have inline markup runs.
+    const paraOpts = runs.length > 1
+      ? { ...textOpts, align: "left" as const }
+      : textOpts;
+
+    runs.forEach((run, i) => {
+      const isLast = i === runs.length - 1;
+      const font = run.bold ? fonts.serifBold : run.italic ? fonts.serifItalic : fonts.serif;
+      doc.fontSize(fontSize).font(font).fillColor("#1a1a1a");
+      doc.text(run.text, i === 0 ? { ...paraOpts, continued: !isLast } : { continued: !isLast });
+    });
     renderedIndex++;
   });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeFrontMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
+function writeCopyrightPage(doc: any, manifest: EbookManifest, fonts: PdfFontSet, tpl: BookTemplateConfig) {
+  const year = new Date().getFullYear();
+  const textW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  // Position copyright block about 30% down the page (back of title — intentionally sparse)
+  doc.y = Math.round(doc.page.height * 0.30);
+  doc
+    .fontSize(9).font(fonts.serifBold).fillColor("#1a1a1a")
+    .text(`${manifest.bookTitle}${manifest.subtitle ? `: ${manifest.subtitle}` : ""}`, { width: textW });
+  doc.moveDown(0.6)
+    .fontSize(9).font(fonts.serif)
+    .text(`Copyright \u00A9 ${year} by ${manifest.authorName}`, { width: textW });
+  doc.moveDown(1)
+    .text(
+      "All rights reserved. No part of this publication may be reproduced, distributed, " +
+      "or transmitted in any form or by any means, including photocopying, recording, or " +
+      "other electronic or mechanical methods, without the prior written permission of " +
+      "the publisher, except in the case of brief quotations embodied in critical reviews " +
+      "and certain other noncommercial uses permitted by copyright law.",
+      { width: textW, lineGap: 2, align: "left" }
+    );
+  doc.moveDown(1.2)
+    .fontSize(8).font(fonts.sans).fillColor("#666666")
+    .text("Scripture quotations, unless otherwise indicated, are from the Holy Bible.", { width: textW });
+  doc.moveDown(1)
+    .fontSize(8).font(fonts.serif).fillColor("#333333")
+    .text("First Edition", { width: textW });
+  doc.moveDown(0.4)
+    .text("Printed in the United States of America", { width: textW });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function stampTOC(
+  doc: any,
+  tocAbsPageIndex: number,
+  manifest: EbookManifest,
+  chapterTocEntries: Array<{ chapterTitle: string; bodyPageNum: number }>,
+  fonts: PdfFontSet,
+  tpl: BookTemplateConfig,
+  layout: { gutterMargin: number; outsideMargin: number; textW: number; pageW: number },
+  tocPageIsVerso: boolean,
+) {
+  doc.switchToPage(tocAbsPageIndex);
+  const mL  = tocPageIsVerso ? layout.outsideMargin : layout.gutterMargin;
+  const mR  = tocPageIsVerso ? layout.gutterMargin  : layout.outsideMargin;
+  const textW = layout.textW;
+  const topY  = doc.page.margins.top + 4;
+  const bottomLimit = doc.page.height - doc.page.margins.bottom - 12;
+
+  // Heading
+  let y = topY;
+  doc
+    .fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor)
+    .text("Contents", mL, y, { width: textW, align: tpl.matterTitleAlign, lineBreak: false });
+  y += tpl.matterTitleSize + 14;
+
+  // Divider
+  if (tpl.showDivider) {
+    doc.moveTo(mL, y).lineTo(layout.pageW - mR, y).strokeColor(tpl.dividerColor).lineWidth(0.5).stroke();
+    y += 10;
+  } else {
+    y += 8;
+  }
+
+  const entrySize  = 10;
+  const lineH      = entrySize + 7;
+  const mutedColor = "#888888";
+
+  // Front matter (no page numbers)
+  for (const label of ["Preface", "Introduction"]) {
+    if (y > bottomLimit) break;
+    doc.fontSize(entrySize).font(fonts.serifItalic).fillColor(mutedColor)
+      .text(label, mL, y, { width: textW, lineBreak: false });
+    y += lineH;
+  }
+  y += 6;
+
+  // Chapters with page numbers
+  for (let i = 0; i < chapterTocEntries.length; i++) {
+    if (y > bottomLimit) break;
+    const { chapterTitle, bodyPageNum } = chapterTocEntries[i];
+    const numLabel  = `${i + 1}.`;
+    const pageStr   = String(bodyPageNum);
+    doc.fontSize(entrySize).font(fonts.serif);
+    const numW  = Math.ceil(doc.widthOfString(numLabel)) + 4;
+    const pageW = Math.ceil(doc.widthOfString(pageStr))  + 2;
+    const titleW = textW - numW - pageW - 14;
+    // Chapter number (muted)
+    doc.fillColor(mutedColor).text(numLabel, mL, y, { width: numW, lineBreak: false });
+    // Chapter title (bold)
+    doc.font(fonts.serifBold).fillColor("#1a1a1a")
+      .text(chapterTitle, mL + numW + 2, y, { width: titleW, lineBreak: false, ellipsis: true });
+    // Page number (right-aligned)
+    doc.font(fonts.serif).fillColor(mutedColor)
+      .text(pageStr, mL + numW + 2 + titleW + 12, y, { width: pageW, align: "right", lineBreak: false });
+    y += lineH;
+  }
+  y += 6;
+
+  // Back matter (no page numbers)
+  const backLabels = ["Conclusion", ...(manifest.frontMatter.aboutAuthor ? ["About the Author"] : [])];
+  for (const label of backLabels) {
+    if (y > bottomLimit) break;
+    doc.fontSize(entrySize).font(fonts.serifItalic).fillColor(mutedColor)
+      .text(label, mL, y, { width: textW, lineBreak: false });
+    y += lineH;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writePreface(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
   doc.addPage();
   doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Preface", { align: tpl.matterTitleAlign });
   writeDivider(doc, tpl);
   writeRichBody(doc, fm.preface, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
+}
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeIntroduction(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
   doc.addPage();
   doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Introduction", { align: tpl.matterTitleAlign });
   writeDivider(doc, tpl);
@@ -514,6 +755,19 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
     .fontSize(tpl.chapterTitleSize).font(fonts[tpl.chapterTitleFont]).fillColor(tpl.chapterTitleColor)
     .text(chapter.title, { align: tpl.chapterTitleAlign });
   writeDivider(doc, tpl);
+
+
+  // Epigraph (if present)
+  if (chapter.epigraph) {
+    writeRichBody(doc, chapter.epigraph, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true, align: "center" }, bodyFontSize);
+    doc.moveDown(0.2);
+  }
+
+  // Premise line (if present)
+  if (chapter.premiseLine) {
+    writeRichBody(doc, chapter.premiseLine, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true, align: "center" }, bodyFontSize);
+    doc.moveDown(0.2);
+  }
 
   if (chapter.intro) {
     writeRichBody(doc, chapter.intro, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true }, bodyFontSize);
@@ -555,26 +809,30 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeBackMatter(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
+function writeConclusion(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
   doc.addPage();
   doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Conclusion", { align: tpl.matterTitleAlign });
   writeDivider(doc, tpl);
   writeRichBody(doc, fm.conclusion, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
+}
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeAboutAuthor(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
+  doc.addPage();
+  doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("About the Author", { align: tpl.matterTitleAlign });
+  writeDivider(doc, tpl);
   if (fm.aboutAuthor) {
-    doc.addPage();
-    doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("About the Author", { align: tpl.matterTitleAlign });
-    writeDivider(doc, tpl);
     writeRichBody(doc, fm.aboutAuthor, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
   }
+}
 
-  if ((fm.resourcesList ?? []).length > 0) {
-    doc.addPage();
-    doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Resources", { align: tpl.matterTitleAlign });
-    writeDivider(doc, tpl);
-    for (const r of (fm.resourcesList ?? [])) {
-      doc.fontSize(bodyFontSize ?? tpl.bodyFontSize).font(fonts.serif).fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3.5 });
-    }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeResources(doc: any, fm: FrontBackMatter, fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
+  doc.addPage();
+  doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Resources", { align: tpl.matterTitleAlign });
+  writeDivider(doc, tpl);
+  for (const r of (fm.resourcesList ?? [])) {
+    doc.fontSize(bodyFontSize ?? tpl.bodyFontSize).font(fonts.serif).fillColor("#1a1a1a").text(`• ${r}`, { lineGap: 3.5 });
   }
 }
 
@@ -609,16 +867,33 @@ function paragraphsToHtml(text: string): string {
     .join("\n");
 }
 
-// Wraps inline scripture citations — `"text" (Book Chapter:Verse, Trans.)` —
-// with a <span> for premium italic styling without disrupting paragraph flow.
+// Wraps inline scripture citations with <span> for premium italic/bold styling.
+// Three-pass approach:
+//   Pass 1 — verse in <em> (already italic from *markdown*), parenthetical ref after
+//   Pass 2 — bare quoted verse, parenthetical ref after
+//   Pass 3 — pre-citation style: BibleRef[: or .] "verse text" (ref before quote)
 function markupInlineScripture(html: string): string {
-  // Match: opening quote, text, closing quote, optional spaces, parenthetical reference
-  // e.g. "For God so loved the world" (John 3:16, NIV)
-  return html.replace(
-    /(&ldquo;|&quot;|\u201c)([^\u201d&]{10,})(&rdquo;|&quot;|\u201d)\s*(\([A-Z][^)]{3,}\d+[^)]*\))/g,
-    (_, oq, text, cq, ref) =>
-      `<span class="scripture-inline">${oq}${text}${cq}</span><span class="scripture-inline-ref"> ${ref}</span>`,
+  // Pass 1: verse already inside <em>…</em>; </em> sits between closing quote and
+  // (reference) so a single regex would miss it. Just attach the ref span.
+  let result = html.replace(
+    /(<em>(?:&ldquo;|&quot;|\u201c)[^\u201d&]{4,}(?:&rdquo;|&quot;|\u201d)<\/em>)\s*(\([A-Z1-9][^)]{3,}\d+[^)]*\))/g,
+    (_, verse, ref) => `${verse}<span class="scripture-inline-ref"> ${ref}</span>`,
   );
+  // Pass 2: bare quoted verse — add italic class and bold ref span.
+  result = result.replace(
+    /((?:&ldquo;|&quot;|\u201c)[^\u201d&]{4,}(?:&rdquo;|&quot;|\u201d))\s*(\([A-Z1-9][^)]{3,}\d+[^)]*\))/g,
+    (_, verse, ref) =>
+      `<span class="scripture-inline">${verse}</span><span class="scripture-inline-ref"> ${ref}</span>`,
+  );
+  // Pass 3: pre-citation style — BibleRef[: or .] "verse text"
+  // e.g. Hebrews 7:26: &quot;For such a high priest…&quot;
+  // e.g. 1 Peter 1:24. &quot;For all flesh is as grass…&quot;
+  result = result.replace(
+    /\b((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[-\u2013]\d+)?)\s*[:.]?\s*((?:&ldquo;|&quot;|\u201c)[^\u201d&\n]{4,}(?:&rdquo;|&quot;|\u201d))/g,
+    (_, ref, verse) =>
+      `<span class="scripture-inline-ref">${ref}</span> <span class="scripture-inline">${verse}</span>`,
+  );
+  return result;
 }
 
 function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italicFirstParagraph?: boolean }): string {
@@ -966,26 +1241,26 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
    * proper bold/italic formatting so Word renders them correctly.
    * Handles ***bold-italic***, **bold**, *italic*, __bold__, _italic_.
    */
-  function parseRunsForDocx(text: string, baseSize: number): TextRun[] {
+  function parseRunsForDocx(text: string, baseSize: number, allItalic = false): TextRun[] {
     const runs: TextRun[] = [];
     const pattern = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|(?<!\*)\*([^*\n]+?)\*(?!\*)|__(.+?)__|(?<!_)_([^_\n]+?)_(?!_))/gs;
     let lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(text)) !== null) {
       if (match.index > lastIndex) {
-        runs.push(new TextRun({ text: text.slice(lastIndex, match.index), size: baseSize }));
+        runs.push(new TextRun({ text: text.slice(lastIndex, match.index), size: baseSize, italics: allItalic }));
       }
       if (match[2])      runs.push(new TextRun({ text: match[2], bold: true, italics: true, size: baseSize }));
-      else if (match[3]) runs.push(new TextRun({ text: match[3], bold: true,               size: baseSize }));
-      else if (match[4]) runs.push(new TextRun({ text: match[4],              italics: true, size: baseSize }));
-      else if (match[5]) runs.push(new TextRun({ text: match[5], bold: true,               size: baseSize }));
-      else if (match[6]) runs.push(new TextRun({ text: match[6],              italics: true, size: baseSize }));
+      else if (match[3]) runs.push(new TextRun({ text: match[3], bold: true, italics: allItalic, size: baseSize }));
+      else if (match[4]) runs.push(new TextRun({ text: match[4], italics: true, size: baseSize }));
+      else if (match[5]) runs.push(new TextRun({ text: match[5], bold: true, italics: allItalic, size: baseSize }));
+      else if (match[6]) runs.push(new TextRun({ text: match[6], italics: true, size: baseSize }));
       lastIndex = match.index + match[0].length;
     }
     if (lastIndex < text.length) {
-      runs.push(new TextRun({ text: text.slice(lastIndex), size: baseSize }));
+      runs.push(new TextRun({ text: text.slice(lastIndex), size: baseSize, italics: allItalic }));
     }
-    return runs.length > 0 ? runs : [new TextRun({ text, size: baseSize })];
+    return runs.length > 0 ? runs : [new TextRun({ text, size: baseSize, italics: allItalic })];
   }
 
   function textToStyledParagraphs(text: string, noIndentFirst = false): Paragraph[] {
@@ -1001,9 +1276,12 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         // Detect markdown blockquote for scripture
         const mdQuote = parseMarkdownBlockquote(para);
         if (mdQuote) return docxScriptureBlock(mdQuote);
+        // Pre-process inline scripture: ensures *"verse"* **ref** markdown
+        // so parseRunsForDocx renders verses italic and references bold.
+        const processedPara = markInlineScriptureRefs(para);
         return [
           new Paragraph({
-            children: parseRunsForDocx(para, bodyHalfPt),
+            children: parseRunsForDocx(processedPara, bodyHalfPt),
             alignment: bodyAlign,
             spacing: { after: paraSpacingAfter },
             indent: noIndentFirst && i === 0 ? undefined : { firstLine: paraIndentTwips },
@@ -1012,8 +1290,10 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       });
   }
 
-  const children: Paragraph[] = [];
+  const children: (Paragraph | TableOfContents)[] = [];
 
+
+  // Title page
   children.push(
     new Paragraph({
       children: [new TextRun({ text: bookTitle, bold: true, size: Math.round(tpl.titlePageTitleSize * 2) })],
@@ -1030,6 +1310,51 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       children: [new TextRun({ text: authorName, size: Math.round(tpl.titlePageAuthorSize * 2) })],
       alignment: titleAlign,
       spacing: { after: 600 },
+    }),
+    new Paragraph({ children: [new PageBreak()] })
+  );
+
+  // Copyright page (matches PDF)
+  const year = new Date().getFullYear();
+  children.push(
+    new Paragraph({
+      children: [new TextRun({ text: `${bookTitle}${subtitle ? `: ${subtitle}` : ""}`, bold: true, size: 18 })],
+      spacing: { after: 120 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: `Copyright © ${year} by ${authorName}`, size: 18 })],
+      spacing: { after: 120 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "All rights reserved. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means, including photocopying, recording, or other electronic or mechanical methods, without the prior written permission of the publisher, except in the case of brief quotations embodied in critical reviews and certain other noncommercial uses permitted by copyright law.", size: 16 })],
+      spacing: { after: 120 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "Scripture quotations, unless otherwise indicated, are from the Holy Bible.", italics: true, size: 14 })],
+      spacing: { after: 80 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "First Edition", size: 14 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "Printed in the United States of America", size: 14 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({ children: [new PageBreak()] })
+  );
+
+  // Table of Contents (Word auto TOC)
+  children.push(
+    new TableOfContents("Table of Contents", {
+      hyperlink: true,
+      headingStyleRange: "1-2",
+      stylesWithLevels: [
+        { styleName: "Heading 1", level: 1 },
+        { styleName: "Heading 2", level: 2 },
+      ],
+      preserveTabInEntries: true,
+      preserveNewLineInEntries: true,
     }),
     new Paragraph({ children: [new PageBreak()] })
   );
@@ -1061,7 +1386,30 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         spacing: { before: 0, after: 300 },
       })
     );
-    // Chapter intro — italic opening paragraph, matches PDF/EPUB rendering
+
+    // Epigraph (if present)
+    if (chapter.epigraph?.trim()) {
+      children.push(
+        new Paragraph({
+          children: parseRunsForDocx(chapter.epigraph, bodyHalfPt, true),
+          alignment: AlignmentType.CENTER,
+          spacing: { after: paraSpacingAfter },
+        })
+      );
+    }
+
+    // Premise line (if present)
+    if (chapter.premiseLine?.trim()) {
+      children.push(
+        new Paragraph({
+          children: parseRunsForDocx(chapter.premiseLine, bodyHalfPt, true),
+          alignment: AlignmentType.CENTER,
+          spacing: { after: paraSpacingAfter },
+        })
+      );
+    }
+
+    // Chapter intro — italic, scripture-aware
     if (chapter.intro?.trim()) {
       normalizeParagraphBreaks(chapter.intro)
         .split(/\n{2,}/)
@@ -1070,13 +1418,14 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         .forEach((introPara) => {
           children.push(
             new Paragraph({
-              children: [new TextRun({ text: introPara, italics: true, size: bodyHalfPt })],
+              children: parseRunsForDocx(markInlineScriptureRefs(introPara), bodyHalfPt, true),
               alignment: bodyAlign,
               spacing: { after: paraSpacingAfter },
             })
           );
         });
     }
+
     for (const section of chapter.sections) {
       if (section.heading) {
         children.push(
