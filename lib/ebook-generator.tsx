@@ -99,7 +99,7 @@ function writePageRunningHeader(
     .fontSize(7)
     .font(fonts.sans)
     .fillColor("#aaaaaa")
-    .text(headText.toUpperCase(), mL, 28, { width: pageW - mL - mR, align: "center" });
+    .text(headText.toUpperCase(), mL, 28, { width: pageW - mL - mR, align: "center", lineBreak: false });
 
   // Thin hairline rule below the running head
   doc
@@ -109,14 +109,15 @@ function writePageRunningHeader(
     .lineWidth(0.25)
     .stroke();
 
-  // Page number — centered at bottom, outside the content margin
+  // Page number — centered in the bottom margin; use explicit y safely below content area
+  const footerY = doc.page.height - doc.page.margins.bottom + 18;
   doc
     .fontSize(8)
     .font(fonts.serif)
     .fillColor("#888888")
-    .text(String(bodyPageNumber), mL, doc.page.height - 40, { width: pageW - mL - mR, align: "center" });
+    .text(String(bodyPageNumber), mL, footerY, { width: pageW - mL - mR, align: "center", lineBreak: false });
 
-  // Reset cursor to where the content area begins
+  // Reset cursor to top content area so body text starts at the correct position
   doc.y = savedY;
 }
 
@@ -155,12 +156,18 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       chapterTitle: "",
       pageOffset: 0,   // absolute pageNum when body chapters begin
       pageNum: 0,      // counts every page added (including front matter)
+      writing: false,  // reentrancy guard — prevents recursive pageAdded loops
     };
     doc.on("pageAdded", () => {
       headerCtx.pageNum++;
-      if (!showRunningHeaders || !headerCtx.enabled) return;
-      const bodyPage = headerCtx.pageNum - headerCtx.pageOffset;
-      writePageRunningHeader(doc, manifest.bookTitle, headerCtx.chapterTitle, bodyPage, fonts);
+      if (!showRunningHeaders || !headerCtx.enabled || headerCtx.writing) return;
+      headerCtx.writing = true;
+      try {
+        const bodyPage = headerCtx.pageNum - headerCtx.pageOffset;
+        writePageRunningHeader(doc, manifest.bookTitle, headerCtx.chapterTitle, bodyPage, fonts);
+      } finally {
+        headerCtx.writing = false;
+      }
     });
 
     // ── Title page ────────────────────────────────────────────────────────────
