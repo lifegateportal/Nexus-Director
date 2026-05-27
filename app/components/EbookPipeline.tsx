@@ -1237,6 +1237,10 @@ export function EbookPipeline({
   const savedJobRef = useRef<EbookJobState | null>(null);
   // Prevent double-triggering the auto-download across re-renders
   const autoDownloadedRef = useRef(false);
+  // Track the ebookManifest prop at mount time so the restore effect can detect when an
+  // externally-edited manifest was already provided and must NOT be overwritten by the
+  // job-state reconstruction (which only knows about the original pipeline output).
+  const ebookManifestAtMountRef = useRef<EbookManifest | null | undefined>(ebookManifest);
 
   const addLog = useCallback((msg: string) => {
     const entry = `[${new Date().toLocaleTimeString()}] ${msg}`;
@@ -1618,7 +1622,12 @@ export function EbookPipeline({
           generatedAt: new Date().toISOString(),
         };
         setReviewContext({ contentMap, frontMatter: job.frontMatter });
-        syncCompletedManifest(manifest);
+        // Only reconstruct the manifest from job state when no external manifest was
+        // provided at mount.  If ebookManifest prop is set it may contain assistant
+        // edits made after the pipeline ran — those must not be overwritten.
+        if (!ebookManifestAtMountRef.current) {
+          syncCompletedManifest(manifest);
+        }
       }
       const words = (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0);
       if (words > 0) setTotalWords(words);
