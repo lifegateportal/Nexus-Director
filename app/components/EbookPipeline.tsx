@@ -648,15 +648,15 @@ function PrintSpecPanel({
               aria-checked={runningHeaders}
               onClick={() => onChange({ trimSize, runningHeaders: !runningHeaders })}
               className={[
-                "relative flex-shrink-0 h-6 w-11 rounded-full border transition-all",
+                "relative flex-shrink-0 h-6 w-11 rounded-full border transition-colors duration-200",
                 runningHeaders
-                  ? "border-cyan-500/50 bg-cyan-500/30"
+                  ? "border-cyan-500/60 bg-cyan-500/40"
                   : "border-slate-600/50 bg-slate-700/50",
               ].join(" ")}
             >
               <span className={[
-                "absolute top-0.5 h-5 w-5 rounded-full transition-transform",
-                runningHeaders ? "translate-x-5 bg-cyan-400" : "translate-x-0.5 bg-slate-500",
+                "absolute top-0.5 h-5 w-5 rounded-full shadow-sm transition-transform duration-200",
+                runningHeaders ? "translate-x-[21px] bg-cyan-400" : "translate-x-0.5 bg-slate-500",
               ].join(" ")} />
             </button>
           </div>
