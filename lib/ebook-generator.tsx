@@ -80,45 +80,59 @@ function resolvePdfFonts(doc: any): PdfFontSet {
 // ─── Running Page Header/Footer ───────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writePageRunningHeader(
+// ── Stamp running head + footer onto a single page (called in the second pass)
+// All coordinates are pre-computed outside of any event handler.
+function stampPageHeader(
   doc: any,
   bookTitle: string,
   chapterTitle: string,
   bodyPageNumber: number,
+  isChapterOpener: boolean,
   fonts: PdfFontSet,
+  layout: { gutterMargin: number; outsideMargin: number; textW: number; pageW: number; footerY: number },
 ) {
-  const isEven = bodyPageNumber % 2 === 0;
-  const pageW = doc.page.width;
-  const mL = doc.page.margins.left;
-  const mR = doc.page.margins.right;
-  const savedY = doc.y;
+  const { gutterMargin, outsideMargin, textW, pageW, footerY } = layout;
 
-  // Running head — book title on verso (even), chapter title on recto (odd)
-  const headText = isEven ? bookTitle : (chapterTitle || bookTitle);
-  doc
-    .fontSize(7)
-    .font(fonts.sans)
-    .fillColor("#aaaaaa")
-    .text(headText.toUpperCase(), mL, 28, { width: pageW - mL - mR, align: "center", lineBreak: false });
+  // Recto (odd): gutter LEFT, outside RIGHT — verso (even): outside LEFT, gutter RIGHT
+  const isVerso = bodyPageNumber % 2 === 0;
+  const mL = isVerso ? outsideMargin : gutterMargin;
+  const mR = isVerso ? gutterMargin  : outsideMargin;
 
-  // Thin hairline rule below the running head
-  doc
-    .moveTo(mL, 41)
-    .lineTo(pageW - mR, 41)
-    .strokeColor("#e0e0e0")
-    .lineWidth(0.25)
-    .stroke();
+  if (!isChapterOpener) {
+    // Verso (even / left page): book title flush left
+    // Recto (odd / right page): chapter title flush right  — CMOS / Zondervan standard
+    const headText = isVerso ? bookTitle : (chapterTitle || bookTitle);
+    const headAlign = isVerso ? "left" : "right";
 
-  // Page number — centered in the bottom margin; use explicit y safely below content area
-  const footerY = doc.page.height - doc.page.margins.bottom + 18;
+    // Disable top-margin check: y=28 is above topMargin; without this PDFKit auto-paginates
+    const savedTop = doc.page.margins.top;
+    doc.page.margins.top = 0;
+    doc
+      .fontSize(7)
+      .font(fonts.sans)
+      .fillColor("#aaaaaa")
+      .text(headText.toUpperCase(), mL, 28, { width: textW, align: headAlign, lineBreak: false });
+    doc.page.margins.top = savedTop;
+
+    // Hairline rule beneath the running head
+    doc
+      .moveTo(mL, 42)
+      .lineTo(pageW - mR, 42)
+      .strokeColor("#dddddd")
+      .lineWidth(0.25)
+      .stroke();
+  }
+
+  // Footer page number — disable bottom-margin check so PDFKit writes here
+  // instead of auto-adding a new page (footerY is intentionally below page.maxY())
+  const savedBottom = doc.page.margins.bottom;
+  doc.page.margins.bottom = 0;
   doc
     .fontSize(8)
     .font(fonts.serif)
-    .fillColor("#888888")
-    .text(String(bodyPageNumber), mL, footerY, { width: pageW - mL - mR, align: "center", lineBreak: false });
-
-  // Reset cursor to top content area so body text starts at the correct position
-  doc.y = savedY;
+    .fillColor("#aaaaaa")
+    .text(String(bodyPageNumber), mL, footerY, { width: textW, align: "center", lineBreak: false });
+  doc.page.margins.bottom = savedBottom;
 }
 
 // ─── PDF Generator (pdfkit) ───────────────────────────────────────────────────
@@ -138,11 +152,27 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
   const pageMargins = trimSpec.margins;
   const adjustedBodyFontSize = tpl.bodyFontSize + trimSpec.bodyFontSizeAdjust;
 
+  // Pre-compute fixed layout values (avoids reliance on doc.page inside event handlers)
+  const _mL = trimSpec.gutterMargin;   // recto default (overridden per page in pageAdded)
+  const _mR = trimSpec.outsideMargin;
+  const _pageW = pageSize[0];
+  const _pageH = pageSize[1];
+  const _textW = _pageW - _mL - _mR;   // text column width is constant (gutter+outside same total)
+  const _footerY = _pageH - pageMargins.bottom + 18;
+  const _layout = {
+    gutterMargin: trimSpec.gutterMargin,
+    outsideMargin: trimSpec.outsideMargin,
+    textW: _textW,
+    pageW: _pageW,
+    footerY: _footerY,
+  };
+
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
       margins: pageMargins,
       size: pageSize,
-      autoFirstPage: true,
+      autoFirstPage: false, // we add pages manually so pageAdded tracking is accurate
+      bufferPages: true,    // hold all pages in memory for the second-pass header stamp
     });
     const fonts = resolvePdfFonts(doc);
     const chunks: Buffer[] = [];
@@ -150,27 +180,85 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    // ── Running header state ──────────────────────────────────────────────────
-    const headerCtx = {
-      enabled: false,
-      chapterTitle: "",
-      pageOffset: 0,   // absolute pageNum when body chapters begin
-      pageNum: 0,      // counts every page added (including front matter)
-      writing: false,  // reentrancy guard — prevents recursive pageAdded loops
+    // ── Alternating-margin patches ────────────────────────────────────────────
+    // PDFKit's LineWrapper captures startX = doc.x when a paragraph begins, then
+    // restores it (this.document.x = this.startX) both on page overflow and at
+    // wrap() end.  This defeats our pageAdded margin changes.  Two patches fix it:
+    //
+    // Patch 1 — wrap continueOnNewPage: after every page-break the stale startX
+    //   restore in LineWrapper.nextSection is intercepted via a one-shot property
+    //   descriptor so doc.x stays at the new page's correct alternating margin.
+    //
+    // Patch 2 — wrap doc.text: re-sync doc.x to page.margins.left at the start
+    //   of every non-positioned text call so the next paragraph's LineWrapper
+    //   captures the right startX, and the wrap()-end stale x is fixed.
+    const _origContinue = (doc as any).continueOnNewPage.bind(doc);
+    (doc as any).continueOnNewPage = function(opts?: unknown) {
+      _origContinue(opts);
+      // pageAdded has fired; doc.x is now the correct alternating margin.
+      // LineWrapper.nextSection will immediately do: this.document.x = this.startX.
+      // Intercept that one assignment so doc.x keeps the correct value.
+      const correctX: number = (doc as any).x;
+      Object.defineProperty(doc, "x", {
+        configurable: true,
+        enumerable: true,
+        get() { return correctX; },
+        set(_stale: number) {
+          // Remove this interceptor and restore as a plain writable property.
+          Object.defineProperty(doc, "x", {
+            configurable: true, enumerable: true, writable: true, value: correctX,
+          });
+        },
+      });
     };
+
+    const _origText = (doc as any).text.bind(doc);
+    (doc as any).text = function(text: string, ...rest: unknown[]) {
+      // For non-positioned calls (no explicit x arg), re-sync doc.x to the
+      // current page's left margin before building the LineWrapper so that
+      // startX captures the correct alternating value.
+      if (typeof rest[0] !== "number") {
+        (doc as any).x = (doc as any).page.margins.left;
+      }
+      return _origText(text, ...rest);
+    };
+
+    // ── First pass: track page metadata only — no drawing in this handler ─────
+    interface PageMeta { type: "front" | "opener" | "body"; chapterTitle: string; bodyPageNum: number }
+    const pageMetas: PageMeta[] = [];
+    let bodyPageCounter = 0;
+    let currentChapterTitle = "";
+    let nextIsOpener = false;
+
     doc.on("pageAdded", () => {
-      headerCtx.pageNum++;
-      if (!showRunningHeaders || !headerCtx.enabled || headerCtx.writing) return;
-      headerCtx.writing = true;
-      try {
-        const bodyPage = headerCtx.pageNum - headerCtx.pageOffset;
-        writePageRunningHeader(doc, manifest.bookTitle, headerCtx.chapterTitle, bodyPage, fonts);
-      } finally {
-        headerCtx.writing = false;
+      if (nextIsOpener) {
+        bodyPageCounter++;
+        pageMetas.push({ type: "opener", chapterTitle: currentChapterTitle, bodyPageNum: bodyPageCounter });
+        nextIsOpener = false;
+      } else if (bodyPageCounter > 0) {
+        bodyPageCounter++;
+        pageMetas.push({ type: "body", chapterTitle: currentChapterTitle, bodyPageNum: bodyPageCounter });
+      } else {
+        pageMetas.push({ type: "front", chapterTitle: "", bodyPageNum: 0 });
+      }
+
+      // Alternate gutter/outside margins so the binding-side margin is always wider.
+      // Recto (odd body page): gutter on LEFT  — page opens on the right side of the spread
+      // Verso (even body page): gutter on RIGHT — page opens on the left side of the spread
+      //
+      // IMPORTANT: PDFKit executes `this.x = this.page.margins.left` BEFORE emitting
+      // 'pageAdded' (see pdfkit.js line 5545 vs 5552). We must re-sync doc.x here so
+      // body text starts at the correct alternating margin, not the document default.
+      if (bodyPageCounter > 0) {
+        const isVerso = bodyPageCounter % 2 === 0;
+        doc.page.margins.left  = isVerso ? trimSpec.outsideMargin : trimSpec.gutterMargin;
+        doc.page.margins.right = isVerso ? trimSpec.gutterMargin  : trimSpec.outsideMargin;
+        doc.x = doc.page.margins.left; // re-sync cursor after overriding margins
       }
     });
 
-    // ── Title page ────────────────────────────────────────────────────────────
+    // ── Title page (first page) ───────────────────────────────────────────────
+    doc.addPage();
     doc
       .moveDown(tpl.titlePageTopGap)
       .fontSize(tpl.titlePageTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor)
@@ -190,16 +278,35 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
 
     writeFrontMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
 
-    // Enable running headers from first chapter page onward
-    headerCtx.enabled = showRunningHeaders;
-    headerCtx.pageOffset = headerCtx.pageNum; // front matter pages already counted
-
+    // ── Chapter body pages ────────────────────────────────────────────────────
     for (const chapter of manifest.chapters) {
-      headerCtx.chapterTitle = chapter.title; // set BEFORE addPage so pageAdded sees it
+      currentChapterTitle = chapter.title;
+      nextIsOpener = true; // next addPage() call (inside writeChapter) is a chapter opener
       writeChapter(doc, chapter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
     }
 
+    // Back matter shares the last chapter title in the running head
     writeBackMatter(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, tpl, adjustedBodyFontSize);
+
+    // ── Second pass: stamp headers/footers onto each page ─────────────────────
+    if (showRunningHeaders) {
+      const { start, count } = doc.bufferedPageRange();
+      for (let i = 0; i < count; i++) {
+        const meta = pageMetas[i];
+        if (!meta || meta.type === "front") continue;
+        doc.switchToPage(start + i);
+        stampPageHeader(
+          doc,
+          manifest.bookTitle,
+          meta.chapterTitle,
+          meta.bodyPageNum,
+          meta.type === "opener",
+          fonts,
+          _layout,
+        );
+      }
+    }
+
     doc.end();
   });
 }

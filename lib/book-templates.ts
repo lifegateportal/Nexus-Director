@@ -21,8 +21,10 @@ export type TrimSizeSpec = {
   label: string;
   description: string;
   pageSize: [number, number]; // width × height in points (72pt = 1 inch)
-  margins: { top: number; bottom: number; left: number; right: number };
-  bodyFontSizeAdjust: number; // delta applied to template's base body font size
+  margins: { top: number; bottom: number; left: number; right: number }; // recto (odd page) defaults
+  gutterMargin: number;  // inside / binding margin — wider to allow for binding
+  outsideMargin: number; // outside / trim margin — narrower
+  bodyFontSizeAdjust: number; // delta applied to template’s base body font size
 };
 
 /** International premium print trim specifications */
@@ -31,16 +33,20 @@ export const TRIM_SIZE_SPECS: Record<PrintTrimSize, TrimSizeSpec> = {
     label: "6 × 9 in",
     description: "US Trade — Zondervan, Thomas Nelson, Baker Books",
     pageSize: [432, 648],
-    // CMOS gutter-aware: inside (left) wider than outside for binding
+    // Recto defaults (odd pages): gutter on left, outside on right
     margins: { top: 63, bottom: 72, left: 63, right: 54 },
+    gutterMargin: 63,   // 0.875 in — inside / binding
+    outsideMargin: 54,  // 0.750 in — outside / trim
     bodyFontSizeAdjust: 0,
   },
   "5.5x8.5": {
     label: "5.5 × 8.5 in",
     description: "US Digest — Charisma House, Hay House, Faith Words",
     pageSize: [396, 612],
-    margins: { top: 54, bottom: 63, left: 63, right: 45 },
-    bodyFontSizeAdjust: -0.5,
+    margins: { top: 54, bottom: 63, left: 54, right: 45 },
+    gutterMargin: 54,   // 0.750 in — inside / binding
+    outsideMargin: 45,  // 0.625 in — outside / trim
+    bodyFontSizeAdjust: 0, // same font size as 6×9 — smaller page naturally yields more pages
   },
 };
 
@@ -49,9 +55,8 @@ export type BookTemplateConfig = {
   name: string;
   description: string;
   badge: string;
-  // Page
-  pageSize: [number, number]; // width × height in points (72pt = 1 inch)
-  margins: { top: number; bottom: number; left: number; right: number };
+  // Page size and margins are NOT stored here — they come from TRIM_SIZE_SPECS
+  // based on the user's PrintSpec (trimSize) selection at export time.
   // Running headers / footers (can be overridden by PrintSpec)
   runningHeaders: boolean;
   // Body text
@@ -108,9 +113,6 @@ function toRoman(n: number): string {
   return result;
 }
 
-// US Trade 6 × 9 in points (72 pts/inch)
-const US_TRADE: [number, number] = [432, 648];
-
 // ─── Template Definitions ──────────────────────────────────────────────────────
 
 export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
@@ -121,8 +123,6 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     name: "Classic Academic",
     description: "University Press style — Chicago, Oxford, Cambridge",
     badge: "Chicago / Oxford",
-    pageSize: US_TRADE,
-    margins: { top: 72, bottom: 90, left: 72, right: 60 },
     runningHeaders: true,
     bodyFontSize: 11,
     bodyLineGap: 4,
@@ -165,8 +165,6 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     name: "Modern Business",
     description: "Portfolio / Penguin Business — Gladwell, Sinek style",
     badge: "Portfolio / Penguin",
-    pageSize: US_TRADE,
-    margins: { top: 72, bottom: 90, left: 72, right: 72 },
     runningHeaders: true,
     bodyFontSize: 11.5,
     bodyLineGap: 6,
@@ -209,8 +207,6 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     name: "Devotional",
     description: "Zondervan / Thomas Nelson — Warren, Meyer, Jakes style",
     badge: "Zondervan / Nelson",
-    pageSize: US_TRADE,
-    margins: { top: 72, bottom: 90, left: 68, right: 68 },
     runningHeaders: true,
     bodyFontSize: 12,
     bodyLineGap: 7,
@@ -253,8 +249,6 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     name: "Popular Nonfiction",
     description: "Hay House / Random House — Robbins, Brown, Coelho style",
     badge: "Hay House / Random House",
-    pageSize: US_TRADE,
-    margins: { top: 72, bottom: 90, left: 65, right: 65 },
     runningHeaders: true,
     bodyFontSize: 11.5,
     bodyLineGap: 5.5,
@@ -297,8 +291,6 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     name: "Premium Literary",
     description: "Knopf / Farrar Straus — understated, elegant, timeless",
     badge: "Knopf / Farrar Straus",
-    pageSize: US_TRADE,
-    margins: { top: 80, bottom: 100, left: 80, right: 65 },
     runningHeaders: true,
     bodyFontSize: 11,
     bodyLineGap: 4.5,
