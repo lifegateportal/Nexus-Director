@@ -206,6 +206,23 @@ AUTHOR BOOK CONFIGURATION (highest priority)
 The closing sentence is a door that swings open — not a trailer for what lies behind it.`
     : "";
 
+  // Chapter-final sections get an explicit hard stop at the chapter boundary.
+  // This is the #1 cause of cross-chapter content bleed: the transcript excerpt
+  // contains content that OPENS the next chapter, and the writer keeps going.
+  const chapterClosingBlock = assignment.isLastSectionInChapter && assignment.nextChapterTitle
+    ? `\n\nCHAPTER BOUNDARY — HARD STOP (CRITICAL):
+This is the FINAL section of Chapter ${assignment.chapterNumber}. The next chapter is titled "${assignment.nextChapterTitle}".
+
+The transcript excerpt provided to you WILL continue past the chapter boundary. The words belonging to Chapter ${assignment.chapterNumber + 1} are in the excerpt — you must identify where that transition happens and STOP WRITING before you reach it.
+
+HARD RULES for this section's close:
+• DO NOT introduce the opening argument, definition, or thesis of "${assignment.nextChapterTitle}".
+• DO NOT quote or paraphrase any scripture or story that will be used to open "${assignment.nextChapterTitle}".
+• DO NOT begin developing any concept, key point, or illustration that is not grounded in Chapter ${assignment.chapterNumber}'s own assigned key points.
+• The final sentence of this section must bring Chapter ${assignment.chapterNumber} to a natural close — a resolved statement, a challenge, or a final declaration rooted entirely in THIS chapter's own content.
+• If the transcript excerpt begins introducing the theme of "${assignment.nextChapterTitle}", stop before that line. Shorter is correct; bleed into the next chapter is a critical error.`
+    : "";
+
   const hookBlock = assignment.sectionNumber === 1
     ? `\nCHAPTER OPENER REQUIREMENT: This is the FIRST section of the chapter. The very first sentence must be a compelling hook — a bold provocative claim, a pointed question, or an immersive specific detail drawn directly from the transcript. Do not open with a general context-setting statement. Drop the reader immediately into the argument.`
     : "";
@@ -222,22 +239,24 @@ ${quoteBlock}
 ${continuityBlock}
 ${coveredBlock}
 ${nextSectionBlock}
+${chapterClosingBlock}
 ${hookBlock}
 
 TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
 
 SECTION SCOPE RULE — READ BEFORE WRITING:
-Your section is: "${assignment.heading}"${assignment.nextSectionHeading ? `\nThe NEXT section is: "${assignment.nextSectionHeading}"` : ""}
+Your section is: "${assignment.heading}"${assignment.nextSectionHeading ? `\nThe NEXT section is: "${assignment.nextSectionHeading}"` : ""}${assignment.isLastSectionInChapter && assignment.nextChapterTitle ? `\nThis is the LAST section of Chapter ${assignment.chapterNumber}. The next chapter is "${assignment.nextChapterTitle}". STOP before any content that opens that chapter.` : ""}
 Write ONLY content that belongs to THIS section's heading and key points. If any excerpt contains sentences that transition into or introduce the next section's topic, STOP before those sentences. Do not write them. A transcript boundary does not override a section boundary.
 
-CONTENT COVERAGE REQUIREMENT: Exhaust every distinct key point, story, illustration, and argument that belongs to THIS section's scope. Skip any excerpt content that clearly belongs to the next section. Write shorter rather than bleed forward.
+CONTENT COVERAGE REQUIREMENT: Exhaust every distinct key point, story, illustration, and argument that belongs to THIS section's scope. Skip any excerpt content that clearly belongs to the next section or next chapter. Write shorter rather than bleed forward.
 
 Return:
 - paragraphs: an array of strings where EACH ELEMENT IS ONE PARAGRAPH of polished prose. Every paragraph is a separate array item. Never put more than one paragraph in a single array element. Do not use \n or \n\n inside any element — each element is exactly one paragraph.
 - claimLedger: list of major claims and the excerpt numbers (1-based) that support each claim.
 
 Now write the section prose:`;
+
 
   const PlanSchema = z.object({
     paragraphPlan: z.array(z.object({
@@ -259,7 +278,7 @@ Now write the section prose:`;
   try {
     let paragraphPlan: z.infer<typeof PlanSchema>["paragraphPlan"] = [];
     const plannerDedup = (assignment.alreadyCoveredPoints ?? []).length > 0
-      ? `\n\n════════════════════════════════════════════\nALREADY COVERED — DO NOT PLAN THESE\n════════════════════════════════════════════\nThe following ideas, stories, and claims have already been written in earlier sections. Do NOT plan any paragraph that covers, references, or re-introduces them:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+      ? `\n\n════════════════════════════════════════════\nALREADY COVERED — HARD SKIP\n════════════════════════════════════════════\nThe following sections and ideas have already been written. Do NOT plan ANY paragraph that touches, references, or re-introduces them — not even one sentence. If an excerpt only contains already-covered content, plan zero paragraphs from it:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
       : "";
 
     try {
@@ -283,7 +302,7 @@ Each paragraph in your plan must have a clear narrative purpose and be supported
 
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}`,
-        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}${assignment.nextSectionHeading ? `\nNEXT SECTION (do NOT plan paragraphs about this): "${assignment.nextSectionHeading}"` : ""}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
+        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}${assignment.nextSectionHeading ? `\nNEXT SECTION (do NOT plan paragraphs about this): "${assignment.nextSectionHeading}"` : ""}${assignment.isLastSectionInChapter && assignment.nextChapterTitle ? `\nCHAPTER BOUNDARY: This is the LAST section of Chapter ${assignment.chapterNumber}. The next chapter is titled "${assignment.nextChapterTitle}". Do NOT plan any paragraph that introduces or develops content from that next chapter. If an excerpt transitions into the next chapter's opening topic, stop planning before that line.` : ""}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
       });
       paragraphPlan = plan.paragraphPlan ?? [];
     } catch {
@@ -298,7 +317,7 @@ ${READER_NORMALIZATION_RULES}`,
 
     const deduplicatedSystem =
       (assignment.alreadyCoveredPoints ?? []).length > 0
-        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — ABSOLUTE PROHIBITION\n════════════════════════════════════════════\nThe following ideas, claims, opening sentences, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST NOT re-introduce, re-explain, re-state, or re-develop ANY of them — even with different wording. If a transcript excerpt references these, acknowledge with at most one transitional phrase and move immediately to new material. Do not give them a paragraph, example, story, or dedicated treatment:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
         : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${alreadyQuotedBlock}`;
 
     const { object } = await generateObject({

@@ -99,6 +99,8 @@ export const SectionAssignmentSchema = z.object({
   targetWordCount: z.number(),
   alreadyCoveredPoints: z.array(z.string()).default([]), // key points covered in earlier sections — do NOT repeat
   alreadyQuotedRefs: z.array(z.string()).default([]),   // scripture/quote references already reproduced in full — reference only, do not quote again
+  isLastSectionInChapter: z.boolean().optional(),       // true when this section closes the chapter — enables hard chapter boundary enforcement
+  nextChapterTitle: z.string().optional(),              // title of the next chapter — writer must not begin developing its theme
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────

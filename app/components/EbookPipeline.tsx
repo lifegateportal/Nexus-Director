@@ -1966,9 +1966,14 @@ export function EbookPipeline({
 
       // Accumulate key points from already-completed sections so the writer
       // knows what's already been covered and won't repeat those concepts.
+      // Section headings are the single strongest signal — always register them first.
       const coveredKeyPoints: string[] = assignments
         .filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
-        .flatMap((a) => a.keyPoints ?? []);
+        .flatMap((a) => [
+          // Heading first — most concise description of what that section covers
+          `[Section covered] Ch ${a.chapterNumber} §${a.sectionNumber}: ${a.heading}`,
+          ...(a.keyPoints ?? []),
+        ]);
 
       // Track scripture/quote references already reproduced in full so later sections
       // reference rather than re-quote them.
@@ -1989,12 +1994,19 @@ export function EbookPipeline({
 
         const currentIdx = assignments.indexOf(assignment);
         const nextAssignment = assignments[currentIdx + 1];
+        const isLastSectionInChapter = nextAssignment
+          ? nextAssignment.chapterNumber !== assignment.chapterNumber
+          : true; // last section of the whole book is also a chapter-closer
         const augmented: SectionAssignment = {
           ...assignment,
           previousSectionEnding: previousEnding,
           nextSectionHeading: nextAssignment?.heading,
           alreadyCoveredPoints: [...coveredKeyPoints],
           alreadyQuotedRefs: [...usedQuoteRefs],
+          isLastSectionInChapter,
+          nextChapterTitle: isLastSectionInChapter && nextAssignment
+            ? nextAssignment.chapterTitle
+            : undefined,
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2049,10 +2061,16 @@ export function EbookPipeline({
           .map((p) => p.replace(/^[>\s#*\-]+/, "").split(/(?<=[.!?])\s+/)[0]?.trim())
           .filter((s): s is string => Boolean(s) && s.length > 20);
         coveredKeyPoints.push(
+          // Section heading — always the first and most authoritative signal
+          `[Section covered] Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${assignment.heading}`,
           ...(assignment.keyPoints ?? []),
           ...(claimLedger ?? []).map((c) => c.claim).filter(Boolean),
           ...allParagraphTopics,
         );
+        // Cap at 60 most-recent entries to prevent prompt token bloat across long books
+        if (coveredKeyPoints.length > 60) {
+          coveredKeyPoints.splice(0, coveredKeyPoints.length - 60);
+        }
         // Register every quote ref from this section so future sections reference-only
         for (const q of assignment.quotes ?? []) {
           if (q.reference) usedQuoteRefs.add(q.reference);
@@ -2391,7 +2409,7 @@ export function EbookPipeline({
         />
       )}
 
-      {/* Writing progress ring + word count (shown separately below tracker) */}
+      {/* Writing progress ring */}
       {stage === "writing" && progress.total > 0 && (
         <div className="flex items-center gap-4 px-1">
           <EbookProgressRing total={progress.total} completed={progress.completed} label="Sections" size={72} />
@@ -2401,41 +2419,18 @@ export function EbookPipeline({
           </div>
         </div>
       )}
-      {stage === "complete" && totalWords > 0 && (
-        <div className="flex items-center justify-between gap-3 px-1">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl font-bold text-cyan-400 tabular-nums">{totalWords.toLocaleString()}</span>
-            <span className="text-sm text-slate-400">words — ready for final review</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setStage("idle");
-              setChapters([]);
-              setLog([]);
-              logRef.current = [];
-              setExportUrls(null);
-              setCompletedManifest(null);
-              setTotalWords(0);
-              setProgress({ total: 0, completed: 0 });
-              jobIdRef.current = newJobId();
-              autoDownloadedRef.current = false;
-              localStorage.removeItem(JOB_STORAGE_KEY);
-              localStorage.removeItem(JOB_STATE_KEY);
-            }}
-            className="text-xs text-slate-500 underline min-h-[44px] px-2"
-          >
-            Start new project
-          </button>
-        </div>
-      )}
 
         {completedManifest && reviewContext && (
           <div className="rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-4 shadow-panel space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Final Review</p>
-                <p className="mt-1 text-sm text-slate-300">Edit chapter by chapter, then export the finished book when ready.</p>
+                <div className="mt-1 flex items-center gap-3 flex-wrap">
+                  {totalWords > 0 && (
+                    <span className="text-xl font-bold text-cyan-400 tabular-nums">{totalWords.toLocaleString()} <span className="text-sm font-normal text-slate-400">words</span></span>
+                  )}
+                  <p className="text-sm text-slate-300">Edit chapter by chapter, then export when ready.</p>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {/* Template picker */}
@@ -2582,6 +2577,50 @@ export function EbookPipeline({
                 )}
               </div>
             )}
+
+            {/* Chapter Cards — inside Final Review so everything is co-located */}
+            {chapters.length > 0 && (
+              <div className="border-t border-slate-700/40 pt-4 space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Chapters</p>
+                {chapters.map((ch) => (
+                  <ChapterCard
+                    key={ch.number}
+                    chapter={ch}
+                    editable
+                    onChange={(next) => {
+                      updateCompletedManifest((current) => ({
+                        ...current,
+                        chapters: current.chapters.map((chapter) => (chapter.number === next.number ? next : chapter)),
+                      }));
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Start new project */}
+            <div className="border-t border-slate-700/40 pt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setStage("idle");
+                  setChapters([]);
+                  setLog([]);
+                  logRef.current = [];
+                  setExportUrls(null);
+                  setCompletedManifest(null);
+                  setTotalWords(0);
+                  setProgress({ total: 0, completed: 0 });
+                  jobIdRef.current = newJobId();
+                  autoDownloadedRef.current = false;
+                  localStorage.removeItem(JOB_STORAGE_KEY);
+                  localStorage.removeItem(JOB_STATE_KEY);
+                }}
+                className="text-xs text-slate-500 underline min-h-[44px] px-2"
+              >
+                Start new project
+              </button>
+            </div>
           </div>
         )}
 
@@ -2732,23 +2771,17 @@ export function EbookPipeline({
         </div>
       )}
 
-      {/* Chapter Cards */}
-      {chapters.length > 0 && (
+      {/* Chapter Cards — live updates during writing (before manifest is ready) */}
+      {chapters.length > 0 && !completedManifest && (
         <div className="space-y-2">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest px-1">
-            {completedManifest ? "Review Chapters" : `Chapters (${chapters.length})`}
+            Chapters ({chapters.length})
           </p>
           {chapters.map((ch) => (
             <ChapterCard
               key={ch.number}
               chapter={ch}
-              editable={Boolean(completedManifest)}
-              onChange={(next) => {
-                updateCompletedManifest((current) => ({
-                  ...current,
-                  chapters: current.chapters.map((chapter) => (chapter.number === next.number ? next : chapter)),
-                }));
-              }}
+              editable={false}
             />
           ))}
         </div>
