@@ -6,12 +6,12 @@ import { PublishedCatalogSchema } from "@/lib/schemas/published-book";
 export const revalidate = 60;
 
 const ACCENT_HERO: Record<string, string> = {
-  amber:   "from-amber-950/80 via-slate-950/50 to-slate-950",
-  cyan:    "from-cyan-950/80 via-slate-950/50 to-slate-950",
-  emerald: "from-emerald-950/80 via-slate-950/50 to-slate-950",
-  rose:    "from-rose-950/80 via-slate-950/50 to-slate-950",
-  violet:  "from-violet-950/80 via-slate-950/50 to-slate-950",
-  slate:   "from-slate-800/80 via-slate-950/50 to-slate-950",
+  amber:   "from-amber-950/90 via-slate-950/60 to-slate-950",
+  cyan:    "from-cyan-950/90 via-slate-950/60 to-slate-950",
+  emerald: "from-emerald-950/90 via-slate-950/60 to-slate-950",
+  rose:    "from-rose-950/90 via-slate-950/60 to-slate-950",
+  violet:  "from-violet-950/90 via-slate-950/60 to-slate-950",
+  slate:   "from-slate-800/90 via-slate-950/60 to-slate-950",
 };
 
 const ACCENT_TEXT: Record<string, string> = {
@@ -35,6 +35,24 @@ const ACCENT_BORDER: Record<string, string> = {
   rose: "border-rose-500/30 text-rose-300 bg-rose-500/10",
   violet: "border-violet-500/30 text-violet-300 bg-violet-500/10",
   slate: "border-slate-500/30 text-slate-300 bg-slate-500/10",
+};
+
+const ACCENT_COVER_GRAD: Record<string, string> = {
+  amber:   "from-amber-950 via-amber-900 to-amber-800",
+  cyan:    "from-cyan-950 via-cyan-900 to-cyan-800",
+  emerald: "from-emerald-950 via-emerald-900 to-emerald-800",
+  rose:    "from-rose-950 via-rose-900 to-rose-800",
+  violet:  "from-violet-950 via-violet-900 to-violet-800",
+  slate:   "from-slate-900 via-slate-800 to-slate-700",
+};
+
+const ACCENT_AVATAR: Record<string, string> = {
+  amber:   "bg-amber-500/15 text-amber-300 ring-amber-500/30",
+  cyan:    "bg-cyan-500/15 text-cyan-300 ring-cyan-500/30",
+  emerald: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
+  rose:    "bg-rose-500/15 text-rose-300 ring-rose-500/30",
+  violet:  "bg-violet-500/15 text-violet-300 ring-violet-500/30",
+  slate:   "bg-slate-500/15 text-slate-300 ring-slate-500/30",
 };
 
 // ── Data fetchers ─────────────────────────────────────────────────────────────
@@ -84,19 +102,24 @@ export default async function BookLandingPage({
 
   if (!manifest) notFound();
 
-  const heroGrad   = ACCENT_HERO[accent]   ?? ACCENT_HERO.amber;
-  const accentText = ACCENT_TEXT[accent]   ?? ACCENT_TEXT.amber;
-  const accentBg   = ACCENT_BG[accent]     ?? ACCENT_BG.amber;
-  const accentBdr  = ACCENT_BORDER[accent] ?? ACCENT_BORDER.amber;
+  const heroGrad   = ACCENT_HERO[accent]       ?? ACCENT_HERO.amber;
+  const accentText = ACCENT_TEXT[accent]       ?? ACCENT_TEXT.amber;
+  const accentBg   = ACCENT_BG[accent]         ?? ACCENT_BG.amber;
+  const accentBdr  = ACCENT_BORDER[accent]     ?? ACCENT_BORDER.amber;
+  const coverGrad  = ACCENT_COVER_GRAD[accent] ?? ACCENT_COVER_GRAD.amber;
+  const avatarCls  = ACCENT_AVATAR[accent]     ?? ACCENT_AVATAR.amber;
   const totalMins  = Math.ceil(manifest.totalWordCount / 200);
+  const readTime   = totalMins >= 60 ? `~${Math.round(totalMins / 60)}h` : `~${totalMins} min`;
 
   return (
     <main className="min-h-dvh bg-slate-950">
-      {/* Hero gradient band */}
+
+      {/* ── Hero gradient band ─────────────────────────────────────────────── */}
       <div className={`bg-gradient-to-b ${heroGrad} pb-16 pt-0`}>
-        {/* Nav bar */}
-        <div className="mx-auto max-w-4xl px-5">
-          <div className="flex items-center justify-between py-5">
+        <div className="mx-auto max-w-6xl px-5">
+
+          {/* Nav */}
+          <div className="flex items-center py-5">
             <Link
               href="/library"
               className="flex min-h-10 items-center gap-1.5 text-sm font-medium text-slate-400 transition hover:text-slate-300"
@@ -108,61 +131,88 @@ export default async function BookLandingPage({
             </Link>
           </div>
 
-          {/* Book header */}
-          <div className="mx-auto max-w-2xl pt-6 text-center">
-            <p className={`mb-4 text-xs font-semibold uppercase tracking-[0.25em] ${accentText}`}>
-              {manifest.authorName}
-            </p>
-            <h1
-              className="mb-3 text-4xl font-bold leading-tight tracking-tight text-white sm:text-5xl"
-              style={{ fontFamily: "Georgia, serif" }}
-            >
-              {manifest.bookTitle}
-            </h1>
-            {manifest.subtitle && (
-              <p
-                className="mb-8 text-xl leading-relaxed text-slate-300"
-                style={{ fontFamily: "Georgia, serif" }}
-              >
-                {manifest.subtitle}
-              </p>
-            )}
+          {/* Two-column hero: cover mockup + text */}
+          <div className="flex flex-col items-center gap-10 pt-4 lg:flex-row lg:items-center lg:gap-16 lg:pt-8">
 
-            {/* Stats pills */}
-            <div className="mb-10 flex flex-wrap items-center justify-center gap-2.5">
-              <span className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${accentBdr}`}>
-                {manifest.chapters.length} chapters
-              </span>
-              <span className="rounded-full border border-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-400">
-                {manifest.totalWordCount.toLocaleString()} words
-              </span>
-              <span className="rounded-full border border-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-400">
-                ~{totalMins >= 60 ? `${Math.round(totalMins / 60)}h` : `${totalMins} min`} read
-              </span>
+            {/* Book cover mockup */}
+            <div className="w-44 shrink-0 lg:w-56">
+              <div
+                className={`relative h-64 w-full overflow-hidden rounded-2xl bg-gradient-to-br ${coverGrad} shadow-2xl ring-1 ring-white/10 lg:h-80`}
+              >
+                <div className="absolute inset-y-0 left-0 w-3 rounded-l-2xl bg-black/30" />
+                <div className="absolute inset-y-2 right-2 w-2 rounded-sm bg-white/[0.08]" />
+                <div className="absolute inset-y-3 right-5 w-1 rounded-sm bg-white/[0.04]" />
+                <div className="absolute inset-x-0 bottom-0 h-1/3 rounded-b-2xl bg-gradient-to-t from-black/60 to-transparent" />
+                <div className="absolute inset-0 flex flex-col items-center justify-center px-5 text-center">
+                  <p className="mb-3 text-[9px] font-semibold uppercase tracking-[0.28em] text-white/40">
+                    {manifest.authorName}
+                  </p>
+                  <h2
+                    className="text-sm font-bold leading-snug text-white/90"
+                    style={{ fontFamily: "Georgia, serif" }}
+                  >
+                    {manifest.bookTitle}
+                  </h2>
+                </div>
+              </div>
             </div>
 
-            <Link
-              href={`/library/${slug}/read`}
-              className={`inline-flex min-h-14 items-center rounded-2xl ${accentBg} px-12 text-base font-bold text-slate-950 shadow-xl transition active:scale-[0.97]`}
-            >
-              Start Reading
-            </Link>
+            {/* Title + meta + CTA */}
+            <div className="flex-1 text-center lg:text-left">
+              <p className={`mb-3 text-xs font-semibold uppercase tracking-[0.28em] ${accentText}`}>
+                {manifest.authorName}
+              </p>
+              <h1
+                className="mb-3 text-4xl font-bold leading-tight tracking-tight text-white lg:text-5xl"
+                style={{ fontFamily: "Georgia, serif" }}
+              >
+                {manifest.bookTitle}
+              </h1>
+              {manifest.subtitle && (
+                <p
+                  className="mb-7 text-lg leading-relaxed text-slate-300 lg:text-xl"
+                  style={{ fontFamily: "Georgia, serif" }}
+                >
+                  {manifest.subtitle}
+                </p>
+              )}
+
+              {/* Stats pills */}
+              <div className="mb-8 flex flex-wrap items-center justify-center gap-2.5 lg:justify-start">
+                <span className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${accentBdr}`}>
+                  {manifest.chapters.length} chapters
+                </span>
+                <span className="rounded-full border border-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-400">
+                  {manifest.totalWordCount.toLocaleString()} words
+                </span>
+                <span className="rounded-full border border-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-400">
+                  {readTime} read
+                </span>
+              </div>
+
+              <Link
+                href={`/library/${slug}/read`}
+                className={`inline-flex min-h-14 items-center rounded-2xl ${accentBg} px-12 text-base font-bold text-slate-950 shadow-xl transition active:scale-[0.97]`}
+              >
+                Start Reading
+              </Link>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Body content */}
-      <div className="mx-auto max-w-4xl px-5 py-12">
-        <div className="grid gap-10 lg:grid-cols-3">
+      {/* ── Body content ──────────────────────────────────────────────────────── */}
+      <div className="mx-auto max-w-6xl px-5 py-12">
+        <div className="grid gap-10 lg:grid-cols-[1fr_340px]">
 
-          {/* Left: intro + chapter list */}
-          <div className="lg:col-span-2 space-y-10">
+          {/* ── Left: intro + chapter list ──────────────────────────────────── */}
+          <div className="space-y-10">
+
             {manifest.frontMatter.introduction && (
               <section>
                 <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">Introduction</p>
-                <p className="text-base leading-relaxed text-slate-300" style={{ fontFamily: "Georgia, serif" }}>
-                  {manifest.frontMatter.introduction.replace(/#{1,3} /g, "").slice(0, 600)}
-                  {manifest.frontMatter.introduction.length > 600 ? "…" : ""}
+                <p className="text-base leading-[1.85] text-slate-300" style={{ fontFamily: "Georgia, serif" }}>
+                  {manifest.frontMatter.introduction.replace(/#{1,6} /g, "").trim()}
                 </p>
               </section>
             )}
@@ -197,43 +247,38 @@ export default async function BookLandingPage({
             </section>
           </div>
 
-          {/* Right sidebar */}
-          <div className="space-y-5">
-            {/* Book details card */}
-            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-5">
-              <p className="mb-4 text-[10px] font-bold uppercase tracking-widest text-slate-500">Book Details</p>
-              <dl className="space-y-2.5">
-                {[
-                  ["Author",   manifest.authorName],
-                  ["Chapters", String(manifest.chapters.length)],
-                  ["Words",    manifest.totalWordCount.toLocaleString()],
-                  ["Read time", totalMins >= 60 ? `~${Math.round(totalMins / 60)}h` : `~${totalMins} min`],
-                ].map(([label, val]) => (
-                  <div key={label} className="flex justify-between text-sm">
-                    <dt className="text-slate-500">{label}</dt>
-                    <dd className="font-medium text-slate-300">{val}</dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
+          {/* ── Right sidebar ───────────────────────────────────────────────── */}
+          <div className="space-y-5 lg:sticky lg:top-6 lg:self-start">
 
-            {/* About author */}
+            {/* Author bio card */}
             {manifest.frontMatter.aboutAuthor && (
               <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-5">
-                <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">About the Author</p>
+                <div className="mb-4 flex items-center gap-3">
+                  <div
+                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg font-bold ring-1 ${avatarCls}`}
+                  >
+                    {manifest.authorName.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-200">{manifest.authorName}</p>
+                    <p className="text-[10px] uppercase tracking-widest text-slate-500">Author</p>
+                  </div>
+                </div>
                 <p className="text-sm leading-relaxed text-slate-300">
-                  {manifest.frontMatter.aboutAuthor.slice(0, 280)}
-                  {manifest.frontMatter.aboutAuthor.length > 280 ? "…" : ""}
+                  {manifest.frontMatter.aboutAuthor}
                 </p>
               </div>
             )}
 
-            {/* Scripture index */}
+            {/* Scripture references */}
             {manifest.frontMatter.scriptureIndex.length > 0 && (
               <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-5">
-                <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">Scripture References</p>
+                <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                  Scripture References{" "}
+                  <span className="text-slate-600">({manifest.frontMatter.scriptureIndex.length})</span>
+                </p>
                 <div className="flex flex-wrap gap-1.5">
-                  {manifest.frontMatter.scriptureIndex.slice(0, 14).map((ref, i) => (
+                  {manifest.frontMatter.scriptureIndex.map((ref, i) => (
                     <span
                       key={i}
                       className="rounded-full border border-slate-700/50 px-2 py-0.5 text-xs text-slate-400"
@@ -241,15 +286,11 @@ export default async function BookLandingPage({
                       {ref}
                     </span>
                   ))}
-                  {manifest.frontMatter.scriptureIndex.length > 14 && (
-                    <span className="text-xs text-slate-600">
-                      +{manifest.frontMatter.scriptureIndex.length - 14} more
-                    </span>
-                  )}
                 </div>
               </div>
             )}
           </div>
+
         </div>
       </div>
     </main>

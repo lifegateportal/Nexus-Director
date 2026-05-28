@@ -1,14 +1,17 @@
 "use client";
 
-import type { ChapterDraft } from "@/lib/schemas/ebook";
-
 export type ReaderTheme = {
   bg: string; text: string; heading: string; muted: string; accent: string;
   border: string; chrome: string; chromeBorder: string;
 };
 
+export type TocItem = {
+  label: string;  // e.g. "Ch 1", "Preface", "Conclusion"
+  title: string;
+};
+
 type Props = {
-  chapters:     ChapterDraft[];
+  items:        TocItem[];
   currentIndex: number;
   open:         boolean;
   onClose:      () => void;
@@ -18,7 +21,7 @@ type Props = {
 };
 
 export function ChapterDrawer({
-  chapters, currentIndex, open, onClose, onSelect, t, fontFamily,
+  items, currentIndex, open, onClose, onSelect, t, fontFamily,
 }: Props) {
   return (
     <>
@@ -90,10 +93,10 @@ export function ChapterDrawer({
             margin:    0,
           }}
         >
-          {chapters.map((ch, i) => {
+          {items.map((item, i) => {
             const active = i === currentIndex;
             return (
-              <li key={ch.number}>
+              <li key={i}>
                 <button
                   onClick={() => onSelect(i)}
                   style={{
@@ -114,15 +117,16 @@ export function ChapterDrawer({
                   <span
                     style={{
                       flexShrink:  0,
-                      width:       "1.5rem",
-                      textAlign:   "center",
-                      fontSize:    "0.65rem",
+                      minWidth:    "2.5rem",
+                      textAlign:   "right",
+                      fontSize:    "0.62rem",
                       fontWeight:  700,
                       color:       active ? t.accent : t.muted,
                       fontFamily,
+                      letterSpacing: "0.04em",
                     }}
                   >
-                    {ch.number}
+                    {item.label}
                   </span>
                   <span
                     style={{
@@ -134,7 +138,7 @@ export function ChapterDrawer({
                       fontWeight: active ? 600 : 400,
                     }}
                   >
-                    {ch.title}
+                    {item.title}
                   </span>
                   {active && (
                     <span
