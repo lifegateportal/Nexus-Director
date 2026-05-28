@@ -12,41 +12,100 @@ interface Segment {
   text: string;
 }
 
+// ── 1. Text pre-processing — clean abbreviations, punctuation, noise ──────────
+
+function sanitizeForSpeech(text: string): string {
+  return text
+    // common abbreviations → full words (prevents "e dot g dot" robot reading)
+    .replace(/\be\.g\./gi,   "for example")
+    .replace(/\bi\.e\./gi,   "that is")
+    .replace(/\betc\./gi,    "and so on")
+    .replace(/\bvs\./gi,     "versus")
+    .replace(/\bDr\./g,      "Doctor")
+    .replace(/\bMr\./g,      "Mister")
+    .replace(/\bMrs\./g,     "Missus")
+    .replace(/\bMs\./g,      "Miss")
+    .replace(/\bProf\./g,    "Professor")
+    .replace(/\bSt\./g,      "Saint")
+    // em-dash → comma pause (natural breathing)
+    .replace(/\s*—\s*/g,     ", ")
+    // ellipsis → sentence pause
+    .replace(/…/g,           ". ")
+    .replace(/\.\.\./g,      ". ")
+    // backtick code → plain text
+    .replace(/`([^`]+)`/g,   "$1")
+    // URLs → silence
+    .replace(/https?:\/\/\S+/g, "")
+    // numeric citations [1], [2], footnote refs
+    .replace(/\[\d+\]/g,     "")
+    .replace(/\[citation[^\]]*\]/gi, "")
+    // page refs like (pg. 12) or (p. 3)
+    .replace(/\(p(?:g)?\.?\s*\d+\)/gi, "")
+    // strip remaining markdown bold/italic
+    .replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g,     "$1")
+    .replace(/\*([^*]+)\*/g,          "$1")
+    .trim();
+}
+
+// ── 2. Sentence-level splitting — each sentence = one utterance ───────────────
+//    Resets charIndex per sentence → more accurate word-boundary tracking.
+
+function splitSentences(text: string): string[] {
+  // Split after . ! ? when followed by whitespace + capital letter or quote
+  const parts = text.split(/(?<=[.!?])\s+(?=[A-Z"'\u201C\u2018])/);
+  return parts.map(s => s.trim()).filter(Boolean);
+}
+
 // ── Parse chapter into typed segments ─────────────────────────────────────────
 
 function parseChapter(chapter: ChapterDraft): Segment[] {
   const segs: Segment[] = [];
 
-  const strip = (s: string) =>
+  const stripMd = (s: string) =>
     s.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
      .replace(/\*\*([^*]+)\*\*/g, "$1")
      .replace(/\*([^*]+)\*/g, "$1")
      .trim();
+
+  const pushSentences = (type: SegmentType, raw: string) => {
+    const clean = sanitizeForSpeech(stripMd(raw));
+    if (!clean) return;
+    // headings and chapter-titles are already short — no sentence split needed
+    if (type === "heading" || type === "chapter-title") {
+      segs.push({ type, text: clean });
+    } else {
+      for (const sentence of splitSentences(clean)) {
+        if (sentence.trim()) segs.push({ type, text: sentence.trim() });
+      }
+    }
+  };
 
   const processBody = (text: string) => {
     for (const raw of text.split("\n")) {
       const line = raw.trim();
       if (!line || /^---+$/.test(line)) continue;
       if (/^#{1,3} /.test(line)) {
-        segs.push({ type: "heading", text: strip(line.replace(/^#{1,3} /, "")) });
+        pushSentences("heading", line.replace(/^#{1,3} /, ""));
       } else if (/^> /.test(line)) {
-        segs.push({ type: "quote",   text: strip(line.slice(2)) });
+        pushSentences("quote", line.slice(2));
       } else if (/^[*-] /.test(line)) {
-        segs.push({ type: "body",    text: strip(line.slice(2)) });
+        pushSentences("body", line.slice(2));
       } else if (/^\d+\. /.test(line)) {
-        segs.push({ type: "body",    text: strip(line.replace(/^\d+\. /, "")) });
+        pushSentences("body", line.replace(/^\d+\. /, ""));
       } else {
-        segs.push({ type: "body",    text: strip(line) });
+        pushSentences("body", line);
       }
     }
   };
 
-  segs.push({ type: "chapter-title", text: `Chapter ${chapter.number}. ${chapter.title}.` });
-  if (chapter.epigraph)    segs.push({ type: "quote", text: strip(chapter.epigraph) });
-  if (chapter.premiseLine) segs.push({ type: "body",  text: strip(chapter.premiseLine) });
+  // Chapter title gets a lead-in breath (pauseBeforeMs handled in speakSegment)
+  pushSentences("chapter-title", `Chapter ${chapter.number}. ${chapter.title}.`);
+  if (chapter.epigraph)    pushSentences("quote", chapter.epigraph);
+  if (chapter.premiseLine) pushSentences("body",  chapter.premiseLine);
 
   for (const section of chapter.sections) {
-    if (section.heading) segs.push({ type: "heading", text: strip(section.heading) });
+    if (section.heading) pushSentences("heading", section.heading);
     processBody(section.body);
   }
   if (chapter.conclusion) processBody(chapter.conclusion);
@@ -54,28 +113,46 @@ function parseChapter(chapter: ChapterDraft): Segment[] {
   return segs.filter(s => s.text.length > 0);
 }
 
-// ── Voice selection — prefers premium/neural voices ──────────────────────────
+// ── 5. Voice selection — prefers enhanced/neural voices ──────────────────────
 
 function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
-  const preferred = [
-    "Samantha", "Karen", "Moira", "Daniel",
-    "Microsoft Aria Online", "Microsoft Jenny Online",
+  // Exact-match priority: Enhanced/neural macOS voices first, then Online (Windows neural)
+  const preferredNames = [
+    "Samantha (Enhanced)", "Samantha",
+    "Karen (Enhanced)",    "Karen",
+    "Alex",
+    "Victoria",
+    "Fiona",
+    "Moira",
+    "Daniel",
+    "Microsoft Aria Online (Natural)", "Microsoft Aria Online",
+    "Microsoft Jenny Online (Natural)", "Microsoft Jenny Online",
+    "Microsoft Aria",  "Microsoft Jenny",
     "Google US English",
   ];
-  for (const name of preferred) {
-    const v = voices.find(v => v.name.includes(name) && v.lang.startsWith("en"));
+  for (const name of preferredNames) {
+    const v = voices.find(v => v.name === name && v.lang.startsWith("en"));
     if (v) return v;
   }
+  // Fallback: any "Online" voice (Windows neural) → any en-US
+  const online = voices.find(v => v.name.includes("Online") && v.lang.startsWith("en"));
+  if (online) return online;
   return voices.find(v => v.lang === "en-US" || v.lang === "en_US") ?? voices[0] ?? null;
 }
 
-// ── Voice treatment per segment type ─────────────────────────────────────────
+// ── 3 & 4. Voice treatment — volume, pitch, rate, lead-in + post pause ───────
 
-const VOICE_TREATMENT: Record<SegmentType, { pitch: number; rate: number; pauseAfterMs: number }> = {
-  "chapter-title": { pitch: 1.10, rate: 0.78, pauseAfterMs: 700 },
-  "heading":       { pitch: 1.06, rate: 0.82, pauseAfterMs: 500 },
-  "quote":         { pitch: 0.91, rate: 0.76, pauseAfterMs: 300 },
-  "body":          { pitch: 1.00, rate: 1.00, pauseAfterMs:  80 },
+const VOICE_TREATMENT: Record<SegmentType, {
+  pitch:        number;
+  rate:         number;
+  volume:       number;
+  pauseBeforeMs: number;
+  pauseAfterMs:  number;
+}> = {
+  "chapter-title": { pitch: 1.10, rate: 0.78, volume: 1.00, pauseBeforeMs: 600, pauseAfterMs: 700 },
+  "heading":       { pitch: 1.06, rate: 0.82, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 500 },
+  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.82, pauseBeforeMs:   0, pauseAfterMs: 300 },
+  "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs:  80 },
 };
 
 const RATES = [0.75, 1.0, 1.25, 1.5, 2.0] as const;
@@ -139,34 +216,47 @@ export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
     }
     const seg       = segs[idx];
     const treatment = VOICE_TREATMENT[seg.type];
-    const userRate  = RATES[rateIdxRef.current];
-    const voice     = pickVoice(voicesRef.current);
 
-    segIdxRef.current = idx;
-    setCurrentSeg(seg);
-    setCurrentWord(-1);
-
-    const utt   = new SpeechSynthesisUtterance(seg.text);
-    utt.rate    = treatment.rate * userRate;
-    utt.pitch   = treatment.pitch;
-    utt.lang    = "en-US";
-    if (voice) utt.voice = voice;
-
-    utt.onboundary = (e) => {
-      if (e.name !== "word") return;
-      const wordIdx = (seg.text.slice(0, e.charIndex).match(/\S+/g) ?? []).length;
-      setCurrentWord(wordIdx);
-    };
-    utt.onend = () => {
+    const doSpeak = () => {
       if (stoppedRef.current) return;
-      setTimeout(() => speakSegment(idx + 1), treatment.pauseAfterMs);
-    };
-    utt.onerror = (e) => {
-      if (e.error === "interrupted" || e.error === "canceled") return;
-      setTimeout(() => speakSegment(idx + 1), 50);
+      const userRate = RATES[rateIdxRef.current];
+      const voice    = pickVoice(voicesRef.current);
+
+      segIdxRef.current = idx;
+      setCurrentSeg(seg);
+      setCurrentWord(-1);
+
+      const utt    = new SpeechSynthesisUtterance(seg.text);
+      utt.rate     = treatment.rate * userRate;
+      utt.pitch    = treatment.pitch;
+      utt.volume   = treatment.volume;   // 3. volume variation per type
+      utt.lang     = "en-US";
+      if (voice) utt.voice = voice;
+
+      utt.onboundary = (e) => {
+        if (e.name !== "word") return;
+        // sentence-level split keeps charIndex small → more accurate highlight
+        const wordIdx = (seg.text.slice(0, e.charIndex).match(/\S+/g) ?? []).length;
+        setCurrentWord(wordIdx);
+      };
+      utt.onend = () => {
+        if (stoppedRef.current) return;
+        setTimeout(() => speakSegment(idx + 1), treatment.pauseAfterMs);
+      };
+      utt.onerror = (e) => {
+        if (e.error === "interrupted" || e.error === "canceled") return;
+        setTimeout(() => speakSegment(idx + 1), 50);
+      };
+
+      window.speechSynthesis.speak(utt);
     };
 
-    window.speechSynthesis.speak(utt);
+    // 4. Lead-in silence (chapter title gets a 600ms breath before speaking)
+    if (treatment.pauseBeforeMs > 0) {
+      setTimeout(doSpeak, treatment.pauseBeforeMs);
+    } else {
+      doSpeak();
+    }
   }, []);
 
   const play = useCallback((fromIdx = 0) => {

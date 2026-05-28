@@ -14,8 +14,8 @@ import { ChapterDrawer } from "./ChapterDrawer";
 import { ReaderSettingsPanel } from "./ReaderSettings";
 import { ProgressBar } from "./ProgressBar";
 import { AudioReader } from "./AudioReader";
-import { AnnotationsPanel, saveAnnotation } from "./AnnotationsPanel";
-import type { AnnotationColor } from "./AnnotationsPanel";
+import { AnnotationsPanel, saveAnnotation, loadAnnotations, ANNO_COLOR_MAP } from "./AnnotationsPanel";
+import type { AnnotationColor, Annotation } from "./AnnotationsPanel";
 
 // ── Reader theme palette ──────────────────────────────────────────────────────
 
@@ -94,10 +94,82 @@ function InlineText({ text }: { text: string }) {
   );
 }
 
+// ── Annotation highlight renderer ───────────────────────────────────────────
+// Matches annotation selectedText (plain) inside a raw markdown line,
+// wraps matched spans in <mark> with the annotation colour.
+
+function HighlightedLine({
+  text,
+  annotations,
+}: {
+  text: string;
+  annotations: { selectedText: string; color: AnnotationColor }[];
+}) {
+  // Derive plain text by stripping inline markdown
+  const plain = text
+    .replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1");
+
+  type Range = { start: number; end: number; color: AnnotationColor };
+  const ranges: Range[] = [];
+  for (const anno of annotations) {
+    if (!anno.selectedText || anno.selectedText.length < 3) continue;
+    let idx = plain.indexOf(anno.selectedText);
+    while (idx !== -1) {
+      ranges.push({ start: idx, end: idx + anno.selectedText.length, color: anno.color });
+      idx = plain.indexOf(anno.selectedText, idx + anno.selectedText.length);
+    }
+  }
+
+  if (ranges.length === 0) return <InlineText text={text} />;
+
+  // Sort and remove overlaps (keep first match's colour)
+  ranges.sort((a, b) => a.start - b.start);
+  const merged: Range[] = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r.start < last.end) {
+      last.end = Math.max(last.end, r.end);
+    } else {
+      merged.push({ ...r });
+    }
+  }
+
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const range of merged) {
+    if (range.start > cursor) {
+      nodes.push(<InlineText key={`t-${cursor}`} text={plain.slice(cursor, range.start)} />);
+    }
+    nodes.push(
+      <mark
+        key={`h-${range.start}`}
+        style={{
+          background: ANNO_COLOR_MAP[range.color].bg,
+          color: "inherit",
+          borderRadius: "0.15em",
+          padding: "0.1em 0",
+          boxDecorationBreak: "clone",
+          WebkitBoxDecorationBreak: "clone",
+        } as React.CSSProperties}
+      >
+        <InlineText text={plain.slice(range.start, range.end)} />
+      </mark>,
+    );
+    cursor = range.end;
+  }
+  if (cursor < plain.length) {
+    nodes.push(<InlineText key={`t-${cursor}`} text={plain.slice(cursor)} />);
+  }
+  return <>{nodes}</>;
+}
+
 function renderBody(
   text: string,
   theme: Theme,
   isFirstSection: boolean,
+  annotations: { selectedText: string; color: AnnotationColor }[] = [],
 ): React.ReactNode[] {
   const lines = text.split("\n");
   const nodes: React.ReactNode[] = [];
@@ -109,10 +181,10 @@ function renderBody(
     const line = raw.trim();
     if (!line) { i++; continue; }
 
-    // H1 / H2 / H3
+    // H1 / H2 / H3 — breakInside/breakAfter prevent orphaned headings at column boundary
     if (/^### /.test(line)) {
       nodes.push(
-        <h3 key={i} style={{ color: theme.muted, fontSize: "0.68em", letterSpacing: "0.16em", textTransform: "uppercase" as const, marginTop: "2.5em", marginBottom: "0.5em", fontWeight: 700 }}>
+        <h3 key={i} style={{ color: theme.muted, fontSize: "0.68em", letterSpacing: "0.16em", textTransform: "uppercase" as const, marginTop: "2.5em", marginBottom: "0.5em", fontWeight: 700, breakInside: "avoid", breakAfter: "avoid" } as React.CSSProperties}>
           <InlineText text={line.slice(4)} />
         </h3>,
       );
@@ -120,7 +192,7 @@ function renderBody(
     }
     if (/^## /.test(line)) {
       nodes.push(
-        <h2 key={i} style={{ color: theme.heading, fontSize: "1.15em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", letterSpacing: "-0.01em" }}>
+        <h2 key={i} style={{ color: theme.heading, fontSize: "1.15em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", letterSpacing: "-0.01em", breakInside: "avoid", breakAfter: "avoid" } as React.CSSProperties}>
           <InlineText text={line.slice(3)} />
         </h2>,
       );
@@ -128,7 +200,7 @@ function renderBody(
     }
     if (/^# /.test(line)) {
       nodes.push(
-        <h2 key={i} style={{ color: theme.heading, fontSize: "1.25em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em" }}>
+        <h2 key={i} style={{ color: theme.heading, fontSize: "1.25em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", breakInside: "avoid", breakAfter: "avoid" } as React.CSSProperties}>
           <InlineText text={line.slice(2)} />
         </h2>,
       );
@@ -163,11 +235,12 @@ function renderBody(
             color:         theme.muted,
             fontSize:      "0.97em",
             lineHeight:    1.75,
-          }}
+            breakInside:   "avoid",  // prevent quote from splitting across pages
+          } as React.CSSProperties}
         >
           {qLines.map((ql, qi) => (
             <p key={qi} style={{ marginBottom: qi < qLines.length - 1 ? "0.4em" : 0 }}>
-              <InlineText text={ql} />
+              <HighlightedLine text={ql} annotations={annotations} />
             </p>
           ))}
         </blockquote>,
@@ -187,7 +260,7 @@ function renderBody(
         <ul key={`ul-${s}`} style={{ paddingLeft: "1.5em", margin: "1em 0", color: theme.text }}>
           {items.map((item, ii) => (
             <li key={ii} style={{ marginBottom: "0.4em", lineHeight: 1.7 }}>
-              <InlineText text={item} />
+              <HighlightedLine text={item} annotations={annotations} />
             </li>
           ))}
         </ul>,
@@ -207,7 +280,7 @@ function renderBody(
         <ol key={`ol-${s}`} style={{ paddingLeft: "1.5em", margin: "1em 0", color: theme.text }}>
           {items.map((item, ii) => (
             <li key={ii} style={{ marginBottom: "0.4em", lineHeight: 1.7 }}>
-              <InlineText text={item} />
+              <HighlightedLine text={item} annotations={annotations} />
             </li>
           ))}
         </ol>,
@@ -245,10 +318,10 @@ function renderBody(
             >
               {line.charAt(0)}
             </span>
-            <InlineText text={line.slice(1)} />
+            <HighlightedLine text={line.slice(1)} annotations={annotations} />
           </>
         ) : (
-          <InlineText text={line} />
+          <HighlightedLine text={line} annotations={annotations} />
         )}
       </p>,
     );
@@ -261,13 +334,14 @@ function renderBody(
 // ── Chapter content component ─────────────────────────────────────────────────
 
 function ChapterView({
-  chapter, theme, fontFamily, fontSize, lineHeight,
+  chapter, theme, fontFamily, fontSize, lineHeight, annotations,
 }: {
-  chapter: ChapterDraft;
-  theme: Theme;
-  fontFamily: string;
-  fontSize: number;
-  lineHeight: number;
+  chapter:     ChapterDraft;
+  theme:       Theme;
+  fontFamily:  string;
+  fontSize:    number;
+  lineHeight:  number;
+  annotations: { selectedText: string; color: AnnotationColor }[];
 }) {
   const [showExtras, setShowExtras] = useState(false);
 
@@ -349,7 +423,7 @@ function ChapterView({
               {section.heading}
             </h2>
           )}
-          <div>{renderBody(section.body, theme, idx === 0)}</div>
+          <div>{renderBody(section.body, theme, idx === 0, annotations)}</div>
         </section>
       ))}
 
@@ -359,7 +433,7 @@ function ChapterView({
           <div style={{ textAlign: "center", margin: "2.5em 0", color: theme.accent, letterSpacing: "0.5em", fontSize: "0.85em" }}>
             ✦ ✦ ✦
           </div>
-          {renderBody(chapter.conclusion, theme, false)}
+          {renderBody(chapter.conclusion, theme, false, annotations)}
         </section>
       )}
 
@@ -561,6 +635,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [selection,      setSelection]      = useState<{ text: string; rect: DOMRect } | null>(null);
   const [annoColor,      setAnnoColor]      = useState<AnnotationColor>("amber");
   const [annoNote,       setAnnoNote]       = useState("");
+  // Inline highlights — reloaded whenever chapter or slug changes
+  const [annotations,    setAnnotations]    = useState<Pick<Annotation, "selectedText" | "color">[]>([]);
 
   const containerRef    = useRef<HTMLDivElement>(null);
   const columnTrackRef  = useRef<HTMLDivElement>(null);
@@ -578,6 +654,17 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const settingsOpenRef = useRef(settingsOpen);
   useEffect(() => { tocOpenRef.current      = tocOpen;      }, [tocOpen]);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
+
+  // ── Reload annotation highlights when chapter / slug changes ─────────────
+  const reloadAnnotations = useCallback(() => {
+    setAnnotations(
+      loadAnnotations(slug)
+        .filter((a) => a.chapterIndex === chapterIndex)
+        .map(({ selectedText, color }) => ({ selectedText, color })),
+    );
+  }, [slug, chapterIndex]);
+  useEffect(() => { reloadAnnotations(); }, [reloadAnnotations]);
+
   // ── Lock page scroll while reader is mounted (prevents iOS rubber-band pan) ─
   useEffect(() => {
     const prev = document.documentElement.style.overflow;
@@ -976,6 +1063,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
                 fontFamily={fontFamily}
                 fontSize={fontSize}
                 lineHeight={lineHeight}
+                annotations={annotations}
               />
             )}
             {/* Sentinel: measures how many columns content spans */}
@@ -1094,6 +1182,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
               color:        annoColor,
               createdAt:    Date.now(),
             });
+            reloadAnnotations(); // refresh inline highlights immediately
             setSelection(null);
             setAnnoNote("");
             window.getSelection()?.removeAllRanges();
