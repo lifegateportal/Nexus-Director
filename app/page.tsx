@@ -31,7 +31,7 @@ import {
   generateProjectId,
 } from "@/lib/project-store";
 import type { ProjectSnapshot, ChatMessage } from "@/lib/project-store";
-import { listEbookProjects, deleteEbookProject } from "@/lib/ebook-project-store";
+import { listEbookProjects, saveEbookProject, deleteEbookProject } from "@/lib/ebook-project-store";
 
 const INITIAL_MODELS: ModelState[] = [
   { name: "Gemini",   handle: "gemini",   role: "Analyst",           status: "standby" },
@@ -94,6 +94,7 @@ export default function HomePage() {
               uiResult: null,
               ebookManifest: null,
               ebookJobState: ep.jobState,
+              publishedSlug: ep.publishedSlug,
             }));
         } catch { /* ignore */ }
         setProjects([...main, ...ebook]);
@@ -251,24 +252,29 @@ export default function HomePage() {
       addLog({ level: "error", message: "No ebook content found — run the ebook pipeline first." });
       return null;
     }
-    const body = manifest
-      ? { manifest, coverAccent: "amber" }
+    // Always prefer job.chapters (fresher — includes premiseLine, latest edits) over manifest.chapters.
+    // Never filter by status: a chapter that finished writing but isn't "complete" would be silently dropped.
+    const jobChapters = job?.chapters?.length ? job.chapters : undefined;
+    const publishManifest = manifest
+      ? {
+          ...manifest,
+          chapters: jobChapters ?? manifest.chapters,
+          frontMatter: job?.frontMatter ?? manifest.frontMatter,
+        }
       : {
-          manifest: {
-            jobId:         job!.jobId,
-            bookTitle:     job!.architecture!.bookTitle,
-            subtitle:      job!.architecture!.subtitle,
-            authorName:    job!.architecture!.authorName,
-            frontMatter:   job!.frontMatter,
-            chapters:      job!.chapters ?? [],
-            totalWordCount: (job!.chapters ?? []).reduce((s: number, c: { totalWordCount?: number }) => s + (c.totalWordCount ?? 0), 0),
-            allQuotes:     job!.contentMap?.allQuotes ?? [],
-            generatedAt:   job!.updatedAt ?? new Date().toISOString(),
-            selectedTemplate: "devotional",
-            printSpec:     { trimSize: "6x9", runningHeaders: true },
-          },
-          coverAccent: "amber",
+          jobId:         job!.jobId,
+          bookTitle:     job!.architecture!.bookTitle,
+          subtitle:      job!.architecture!.subtitle,
+          authorName:    job!.architecture!.authorName,
+          frontMatter:   job!.frontMatter,
+          chapters:      job!.chapters ?? [],
+          totalWordCount: (job!.chapters ?? []).reduce((s: number, c: { totalWordCount?: number }) => s + (c.totalWordCount ?? 0), 0),
+          allQuotes:     job!.contentMap?.allQuotes ?? [],
+          generatedAt:   job!.updatedAt ?? new Date().toISOString(),
+          selectedTemplate: "devotional",
+          printSpec:     { trimSize: "6x9", runningHeaders: true },
         };
+    const body = { manifest: publishManifest, coverAccent: "amber" };
     try {
       const res = await fetch("/api/ebook/publish", {
         method:  "POST",
@@ -282,7 +288,20 @@ export default function HomePage() {
       }
       const { slug } = await res.json() as { slug: string };
       await saveProject({ ...snapshot, publishedSlug: slug });
-      setProjects(await listProjects());
+      // Also update the ebook store so /ebook panel shows View in Library / Republish
+      const ebookProjects = await listEbookProjects().catch(() => []);
+      const ep = ebookProjects.find((e) => e.id === snapshot.id);
+      if (ep) await saveEbookProject({ ...ep, publishedSlug: slug }).catch(() => {});
+      // Reload merged project list
+      const freshMain = await listProjects();
+      const freshMainIds = new Set(freshMain.map((p) => p.id));
+      const freshEbook = (await listEbookProjects().catch(() => [])).filter((e) => !freshMainIds.has(e.id)).map((e) => ({
+        id: e.id, name: e.name, createdAt: e.createdAt, updatedAt: e.updatedAt,
+        academy: null, siteConfig: SiteConfigSchema.parse({}), deliveryInstructions: "",
+        chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
+        ebookManifest: null, ebookJobState: e.jobState, publishedSlug: e.publishedSlug,
+      }));
+      setProjects([...freshMain, ...freshEbook]);
       addLog({ level: "success", message: `Published to /library/${slug}` });
       return slug;
     } catch (err) {

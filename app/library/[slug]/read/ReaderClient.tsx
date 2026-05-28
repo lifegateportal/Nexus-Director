@@ -11,6 +11,7 @@ import {
 } from "@/lib/reader-store";
 import type { ReaderSettings } from "@/lib/reader-store";
 import { ChapterDrawer } from "./ChapterDrawer";
+import type { TocItem } from "./ChapterDrawer";
 import { ReaderSettingsPanel } from "./ReaderSettings";
 import { ProgressBar } from "./ProgressBar";
 import { AudioReader } from "./AudioReader";
@@ -294,12 +295,13 @@ function renderBody(
       continue;
     }
 
-    // Scripture paragraph — line starts with a Bible reference (e.g. "Colossians 1:12–14
-    // puts it this way: "..."") or contains an inline italic citation (*"verse"* (Ref)).
-    // Render with the same blockquote scripture styling so it's visually distinct.
+    // Scripture block: ONLY when the ENTIRE line is a quoted scripture text + citation.
+    // e.g.  "The Lord is my shepherd" (Psalm 23:1, NIV)
+    // e.g.  *"For God so loved the world"* (John 3:16)
+    // Author narrative paragraphs that START with a Bible reference but continue with
+    // the author's own words ("Isaiah 61:10 names two kinds...") are NOT scripture blocks.
     const isInlineScripture =
-      BIBLE_REF_START.test(line) ||
-      /\*"[^"]+"?\*\s*\([^)]+\d+:\d+[^)]*\)/.test(line);
+      /^(?:\*{1,3}"[^"]{1,600}"\*{0,3}|\u201c[^\u201d]{1,600}\u201d|"[^"]{1,600}")\s*\([^)]+\d+:\d+[^)]*\)\s*$/.test(line);
 
     if (isInlineScripture) {
       nodes.push(
@@ -529,6 +531,71 @@ function ChapterView({
           )}
         </div>
       )}
+    </article>
+  );
+}
+
+// ── Front / back matter section view ─────────────────────────────────────────
+
+function FrontMatterView({
+  title, body, theme, fontFamily, fontSize, lineHeight, annotations,
+}: {
+  title:       string;
+  body:        string;
+  theme:       Theme;
+  fontFamily:  string;
+  fontSize:    number;
+  lineHeight:  number;
+  annotations: { selectedText: string; color: AnnotationColor }[];
+}) {
+  const baseStyle: React.CSSProperties = { fontFamily, fontSize: `${fontSize}px`, lineHeight, color: theme.text };
+  return (
+    <article style={baseStyle}>
+      <header style={{ textAlign: "center", marginBottom: "3.5em" }}>
+        <h1
+          style={{
+            fontSize: "1.9em", fontWeight: 700, color: theme.heading,
+            lineHeight: 1.2, letterSpacing: "-0.02em", marginBottom: "0.5em",
+            fontFamily: "Georgia, serif",
+          }}
+        >
+          {title}
+        </h1>
+        <div style={{ width: "2.5em", height: "2px", background: theme.accent, margin: "1em auto 0", borderRadius: "1px" }} />
+      </header>
+      {renderBody(body, theme, true, annotations)}
+    </article>
+  );
+}
+
+// ── Copyright page view ───────────────────────────────────────────────────────
+
+function CopyrightView({
+  bookTitle, authorName, year, theme, fontFamily, fontSize, lineHeight,
+}: {
+  bookTitle:  string;
+  authorName: string;
+  year:       string;
+  theme:      Theme;
+  fontFamily: string;
+  fontSize:   number;
+  lineHeight: number;
+}) {
+  return (
+    <article style={{ fontFamily, fontSize: `${fontSize}px`, lineHeight, color: theme.text, display: "flex", flexDirection: "column", justifyContent: "flex-end", minHeight: "60vh" }}>
+      <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: "2em" }}>
+        <p style={{ fontFamily: "Georgia, serif", fontWeight: 700, fontSize: "1em", color: theme.heading, marginBottom: "0.5em" }}>{bookTitle}</p>
+        <p style={{ fontSize: "0.85em", color: theme.muted, marginBottom: "1.5em" }}>Copyright © {year} {authorName}</p>
+        <p style={{ fontSize: "0.78em", color: theme.muted, lineHeight: 1.75, marginBottom: "0.75em" }}>
+          All rights reserved. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means — including photocopying, recording, or other electronic or mechanical methods — without the prior written permission of the author.
+        </p>
+        <p style={{ fontSize: "0.78em", color: theme.muted, lineHeight: 1.75, marginBottom: "0.75em" }}>
+          Scripture quotations are taken from various Bible translations as noted in the text.
+        </p>
+        <p style={{ fontSize: "0.72em", color: theme.muted, marginTop: "2em", letterSpacing: "0.08em" }}>
+          Published via Nexus Director
+        </p>
+      </div>
     </article>
   );
 }
@@ -763,15 +830,38 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
   }, [chapterIndex, containerW, containerH, settings]);
 
+  // ── Build virtual section list (copyright → preface → intro → chapters → conclusion → about) ──
+  type VirtualSection =
+    | { kind: "copyright" }
+    | { kind: "frontmatter"; key: "preface" | "introduction" | "conclusion"; title: string; body: string }
+    | { kind: "chapter"; chapter: ChapterDraft }
+    | { kind: "about"; body: string };
+
+  const virtualSections: VirtualSection[] = [];
+  virtualSections.push({ kind: "copyright" });
+  if (manifest.frontMatter.preface?.trim())
+    virtualSections.push({ kind: "frontmatter", key: "preface", title: "Preface", body: manifest.frontMatter.preface });
+  if (manifest.frontMatter.introduction?.trim())
+    virtualSections.push({ kind: "frontmatter", key: "introduction", title: "Introduction", body: manifest.frontMatter.introduction });
+  for (const ch of manifest.chapters)
+    virtualSections.push({ kind: "chapter", chapter: ch });
+  if (manifest.frontMatter.conclusion?.trim())
+    virtualSections.push({ kind: "frontmatter", key: "conclusion", title: "Conclusion", body: manifest.frontMatter.conclusion });
+  if (manifest.frontMatter.aboutAuthor?.trim())
+    virtualSections.push({ kind: "about", body: manifest.frontMatter.aboutAuthor });
+
+  const totalSections = virtualSections.length;
+  const currentSection = virtualSections[chapterIndex] ?? virtualSections[0];
+
   // ── Restore settings + position ──────────────────────────────────────────
   useEffect(() => {
     const saved = getReaderSettings();
     setSettings(saved);
     if (initialChapter === undefined) {
       const pos = getReadingPosition(slug);
-      if (pos) setChapterIndex(Math.min(pos.chapterIndex, manifest.chapters.length - 1));
+      if (pos) setChapterIndex(Math.min(pos.chapterIndex, totalSections - 1));
     }
-  }, [slug, manifest.chapters.length, initialChapter]);
+  }, [slug, totalSections, initialChapter]);
 
   // Persist position whenever chapter or page changes
   useEffect(() => {
@@ -833,27 +923,28 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     setIsFlipping(true);
     if (flipTimer.current) clearTimeout(flipTimer.current);
     flipTimer.current = setTimeout(() => {
-      // Update page/chapter at the invisible midpoint
+      // Read pageIndex/chapterIndex directly from closure so we never nest
+      // a setChapterIndex call inside a setPageIndex updater — React Strict
+      // Mode double-invokes updaters in dev, which would skip every other chapter.
       if (dir === "prev") {
-        setPageIndex((p) => {
-          if (p > 0) return p - 1;
-          setChapterIndex((ci) => {
-            if (ci === 0) return 0;
-            goToLastPageRef.current = true;
-            return ci - 1;
-          });
-          return 0;
-        });
+        if (pageIndex > 0) {
+          setPageIndex((p) => p - 1);
+        } else if (chapterIndex > 0) {
+          goToLastPageRef.current = true;
+          setChapterIndex((ci) => ci - 1);
+          setPageIndex(0);
+        }
       } else {
-        setPageIndex((p) => {
-          if (p < totalPages - 1) return p + 1;
-          setChapterIndex((ci) => Math.min(manifest.chapters.length - 1, ci + 1));
-          return 0;
-        });
+        if (pageIndex < totalPages - 1) {
+          setPageIndex((p) => p + 1);
+        } else {
+          setChapterIndex((ci) => Math.min(totalSections - 1, ci + 1));
+          setPageIndex(0);
+        }
       }
       setIsFlipping(false); // fade back in
     }, 160);
-  }, [isFlipping, totalPages, manifest.chapters.length]);
+  }, [isFlipping, pageIndex, chapterIndex, totalPages, totalSections]);
 
   // Chapter-level navigation (from ToC)
   const goToChapter = useCallback((i: number) => {
@@ -910,17 +1001,35 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const fontSize   = FONT_SIZES[settings.fontSize - 1];
   const lineHeight = LINE_HEIGHTS[settings.lineHeight - 1];
   const fontFamily = FONT_FAMILIES[settings.fontFamily];
-  const chapter    = manifest.chapters[chapterIndex];
+
+  // ToC items for ChapterDrawer
+  const tocItems: TocItem[] = virtualSections.map((s, i) => {
+    if (s.kind === "copyright")    return { label: "©",         title: "Copyright" };
+    if (s.kind === "frontmatter")  return { label: s.title.slice(0, 5).toUpperCase(), title: s.title };
+    if (s.kind === "about")        return { label: "ABOUT",     title: "About the Author" };
+    // chapter
+    const chNum = (s as { kind: "chapter"; chapter: ChapterDraft }).chapter.number;
+    return { label: `Ch ${chNum}`, title: (s as { kind: "chapter"; chapter: ChapterDraft }).chapter.title };
+  });
+
+  // Label for top chrome
+  const sectionLabel = (() => {
+    if (currentSection.kind === "copyright")   return "Copyright";
+    if (currentSection.kind === "frontmatter") return currentSection.title;
+    if (currentSection.kind === "about")       return "About the Author";
+    return `Ch ${currentSection.chapter.number} · ${currentSection.chapter.title}`;
+  })();
+
+  const publishYear = new Date(manifest.generatedAt).getFullYear().toString();
   const opacity    = showChrome ? 1 : 0.06;
 
   // Two-page spread: active only in landscape on wide-enough screens
   const isLandscape = containerW > 0 && containerH > 0 && containerW > containerH * 1.25 && containerW >= 900;
   const columnWidth = isLandscape ? Math.floor(containerW / 2) : containerW;
 
-  // Global progress across all pages of all chapters
-  const totalChapters = manifest.chapters.length;
-  const globalProgress = totalChapters === 0 ? 0 :
-    ((chapterIndex + (pageIndex + 1) / Math.max(1, totalPages)) / totalChapters) * 100;
+  // Global progress across all virtual sections
+  const globalProgress = totalSections === 0 ? 0 :
+    ((chapterIndex + (pageIndex + 1) / Math.max(1, totalPages)) / totalSections) * 100;
 
   const iconBtn = (label: string, onClick: () => void, children: React.ReactNode) => (
     <button
@@ -983,8 +1092,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           padding: "0 0.75rem", color: theme.muted,
           fontSize: "0.78rem", fontFamily: "Georgia, serif",
         }}>
-          {chapter ? `Ch ${chapter.number} · ${chapter.title}` : manifest.bookTitle}
-        </p>
+          {sectionLabel}        </p>
 
         <div style={{ display: "flex", alignItems: "center" }}>
           {/* Annotations panel */}
@@ -1108,9 +1216,31 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
               cursor:     annotationMode ? "text" : "default",
             } as React.CSSProperties}
           >
-            {chapter && (
+            {currentSection.kind === "copyright" && (
+              <CopyrightView
+                bookTitle={manifest.bookTitle}
+                authorName={manifest.authorName}
+                year={publishYear}
+                theme={theme}
+                fontFamily={fontFamily}
+                fontSize={fontSize}
+                lineHeight={lineHeight}
+              />
+            )}
+            {(currentSection.kind === "frontmatter" || currentSection.kind === "about") && (
+              <FrontMatterView
+                title={currentSection.kind === "about" ? "About the Author" : currentSection.title}
+                body={currentSection.kind === "about" ? currentSection.body : currentSection.body}
+                theme={theme}
+                fontFamily={fontFamily}
+                fontSize={fontSize}
+                lineHeight={lineHeight}
+                annotations={annotations}
+              />
+            )}
+            {currentSection.kind === "chapter" && (
               <ChapterView
-                chapter={chapter}
+                chapter={currentSection.chapter}
                 theme={theme}
                 fontFamily={fontFamily}
                 fontSize={fontSize}
@@ -1200,25 +1330,25 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           </div>
           <p style={{ fontSize: "0.67rem", color: theme.muted, fontFamily }}>
             {isLandscape && totalPages > 1
-              ? `Spread ${pageIndex + 1} of ${totalPages} · Ch ${chapterIndex + 1}/${totalChapters}`
+              ? `Spread ${pageIndex + 1} of ${totalPages} · ${chapterIndex + 1}/${totalSections}`
               : totalPages > 1
-              ? `Page ${pageIndex + 1} of ${totalPages} · Ch ${chapterIndex + 1}/${totalChapters}`
-              : `Ch ${chapterIndex + 1} of ${totalChapters}`}
-            {chapter?.totalWordCount ? ` · ~${Math.ceil(chapter.totalWordCount / 200)} min` : ""}
+              ? `Page ${pageIndex + 1} of ${totalPages} · ${chapterIndex + 1}/${totalSections}`
+              : `${chapterIndex + 1} of ${totalSections}`}
+            {currentSection.kind === "chapter" && currentSection.chapter.totalWordCount
+              ? ` · ~${Math.ceil(currentSection.chapter.totalWordCount / 200)} min` : ""}
           </p>
         </div>
 
-        {/* Next page */}
         <button
           onClick={() => triggerFlip("next")}
-          disabled={chapterIndex >= totalChapters - 1 && pageIndex >= totalPages - 1}
+          disabled={chapterIndex >= totalSections - 1 && pageIndex >= totalPages - 1}
           aria-label="Next page"
           style={{
             minHeight: "2.75rem", minWidth: "2.75rem", display: "flex",
             alignItems: "center", justifyContent: "center",
-            color: (chapterIndex >= totalChapters - 1 && pageIndex >= totalPages - 1) ? theme.border : theme.muted,
+            color: (chapterIndex >= totalSections - 1 && pageIndex >= totalPages - 1) ? theme.border : theme.muted,
             background: "none", border: "none",
-            cursor: (chapterIndex >= totalChapters - 1 && pageIndex >= totalPages - 1) ? "default" : "pointer",
+            cursor: (chapterIndex >= totalSections - 1 && pageIndex >= totalPages - 1) ? "default" : "pointer",
           }}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "1.1rem", height: "1.1rem" }}>
@@ -1259,7 +1389,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
               id:           crypto.randomUUID(),
               slug,
               chapterIndex,
-              chapterTitle: chapter?.title ?? "",
+              chapterTitle: currentSection.kind === "chapter" ? currentSection.chapter.title : sectionLabel,
               selectedText: selection.text,
               note:         annoNote,
               color:        annoColor,
@@ -1281,9 +1411,9 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       )}
 
       {/* ── Audio reader bar (sits between viewport and footer in flex column) ── */}
-      {audioOpen && chapter && (
+      {audioOpen && currentSection.kind === "chapter" && (
         <AudioReader
-          chapter={chapter}
+          chapter={currentSection.chapter}
           theme={theme}
           fontFamily={fontFamily}
           onClose={() => setAudioOpen(false)}
@@ -1292,7 +1422,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
 
       {/* ── Overlays ── */}
       <ChapterDrawer
-        chapters={manifest.chapters}
+        items={tocItems}
         currentIndex={chapterIndex}
         open={tocOpen}
         onClose={() => setTocOpen(false)}
