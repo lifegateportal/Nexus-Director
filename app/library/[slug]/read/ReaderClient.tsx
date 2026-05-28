@@ -68,15 +68,20 @@ const CHROME_H = "3.25rem";
 
 // ── Inline markdown renderer ──────────────────────────────────────────────────
 
+// Detects a Bible reference at the start of a paragraph line, e.g.:
+// "Colossians 1:12–14 puts it this way:", "1 Corinthians 13:4", "Psalm 23:1–6"
+const BIBLE_REF_START = /^(?:\d\s+)?[A-Z][a-z]+(?:(?:\s+of\s+|\s+)[A-Z]?[a-z]+)?\s+\d+:\d+/;
+
 function InlineText({ text }: { text: string }) {
-  const parts: { t: "text" | "bold" | "italic" | "bolditalic"; v: string }[] = [];
-  const re = /(\*\*\*([^*\n]+?)\*\*\*|\*\*([^*\n]+?)\*\*|\*([^*\n]+?)\*)/g;
+  const parts: { t: "text" | "bold" | "italic" | "bolditalic" | "strike"; v: string }[] = [];
+  const re = /(\*\*\*([^*\n]+?)\*\*\*|\*\*([^*\n]+?)\*\*|\*([^*\n]+?)\*|~~([^~\n]+?)~~)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push({ t: "text", v: text.slice(last, m.index) });
     if      (m[0].startsWith("***")) parts.push({ t: "bolditalic", v: m[2] });
     else if (m[0].startsWith("**"))  parts.push({ t: "bold",       v: m[3] });
+    else if (m[0].startsWith("~~"))  parts.push({ t: "strike",     v: m[5] });
     else                              parts.push({ t: "italic",     v: m[4] });
     last = m.index + m[0].length;
   }
@@ -88,6 +93,7 @@ function InlineText({ text }: { text: string }) {
         p.t === "bolditalic" ? <strong key={i}><em>{p.v}</em></strong> :
         p.t === "bold"       ? <strong key={i}>{p.v}</strong> :
         p.t === "italic"     ? <em key={i}>{p.v}</em> :
+        p.t === "strike"     ? <s key={i}>{p.v}</s> :
                                <span key={i}>{p.v}</span>
       )}
     </>
@@ -286,6 +292,36 @@ function renderBody(
         </ol>,
       );
       continue;
+    }
+
+    // Scripture paragraph — line starts with a Bible reference (e.g. "Colossians 1:12–14
+    // puts it this way: "..."") or contains an inline italic citation (*"verse"* (Ref)).
+    // Render with the same blockquote scripture styling so it's visually distinct.
+    const isInlineScripture =
+      BIBLE_REF_START.test(line) ||
+      /\*"[^"]+"?\*\s*\([^)]+\d+:\d+[^)]*\)/.test(line);
+
+    if (isInlineScripture) {
+      nodes.push(
+        <blockquote
+          key={`scr-${i}`}
+          style={{
+            borderLeft:  `3px solid ${theme.scriptureBar}`,
+            paddingLeft: "1.25em",
+            margin:      "2em 0",
+            fontStyle:   "italic",
+            color:       theme.muted,
+            fontSize:    "0.97em",
+            lineHeight:  1.75,
+            breakInside: "avoid",
+          } as React.CSSProperties}
+        >
+          <p style={{ margin: 0 }}>
+            <HighlightedLine text={line} annotations={annotations} />
+          </p>
+        </blockquote>,
+      );
+      i++; continue;
     }
 
     // Paragraph
