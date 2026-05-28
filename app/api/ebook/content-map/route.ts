@@ -129,7 +129,62 @@ export async function POST(req: NextRequest) {
       slotChunks.push({ sourceAudio: "audio-1", text: input.masterTranscript });
     }
 
-    // ── 2. Extract segments per slot — LLM identifies structure only ─────────
+    // ── 2. Extract segments per slot — all slots processed in parallel ───────
+    // Processing slots sequentially caused reverse-proxy timeouts on large projects
+    // (6 slots × 5 chunks × ~4s/call ≈ 120 s). Parallel execution cuts wall-clock
+    // time to roughly that of the single slowest slot (~20–30 s).
+
+    type DedupedSlotResult = {
+      chunk: { sourceAudio: string; text: string };
+      slotWords: string[];
+      dedupedSegs: z.infer<typeof SlotSegmentExtractSchema>[];
+    };
+
+    const slotResults: DedupedSlotResult[] = await Promise.all(
+      slotChunks.map(async (chunk): Promise<DedupedSlotResult> => {
+        const slotWords = chunk.text.split(/\s+/);
+        const OVERLAP = 200;
+        const chunkRanges: Array<{ start: number; end: number }> = [];
+        let start = 0;
+        while (start < slotWords.length) {
+          const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
+          chunkRanges.push({ start, end });
+          if (end === slotWords.length) break;
+          start = end - OVERLAP;
+        }
+
+        // Process all chunk ranges within this slot in parallel too.
+        const chunkSegments = await Promise.all(
+          chunkRanges.map(async (range) => {
+            const chunkText = slotWords.slice(range.start, range.end).join(" ");
+            const { object } = await generateObject({
+              model: deepSeekModel,
+              schema: SlotSegmentsSchema,
+              mode: "tool",
+              temperature: 0.2,
+              system: SEGMENT_SYSTEM,
+              prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
+            });
+            return object.segments;
+          })
+        );
+
+        const rawSegmentsForSlot = chunkSegments.flat();
+
+        // Deduplicate segments that appeared in overlapping chunk windows.
+        const seenSegTopics = new Set<string>();
+        const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
+          const key = seg.topic.toLowerCase().trim().slice(0, 60);
+          if (seenSegTopics.has(key)) return false;
+          seenSegTopics.add(key);
+          return true;
+        });
+
+        return { chunk, slotWords, dedupedSegs };
+      })
+    );
+
+    // ── Assemble segments sequentially so IDs are deterministic ──────────────
     let segmentIdCounter = 1;
     const allSegments: Array<{
       id: string;
@@ -143,62 +198,8 @@ export async function POST(req: NextRequest) {
 
     const allQuotes: Array<{ id: string; text: string; reference: string; translation: string; type: "scripture" | "quote" | "proverb"; isBlockQuote: boolean }> = [];
 
-    // Accumulate topics already seen in earlier slots so later slots can identify
-    // cross-sermon recaps and mark them [NON-TEACHING — SKIP].
-    const seenTopics: string[] = [];
-
-    for (const chunk of slotChunks) {
-      // Split long slots into overlapping chunks so every word is seen by the LLM.
-      // Each chunk is MAX_SLOT_WORDS wide with a 200-word overlap so segment
-      // boundaries that fall at a chunk edge are not split mid-thought.
-      const slotWords = chunk.text.split(/\s+/);
-      const OVERLAP = 200;
-      const chunkRanges: Array<{ start: number; end: number }> = [];
-      let start = 0;
-      while (start < slotWords.length) {
-        const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
-        chunkRanges.push({ start, end });
-        if (end === slotWords.length) break;
-        start = end - OVERLAP;
-      }
-
-      // Collect raw segment extractions across all chunks for this slot,
-      // then deduplicate topics that appeared in multiple overlapping windows.
-      const rawSegmentsForSlot: Array<z.infer<typeof SlotSegmentExtractSchema> & { chunkStart: number; chunkEnd: number }> = [];
-
-      for (const range of chunkRanges) {
-        const chunkText = slotWords.slice(range.start, range.end).join(" ");
-        const seenTopicsBlock = seenTopics.length > 0
-          ? `\n\nTOPICS ALREADY COVERED IN EARLIER RECORDINGS (mark any recap of these as [NON-TEACHING — SKIP]):\n${seenTopics.map((t) => `- ${t}`).join("\n")}`
-          : "";
-
-        const { object } = await generateObject({
-          model: deepSeekModel,
-          schema: SlotSegmentsSchema,
-          mode: "tool",
-          temperature: 0.2,
-          system: SEGMENT_SYSTEM,
-          prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}${seenTopicsBlock}`,
-        });
-
-        for (const seg of object.segments) {
-          rawSegmentsForSlot.push({ ...seg, chunkStart: range.start, chunkEnd: range.end });
-        }
-      }
-
-      // Deduplicate segments that appeared in overlapping chunk windows:
-      // keep only the first occurrence of each topic (case-insensitive prefix match).
-      const seenSegTopics = new Set<string>();
-      const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
-        const key = seg.topic.toLowerCase().trim().slice(0, 60);
-        if (seenSegTopics.has(key)) return false;
-        seenSegTopics.add(key);
-        return true;
-      });
-
+    for (const { chunk, slotWords, dedupedSegs } of slotResults) {
       // Distribute the full slot text across segments proportionally.
-      // Use the LLM's estimates only as weights; the authoritative word count
-      // is derived from the actual rawText slice length after distribution.
       const totalEstimatedWords = dedupedSegs.reduce((sum, s) => sum + Math.max(1, s.estimatedWordCount), 0) || 1;
       let wordOffset = 0;
       const lastSegIdx = dedupedSegs.length - 1;
@@ -208,16 +209,12 @@ export async function POST(req: NextRequest) {
         const id = `seg-${segmentIdCounter++}`;
         const segWordCount = Math.max(1, seg.estimatedWordCount);
         const sliceFraction = segWordCount / totalEstimatedWords;
-        // Last segment always gets all remaining words — prevents rounding loss.
         const sliceLen = si === lastSegIdx
           ? slotWords.length - wordOffset
           : Math.round(slotWords.length * sliceFraction);
         const rawText = slotWords.slice(wordOffset, wordOffset + sliceLen).join(" ");
         wordOffset += sliceLen;
 
-        // Use actual rawText length as the authoritative word count.
-        // This is what downstream targetWordCount is built from, so it must
-        // reflect real content — not the LLM's estimate of the truncated view.
         const actualWordCount = rawText.split(/\s+/).filter(Boolean).length;
 
         const quotes = (seg.quotes ?? []).map((q, qi) => ({
@@ -237,12 +234,6 @@ export async function POST(req: NextRequest) {
 
         allQuotes.push(...quotes);
       }
-
-      // Register all teaching topics from this slot so later slots can detect recaps.
-      seenTopics.push(...dedupedSegs
-        .filter((s) => !s.topic.includes("[NON-TEACHING"))
-        .map((s) => s.topic)
-      );
     }
 
     // ── 3. Synthesise themes/arc from segment topics only (no rawText) ──────
