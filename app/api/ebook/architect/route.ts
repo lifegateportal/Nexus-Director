@@ -152,7 +152,11 @@ export async function POST(req: NextRequest) {
   try {
     let minimal: z.infer<typeof MinimalArchitectureSchema>;
     try {
-      const result = await generateObject({
+      // Skip LLM when the user wants each upload to be exactly one chapter
+      if (input.oneChapterPerUpload) {
+        minimal = fallbackArchitecture(input);
+      } else {
+        const result = await generateObject({
         model: deepSeekReasonerModel,
         schema: MinimalArchitectureSchema,
         mode: "json",
@@ -196,6 +200,7 @@ This content is a sermon series. The author's preaching sequence IS the book's s
       ${JSON.stringify(segmentsLite)}`,
       });
       minimal = result.object;
+      } // end else (LLM path)
     } catch {
       minimal = fallbackArchitecture(input);
     }

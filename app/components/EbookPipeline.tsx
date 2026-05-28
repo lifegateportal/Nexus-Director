@@ -1210,6 +1210,7 @@ export function EbookPipeline({
   const [stage, setStage] = useState<PipelineStage>("idle");
   const [authorInstructions, setAuthorInstructions] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
+  const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
@@ -1899,7 +1900,7 @@ export function EbookPipeline({
       if (!architecture) {
         setStage("architecting");
         addLog("Designing chapter structure…");
-        architecture = await postJson<BookArchitecture>("/api/ebook/architect", { contentMap, voiceDNA });
+        architecture = await postJson<BookArchitecture>("/api/ebook/architect", { contentMap, voiceDNA, oneChapterPerUpload });
         const totalSections = architecture.chapters.reduce((a, c) => a + c.sections.length, 0);
         addLog(`✓ Architecture: "${architecture.bookTitle}" — ${architecture.chapters.length} chapters, ${totalSections} sections`);
         acc.architecture = architecture;
@@ -2385,6 +2386,35 @@ export function EbookPipeline({
               disabled={isRunning}
             />
             <p className="mt-1 text-[10px] text-slate-600">Tell the AI how you want your book to read. Be specific about tone, vocabulary level, and style.</p>
+          </div>
+
+          {/* Chapter mode toggle */}
+          <div className="flex items-start gap-3 rounded-xl border border-slate-700/40 bg-slate-950/50 px-3 py-3">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={oneChapterPerUpload}
+              onClick={() => setOneChapterPerUpload((v) => !v)}
+              disabled={isRunning}
+              className={[
+                "mt-0.5 flex-shrink-0 w-9 h-5 rounded-full transition-colors",
+                oneChapterPerUpload ? "bg-violet-500" : "bg-slate-700",
+                isRunning ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5",
+                  oneChapterPerUpload ? "translate-x-4" : "translate-x-0",
+                ].join(" ")}
+              />
+            </button>
+            <div>
+              <p className="text-sm font-medium text-slate-200 leading-tight">One chapter per upload</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                When on, each audio file becomes exactly one chapter — the AI won't reorganize or split the content across chapter boundaries.
+              </p>
+            </div>
           </div>
         </div>
       </div>
