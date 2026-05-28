@@ -470,9 +470,9 @@ function ChapterView({
                   <p style={{ fontSize: "0.65em", fontWeight: 700, letterSpacing: "0.18em", textTransform: "uppercase", color: theme.muted, marginBottom: "1em", fontFamily }}>
                     Key Takeaways
                   </p>
-                  <ul style={{ paddingLeft: "1.25em", color: theme.text }}>
+                  <ul style={{ paddingLeft: "1.6em", color: theme.text, listStyleType: "disc" }}>
                     {chapter.keyTakeaways.map((item, idx2) => (
-                      <li key={idx2} style={{ marginBottom: "0.65em", lineHeight: 1.7 }}>{item}</li>
+                      <li key={idx2} style={{ marginBottom: "0.65em", lineHeight: 1.7, display: "list-item" }}>{item}</li>
                     ))}
                   </ul>
                 </div>
@@ -482,9 +482,9 @@ function ChapterView({
                   <p style={{ fontSize: "0.65em", fontWeight: 700, letterSpacing: "0.18em", textTransform: "uppercase", color: theme.muted, marginBottom: "1em", fontFamily }}>
                     Reflection Questions
                   </p>
-                  <ol style={{ paddingLeft: "1.25em", color: theme.text }}>
+                  <ol style={{ paddingLeft: "1.6em", color: theme.text, listStyleType: "decimal" }}>
                     {chapter.reflectionQuestions.map((q, qi) => (
-                      <li key={qi} style={{ marginBottom: "0.65em", lineHeight: 1.7 }}>{q}</li>
+                      <li key={qi} style={{ marginBottom: "0.65em", lineHeight: 1.7, display: "list-item" }}>{q}</li>
                     ))}
                   </ol>
                 </div>
@@ -643,6 +643,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const sentinelRef     = useRef<HTMLDivElement>(null);
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flipTimer       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When navigating back to a previous chapter, land on its last page
+  const goToLastPageRef = useRef(false);
 
   // Touch / swipe tracking
   const touchStartX     = useRef(0);
@@ -714,7 +716,12 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       const sentinelLeft = sentinel.getBoundingClientRect().left;
       const pages = Math.max(1, Math.ceil((sentinelLeft - trackLeft) / containerW));
       setTotalPages(pages);
-      setPageIndex(0);
+      if (goToLastPageRef.current) {
+        goToLastPageRef.current = false;
+        setPageIndex(pages - 1);
+      } else {
+        setPageIndex(0);
+      }
     };
     raf1 = requestAnimationFrame(() => { raf2 = requestAnimationFrame(measure); });
     return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
@@ -794,7 +801,11 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       if (dir === "prev") {
         setPageIndex((p) => {
           if (p > 0) return p - 1;
-          setChapterIndex((ci) => Math.max(0, ci - 1));
+          setChapterIndex((ci) => {
+            if (ci === 0) return 0;
+            goToLastPageRef.current = true;
+            return ci - 1;
+          });
           return 0;
         });
       } else {
@@ -865,6 +876,10 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const fontFamily = FONT_FAMILIES[settings.fontFamily];
   const chapter    = manifest.chapters[chapterIndex];
   const opacity    = showChrome ? 1 : 0.06;
+
+  // Two-page spread: active only in landscape on wide-enough screens
+  const isLandscape = containerW > 0 && containerH > 0 && containerW > containerH * 1.25 && containerW >= 900;
+  const columnWidth = isLandscape ? Math.floor(containerW / 2) : containerW;
 
   // Global progress across all pages of all chapters
   const totalChapters = manifest.chapters.length;
@@ -1027,10 +1042,11 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
             top:         0,
             left:        0,
             // Large fixed width so CSS can create up to ~200 columns
-            width:       containerW > 0 ? `${containerW * 200}px` : "100%",
+            width:       columnWidth > 0 ? `${columnWidth * 400}px` : "100%",
             height:      containerH > 0 ? `${containerH}px` : "100%",
-            // CSS multi-column: each column = containerW × containerH = one page
-            columnWidth: containerW > 0 ? `${containerW}px` : "auto",
+            // CSS multi-column: each column = columnWidth × containerH = one page
+            // In landscape, columnWidth = containerW/2 → two columns fill the viewport
+            columnWidth: columnWidth > 0 ? `${columnWidth}px` : "auto",
             columnGap:   0,
             columnFill:  "auto",
             overflow:    "hidden",
@@ -1077,6 +1093,35 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           background: `linear-gradient(to left, ${theme.border}88, transparent)`,
           pointerEvents: "none", zIndex: 1,
         }} />
+
+        {/* Two-page book gutter — landscape only */}
+        {isLandscape && (
+          <>
+            {/* Soft inner shadow on both sides of the spine */}
+            <div style={{
+              position: "absolute", top: 0, bottom: 0,
+              left: "calc(50% - 18px)", width: "36px",
+              background: `linear-gradient(to right,
+                transparent,
+                ${theme.border}50 35%,
+                ${theme.border}70 50%,
+                ${theme.border}50 65%,
+                transparent)`,
+              pointerEvents: "none", zIndex: 3,
+            }} />
+            {/* Hard 1px center line */}
+            <div style={{
+              position: "absolute", top: 0, bottom: 0,
+              left: "50%", width: "1px",
+              background: `linear-gradient(to bottom,
+                transparent 0%,
+                ${theme.border}90 8%,
+                ${theme.border}90 92%,
+                transparent 100%)`,
+              pointerEvents: "none", zIndex: 4,
+            }} />
+          </>
+        )}
       </div>
 
       {/* ── Bottom chrome ── */}
@@ -1118,7 +1163,9 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
             }} />
           </div>
           <p style={{ fontSize: "0.67rem", color: theme.muted, fontFamily }}>
-            {totalPages > 1
+            {isLandscape && totalPages > 1
+              ? `Spread ${pageIndex + 1} of ${totalPages} · Ch ${chapterIndex + 1}/${totalChapters}`
+              : totalPages > 1
               ? `Page ${pageIndex + 1} of ${totalPages} · Ch ${chapterIndex + 1}/${totalChapters}`
               : `Ch ${chapterIndex + 1} of ${totalChapters}`}
             {chapter?.totalWordCount ? ` · ~${Math.ceil(chapter.totalWordCount / 200)} min` : ""}
