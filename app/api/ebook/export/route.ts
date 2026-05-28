@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
 
     // ── Generate DOCX ───────────────────────────────────────────────────────────
     if (formats.docx) {
-      const docxBuffer = await generateDocxBuffer(manifest, template);
+      const docxBuffer = await generateDocxBuffer(manifest, template, input.printSpec);
       results.docxUrl = await uploadOrStream(
         docxBuffer,
         `${prefix}.docx`,

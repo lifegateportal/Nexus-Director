@@ -13,6 +13,9 @@ import type { BookTemplateConfig } from "@/lib/book-templates";
 import { existsSync } from "node:fs";
 import {
   Document as DocxDocument,
+  Footer,
+  Header,
+  PageNumber,
   Packer,
   Paragraph,
   TextRun,
@@ -21,6 +24,7 @@ import {
   PageBreak,
   BorderStyle,
   TableOfContents,
+  SectionType,
 } from "docx";
 
 type PdfFontSet = {
@@ -1190,9 +1194,59 @@ export async function generateEpubBuffer(manifest: EbookManifest, templateId?: s
 
 // ─── DOCX generation ─────────────────────────────────────────────────────────
 
-export async function generateDocxBuffer(manifest: EbookManifest, templateId?: string): Promise<Buffer> {
+type DocxTrimSpec = (typeof TRIM_SIZE_SPECS)[keyof typeof TRIM_SIZE_SPECS];
+
+function pointsToTwips(points: number): number {
+  return Math.round(points * 20);
+}
+
+function createDocxHeaderFooter(text: string, align: AlignmentType): Header {
+  return new Header({
+    children: [
+      new Paragraph({
+        children: [new TextRun({ text: text.toUpperCase(), size: 14, color: "AAAAAA" })],
+        alignment: align,
+      }),
+    ],
+  });
+}
+
+function createDocxPageNumberFooter(): Footer {
+  return new Footer({
+    children: [
+      new Paragraph({
+        children: [new TextRun({ children: [PageNumber.CURRENT], size: 14, color: "AAAAAA" })],
+        alignment: AlignmentType.CENTER,
+      }),
+    ],
+  });
+}
+
+function createDocxSectionPageLayout(trimSpec: DocxTrimSpec) {
+  const pageMargins = trimSpec.margins;
+  return {
+    size: {
+      width: pointsToTwips(trimSpec.pageSize[0]),
+      height: pointsToTwips(trimSpec.pageSize[1]),
+    },
+    margin: {
+      top: pointsToTwips(pageMargins.top),
+      right: pointsToTwips(pageMargins.right),
+      bottom: pointsToTwips(pageMargins.bottom),
+      left: pointsToTwips(pageMargins.left),
+      header: pointsToTwips(28),
+      footer: pointsToTwips(Math.max(pageMargins.bottom - 18, 0)),
+      gutter: pointsToTwips(trimSpec.gutterMargin),
+    },
+  };
+}
+
+export async function generateDocxBuffer(manifest: EbookManifest, templateId?: string, printSpec?: PrintSpec): Promise<Buffer> {
   const { bookTitle, subtitle, authorName, frontMatter, chapters } = manifest;
   const tpl = getTemplate(templateId ?? manifest.selectedTemplate);
+  const resolvedPrintSpec = printSpec ?? manifest.printSpec ?? { trimSize: "6x9" as const, runningHeaders: true };
+  const trimSpec = TRIM_SIZE_SPECS[resolvedPrintSpec.trimSize];
+  const showRunningHeaders = resolvedPrintSpec.runningHeaders !== false && tpl.runningHeaders;
 
   // Map template body alignment to DOCX AlignmentType
   const bodyAlign = tpl.bodyAlign === "justify" ? AlignmentType.JUSTIFIED : AlignmentType.LEFT;
@@ -1290,11 +1344,61 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       });
   }
 
-  const children: (Paragraph | TableOfContents)[] = [];
+  const frontMatterChildren: (Paragraph | TableOfContents)[] = [];
+  const chapterSections: { chapterTitle: string; children: Paragraph[] }[] = [];
+  let currentChapterChildren: Paragraph[] | null = null;
+  let frontMatterEndsWithPageBreak = false;
+  let chapterEndsWithPageBreak = false;
 
+  function addFrontMatterParagraphs(...paragraphs: (Paragraph | TableOfContents)[]) {
+    frontMatterChildren.push(...paragraphs);
+    frontMatterEndsWithPageBreak = false;
+  }
+
+  function addFrontMatterPageBreak() {
+    frontMatterChildren.push(new Paragraph({ children: [new PageBreak()] }));
+    frontMatterEndsWithPageBreak = true;
+  }
+
+  function startChapterSection(chapterTitle: string) {
+    currentChapterChildren = [];
+    chapterSections.push({ chapterTitle, children: currentChapterChildren });
+    chapterEndsWithPageBreak = false;
+  }
+
+  function addChapterParagraphs(...paragraphs: Paragraph[]) {
+    if (!currentChapterChildren) {
+      throw new Error("DOCX chapter section was not initialized before adding content.");
+    }
+    currentChapterChildren.push(...paragraphs);
+    chapterEndsWithPageBreak = false;
+  }
+
+  function addChapterPageBreak() {
+    if (!currentChapterChildren) {
+      throw new Error("DOCX chapter section was not initialized before adding a page break.");
+    }
+    currentChapterChildren.push(new Paragraph({ children: [new PageBreak()] }));
+    chapterEndsWithPageBreak = true;
+  }
+
+  function appendBackMatterParagraphs(...paragraphs: Paragraph[]) {
+    if (currentChapterChildren) {
+      if (!chapterEndsWithPageBreak) {
+        addChapterPageBreak();
+      }
+      addChapterParagraphs(...paragraphs);
+      return;
+    }
+
+    if (!frontMatterEndsWithPageBreak) {
+      addFrontMatterPageBreak();
+    }
+    addFrontMatterParagraphs(...paragraphs);
+  }
 
   // Title page
-  children.push(
+  addFrontMatterParagraphs(
     new Paragraph({
       children: [new TextRun({ text: bookTitle, bold: true, size: Math.round(tpl.titlePageTitleSize * 2) })],
       heading: HeadingLevel.TITLE,
@@ -1310,13 +1414,13 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       children: [new TextRun({ text: authorName, size: Math.round(tpl.titlePageAuthorSize * 2) })],
       alignment: titleAlign,
       spacing: { after: 600 },
-    }),
-    new Paragraph({ children: [new PageBreak()] })
+    })
   );
+  addFrontMatterPageBreak();
 
   // Copyright page (matches PDF)
   const year = new Date().getFullYear();
-  children.push(
+  addFrontMatterParagraphs(
     new Paragraph({
       children: [new TextRun({ text: `${bookTitle}${subtitle ? `: ${subtitle}` : ""}`, bold: true, size: 18 })],
       spacing: { after: 120 },
@@ -1340,12 +1444,12 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     new Paragraph({
       children: [new TextRun({ text: "Printed in the United States of America", size: 14 })],
       spacing: { after: 40 },
-    }),
-    new Paragraph({ children: [new PageBreak()] })
+    })
   );
+  addFrontMatterPageBreak();
 
   // Table of Contents (Word auto TOC)
-  children.push(
+  addFrontMatterParagraphs(
     new TableOfContents("Table of Contents", {
       hyperlink: true,
       headingStyleRange: "1-2",
@@ -1355,9 +1459,9 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       ],
       preserveTabInEntries: true,
       preserveNewLineInEntries: true,
-    }),
-    new Paragraph({ children: [new PageBreak()] })
+    })
   );
+  addFrontMatterPageBreak();
 
   for (const { title, text } of [
     { title: "Preface", text: frontMatter.preface },
@@ -1365,15 +1469,17 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     ...(frontMatter.dedication ? [{ title: "Dedication", text: frontMatter.dedication }] : []),
   ]) {
     if (!text?.trim()) continue;
-    children.push(
+    addFrontMatterParagraphs(
       new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
-      ...textToStyledParagraphs(text, true),
-      new Paragraph({ children: [new PageBreak()] })
+      ...textToStyledParagraphs(text, true)
     );
+    addFrontMatterPageBreak();
   }
 
-  for (const chapter of chapters) {
-    children.push(
+  chapters.forEach((chapter) => {
+    startChapterSection(chapter.title);
+
+    addChapterParagraphs(
       new Paragraph({
         children: [new TextRun({ text: tpl.chapterLabel(chapter.number), size: Math.round(tpl.chapterLabelSize * 2), color: tpl.chapterLabelColor.replace("#", "") })],
         alignment: titleAlign,
@@ -1389,7 +1495,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
     // Epigraph (if present)
     if (chapter.epigraph?.trim()) {
-      children.push(
+      addChapterParagraphs(
         new Paragraph({
           children: parseRunsForDocx(chapter.epigraph, bodyHalfPt, true),
           alignment: AlignmentType.CENTER,
@@ -1400,7 +1506,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
     // Premise line (if present)
     if (chapter.premiseLine?.trim()) {
-      children.push(
+      addChapterParagraphs(
         new Paragraph({
           children: parseRunsForDocx(chapter.premiseLine, bodyHalfPt, true),
           alignment: AlignmentType.CENTER,
@@ -1416,7 +1522,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         .map((p) => p.trim())
         .filter(Boolean)
         .forEach((introPara) => {
-          children.push(
+          addChapterParagraphs(
             new Paragraph({
               children: parseRunsForDocx(markInlineScriptureRefs(introPara), bodyHalfPt, true),
               alignment: bodyAlign,
@@ -1428,7 +1534,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
     for (const section of chapter.sections) {
       if (section.heading) {
-        children.push(
+        addChapterParagraphs(
           new Paragraph({
             children: [new TextRun({ text: section.heading, bold: tpl.sectionFont.includes("Bold") || tpl.sectionFont === "serifBold" || tpl.sectionFont === "sansBold", size: Math.round(tpl.sectionSize * 2), color: tpl.sectionColor.replace("#", "") })],
             heading: HeadingLevel.HEADING_2,
@@ -1437,24 +1543,24 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           })
         );
       }
-      children.push(...textToStyledParagraphs(section.body, true));
+      addChapterParagraphs(...textToStyledParagraphs(section.body, true));
     }
 
     // Chapter conclusion
     if (chapter.conclusion?.trim()) {
-      children.push(...textToStyledParagraphs(chapter.conclusion, true));
+      addChapterParagraphs(...textToStyledParagraphs(chapter.conclusion, true));
     }
 
     // Key Takeaways
     if ((chapter.keyTakeaways ?? []).length > 0) {
-      children.push(
+      addChapterParagraphs(
         new Paragraph({
           children: [new TextRun({ text: "KEY TAKEAWAYS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
           spacing: { before: 280, after: 120 },
         })
       );
       for (const t of (chapter.keyTakeaways ?? [])) {
-        children.push(
+        addChapterParagraphs(
           new Paragraph({
             children: [new TextRun({ text: `• ${t}`, size: bodyHalfPt })],
             alignment: bodyAlign,
@@ -1466,14 +1572,14 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
     // Reflection Questions
     if ((chapter.reflectionQuestions ?? []).length > 0) {
-      children.push(
+      addChapterParagraphs(
         new Paragraph({
           children: [new TextRun({ text: "REFLECTION QUESTIONS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
           spacing: { before: 280, after: 120 },
         })
       );
       (chapter.reflectionQuestions ?? []).forEach((q, i) => {
-        children.push(
+        addChapterParagraphs(
           new Paragraph({
             children: [new TextRun({ text: `${i + 1}. ${q}`, size: bodyHalfPt })],
             alignment: bodyAlign,
@@ -1482,33 +1588,28 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         );
       });
     }
-
-    // Page break after all chapter content (before next chapter or back matter)
-    children.push(new Paragraph({ children: [new PageBreak()] }));
-  }
+  });
 
   if (frontMatter.conclusion?.trim()) {
-    children.push(
+    appendBackMatterParagraphs(
       new Paragraph({ text: "Conclusion", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
-      ...textToStyledParagraphs(frontMatter.conclusion, true),
-      new Paragraph({ children: [new PageBreak()] })
+      ...textToStyledParagraphs(frontMatter.conclusion, true)
     );
   }
 
   if (frontMatter.aboutAuthor?.trim()) {
-    children.push(
+    appendBackMatterParagraphs(
       new Paragraph({ text: "About the Author", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
-      ...textToStyledParagraphs(frontMatter.aboutAuthor, true),
-      new Paragraph({ children: [new PageBreak()] })
+      ...textToStyledParagraphs(frontMatter.aboutAuthor, true)
     );
   }
 
   if ((frontMatter.resourcesList ?? []).length > 0) {
-    children.push(
+    const resourcesParagraphs: Paragraph[] = [
       new Paragraph({ text: "Resources", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
-    );
+    ];
     for (const r of (frontMatter.resourcesList ?? [])) {
-      children.push(
+      resourcesParagraphs.push(
         new Paragraph({
           children: [new TextRun({ text: `• ${r}`, size: bodyHalfPt })],
           alignment: bodyAlign,
@@ -1516,11 +1617,50 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         })
       );
     }
+    appendBackMatterParagraphs(...resourcesParagraphs);
   }
 
+  const sections: any[] = [
+    {
+      children: frontMatterChildren,
+      properties: {
+        page: createDocxSectionPageLayout(trimSpec),
+        type: SectionType.NEXT_PAGE,
+      },
+    },
+  ];
+
+  chapterSections.forEach((section, index) => {
+    sections.push({
+      children: section.children,
+      headers: showRunningHeaders
+        ? {
+            default: createDocxHeaderFooter(section.chapterTitle || bookTitle, AlignmentType.RIGHT),
+            even: createDocxHeaderFooter(bookTitle, AlignmentType.LEFT),
+          }
+        : undefined,
+      footers: showRunningHeaders
+        ? {
+            default: createDocxPageNumberFooter(),
+            even: createDocxPageNumberFooter(),
+          }
+        : undefined,
+      properties: {
+        page: {
+          ...createDocxSectionPageLayout(trimSpec),
+          ...(index === 0 && { pageNumbers: { start: 1 } }),
+        },
+        type: SectionType.ODD_PAGE,
+        titlePage: true,
+      },
+    });
+  });
+
   const doc = new DocxDocument({
-    sections: [{ children }],
+    sections,
     styles: { default: { document: { run: { size: bodyHalfPt } } } },
+    evenAndOddHeaderAndFooters: showRunningHeaders,
+    features: { updateFields: true },
   });
 
   return Packer.toBuffer(doc);

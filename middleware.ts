@@ -26,10 +26,11 @@ export async function middleware(request: NextRequest) {
   // Auth is opt-in — if env vars are absent, allow all traffic (useful for local dev)
   if (!authPassword || !cookieSecret) return NextResponse.next();
 
-  // Always allow the login page and auth API routes
+  // Always allow the login page, auth API routes, and the public reading library
   if (
     pathname.startsWith("/login") ||
-    pathname.startsWith("/api/auth/")
+    pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/library")
   ) {
     return NextResponse.next();
   }

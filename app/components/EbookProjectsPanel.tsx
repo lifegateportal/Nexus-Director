@@ -17,6 +17,8 @@ type EbookProjectsPanelProps = {
   onImportManifestJson?: (job: EbookJobState) => EbookManifest | null;
   /** Called when a manifest/job JSON is successfully parsed from a device file */
   onManifestLoaded?: (manifest: EbookManifest) => void;
+  /** Publish a completed project to the Library — returns the slug on success */
+  onPublish?: (project: EbookProject) => Promise<string | null>;
 };
 
 function exportProject(p: EbookProject) {
@@ -40,11 +42,13 @@ export function EbookProjectsPanel({
   onImport,
   onImportManifestJson,
   onManifestLoaded,
+  onPublish,
 }: EbookProjectsPanelProps) {
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
   const projectFileRef = useRef<HTMLInputElement>(null);
   const manifestFileRef = useRef<HTMLInputElement>(null);
 
@@ -268,6 +272,59 @@ export function EbookProjectsPanel({
                     </svg>
                   </button>
                 </div>
+
+                {/* Publish / Published row */}
+                {onPublish && p.status === "complete" && (
+                  <div className="mt-2">
+                    {p.publishedSlug ? (
+                      <a
+                        href={`/library/${p.publishedSlug}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/15"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" strokeLinecap="round" strokeLinejoin="round" />
+                          <polyline points="15 3 21 3 21 9" strokeLinecap="round" strokeLinejoin="round" />
+                          <line x1="10" y1="14" x2="21" y2="3" strokeLinecap="round" />
+                        </svg>
+                        View in Library
+                      </a>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          setPublishingId(p.id);
+                          try {
+                            await onPublish(p);
+                          } finally {
+                            setPublishingId(null);
+                          }
+                        }}
+                        disabled={publishingId === p.id}
+                        className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-sm font-semibold text-amber-400 transition hover:bg-amber-500/15 disabled:opacity-50"
+                      >
+                        {publishingId === p.id ? (
+                          <>
+                            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
+                            </svg>
+                            Publishing…
+                          </>
+                        ) : (
+                          <>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                              <path d="M12 2L2 7l10 5 10-5-10-5z" strokeLinecap="round" strokeLinejoin="round" />
+                              <path d="M2 17l10 5 10-5" strokeLinecap="round" strokeLinejoin="round" />
+                              <path d="M2 12l10 5 10-5" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            Publish to Library
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
               </div>
             ))}
           </div>

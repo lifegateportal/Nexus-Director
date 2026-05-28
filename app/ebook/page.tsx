@@ -100,6 +100,50 @@ export default function EbookPage() {
     setStatusMsg({ type: "success", text: `"${project.name}" imported.` });
   }, []);
 
+  // ── Publish handler ───────────────────────────────────────────────────────
+
+  const handlePublish = useCallback(async (project: EbookProject): Promise<string | null> => {
+    const job = project.jobState;
+    if (!job.architecture || !job.frontMatter || !job.chapters?.length) {
+      setStatusMsg({ type: "error", text: "Book must be complete before publishing." });
+      return null;
+    }
+    const manifest: EbookManifest = {
+      jobId:         job.jobId,
+      bookTitle:     job.architecture.bookTitle,
+      subtitle:      job.architecture.subtitle,
+      authorName:    job.architecture.authorName,
+      frontMatter:   job.frontMatter,
+      chapters:      job.chapters,
+      totalWordCount: job.chapters.reduce((s, c) => s + (c.totalWordCount ?? 0), 0),
+      allQuotes:     job.contentMap?.allQuotes ?? [],
+      generatedAt:   job.updatedAt ?? new Date().toISOString(),
+      selectedTemplate: "devotional",
+      printSpec:     { trimSize: "6x9", runningHeaders: true },
+    };
+    try {
+      const res = await fetch("/api/ebook/publish", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ manifest, coverAccent: "amber" }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        setStatusMsg({ type: "error", text: err.error ?? "Publish failed." });
+        return null;
+      }
+      const { slug } = await res.json() as { slug: string };
+      const updated: EbookProject = { ...project, publishedSlug: slug };
+      await saveEbookProject(updated);
+      setProjects(await listEbookProjects());
+      setStatusMsg({ type: "success", text: `"${project.name}" published to /library/${slug}` });
+      return slug;
+    } catch (err) {
+      setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Publish failed." });
+      return null;
+    }
+  }, []);
+
   // ── Manifest handlers ─────────────────────────────────────────────────────
 
   const buildManifestFromJob = useCallback((job: EbookJobState): EbookManifest | null => {
@@ -296,6 +340,7 @@ export default function EbookPage() {
             onDelete={handleDeleteProject}
             onImport={handleImportProject}
             onImportManifestJson={buildManifestFromJob}
+            onPublish={handlePublish}
             onManifestLoaded={(manifest) => {
               setEbookManifest(manifest);
               setActiveTab("pipeline");

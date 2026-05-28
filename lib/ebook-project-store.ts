@@ -10,6 +10,8 @@ export type EbookProject = {
   totalWordCount: number;
   status: string;
   jobState: EbookJobState;
+  /** Slug of the published library entry, set after a successful publish */
+  publishedSlug?: string;
 };
 
 const DB_NAME = "nexus-ebook-projects";
