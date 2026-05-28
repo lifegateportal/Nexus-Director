@@ -275,21 +275,51 @@ export function EbookProjectsPanel({
 
                 {/* Publish / Published row */}
                 {onPublish && (
-                  <div className="mt-2">
+                  <div className="mt-2 space-y-1.5">
                     {p.publishedSlug ? (
-                      <a
-                        href={`/library/${p.publishedSlug}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/15"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" strokeLinecap="round" strokeLinejoin="round" />
-                          <polyline points="15 3 21 3 21 9" strokeLinecap="round" strokeLinejoin="round" />
-                          <line x1="10" y1="14" x2="21" y2="3" strokeLinecap="round" />
-                        </svg>
-                        View in Library
-                      </a>
+                      <>
+                        <a
+                          href={`/library/${p.publishedSlug}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/15"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" strokeLinecap="round" strokeLinejoin="round" />
+                            <polyline points="15 3 21 3 21 9" strokeLinecap="round" strokeLinejoin="round" />
+                            <line x1="10" y1="14" x2="21" y2="3" strokeLinecap="round" />
+                          </svg>
+                          View in Library
+                        </a>
+                        <button
+                          onClick={async () => {
+                            setPublishingId(p.id);
+                            try {
+                              await onPublish(p);
+                            } finally {
+                              setPublishingId(null);
+                            }
+                          }}
+                          disabled={publishingId === p.id}
+                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-700/60 bg-slate-800/40 text-sm font-medium text-slate-400 transition hover:border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-400 disabled:opacity-50"
+                        >
+                          {publishingId === p.id ? (
+                            <>
+                              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
+                              </svg>
+                              Republishing…
+                            </>
+                          ) : (
+                            <>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 0 0 4.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 0 1-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              Republish
+                            </>
+                          )}
+                        </button>
+                      </>
                     ) : (
                       <button
                         onClick={async () => {
