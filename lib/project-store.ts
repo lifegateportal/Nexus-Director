@@ -22,6 +22,8 @@ export type ProjectSnapshot = {
   ebookManifest?: EbookManifest | null;
   /** Full ebook pipeline job state — enables resume from any stage */
   ebookJobState?: EbookJobState | null;
+  /** Slug of the published library entry, set after a successful publish */
+  publishedSlug?: string;
 };
 
 // ── IndexedDB storage (no 5MB quota limit) ───────────────────────────────────

@@ -13,6 +13,9 @@ import type { ReaderSettings } from "@/lib/reader-store";
 import { ChapterDrawer } from "./ChapterDrawer";
 import { ReaderSettingsPanel } from "./ReaderSettings";
 import { ProgressBar } from "./ProgressBar";
+import { AudioReader } from "./AudioReader";
+import { AnnotationsPanel, saveAnnotation } from "./AnnotationsPanel";
+import type { AnnotationColor } from "./AnnotationsPanel";
 
 // ── Reader theme palette ──────────────────────────────────────────────────────
 
@@ -420,6 +423,117 @@ function ChapterView({
   );
 }
 
+// ── Selection popup — appears when user selects text in annotation mode ────────
+
+const ANNO_SWATCHES: { key: AnnotationColor; dot: string }[] = [
+  { key: "amber",   dot: "#f59e0b" },
+  { key: "rose",    dot: "#f43f5e" },
+  { key: "sky",     dot: "#0ea5e9" },
+  { key: "emerald", dot: "#10b981" },
+];
+
+function SelectionPopup({
+  selection, color, note, onColorChange, onNoteChange, onSave, onCancel, t, fontFamily,
+}: {
+  selection:     { text: string; rect: DOMRect };
+  color:         AnnotationColor;
+  note:          string;
+  onColorChange: (c: AnnotationColor) => void;
+  onNoteChange:  (n: string) => void;
+  onSave:        () => void;
+  onCancel:      () => void;
+  t:             Theme;
+  fontFamily:    string;
+}) {
+  // Position popup above selection if there's space, otherwise below it
+  const POPUP_H = 166;
+  const top  = selection.rect.top > POPUP_H + 12
+    ? selection.rect.top  - POPUP_H - 8
+    : selection.rect.bottom + 8;
+  const left = Math.max(8, Math.min(
+    selection.rect.left + selection.rect.width / 2 - 150,
+    (typeof window !== "undefined" ? window.innerWidth : 400) - 308,
+  ));
+
+  return (
+    <div
+      onPointerDown={(e) => e.stopPropagation()} // prevent clearing selection
+      style={{
+        position: "fixed", top, left, width: 300, zIndex: 60,
+        background: t.chrome,
+        border: `1px solid ${t.chromeBorder}`,
+        borderRadius: "0.85rem",
+        backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+        padding: "0.95rem",
+        boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+      }}
+    >
+      {/* Preview */}
+      <p style={{
+        fontSize: "0.78rem", fontFamily: "Georgia, serif", fontStyle: "italic",
+        color: t.muted, lineHeight: 1.5, marginBottom: "0.75rem",
+        overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box",
+        WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+      } as React.CSSProperties}>
+        "{selection.text.slice(0, 90)}{selection.text.length > 90 ? "…" : ""}"
+      </p>
+
+      {/* Color swatches */}
+      <div style={{ display: "flex", gap: "0.55rem", marginBottom: "0.7rem" }}>
+        {ANNO_SWATCHES.map(({ key, dot }) => (
+          <button
+            key={key}
+            onClick={() => onColorChange(key)}
+            aria-label={key}
+            style={{
+              width: "1.65rem", height: "1.65rem", borderRadius: "50%",
+              background: dot, cursor: "pointer",
+              border: color === key ? `2.5px solid ${t.text}` : "2.5px solid transparent",
+              transition: "border-color 0.15s",
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Note input */}
+      <input
+        type="text"
+        placeholder="Add a note (optional)…"
+        value={note}
+        onChange={(e) => onNoteChange(e.target.value)}
+        style={{
+          width: "100%", fontSize: "1rem", fontFamily,
+          background: "transparent",
+          border: `1px solid ${t.border}`, borderRadius: "0.4rem",
+          padding: "0.4rem 0.6rem", color: t.text,
+          marginBottom: "0.7rem", outline: "none",
+          boxSizing: "border-box",
+        } as React.CSSProperties}
+      />
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+        <button
+          onClick={onCancel}
+          style={{
+            fontSize: "0.78rem", fontFamily, color: t.muted,
+            background: "none", border: "none", cursor: "pointer",
+            minHeight: "2.25rem", padding: "0 0.75rem",
+          }}
+        >Cancel</button>
+        <button
+          onClick={onSave}
+          style={{
+            fontSize: "0.78rem", fontFamily, color: "#fff",
+            background: t.accent, border: "none", borderRadius: "0.4rem",
+            cursor: "pointer", minHeight: "2.25rem", padding: "0 1rem",
+          }}
+        >Save highlight</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main reader component ─────────────────────────────────────────────────────
 
 type Props = { manifest: EbookManifest; slug: string; initialChapter?: number };
@@ -433,16 +547,93 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [tocOpen,      setTocOpen]      = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const contentRef      = useRef<HTMLDivElement>(null);
-  const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── Page-flip state ──────────────────────────────────────────────────────
+  const [pageIndex,     setPageIndex]     = useState(0);
+  const [totalPages,    setTotalPages]    = useState(1);
+  const [containerW,    setContainerW]    = useState(0);
+  const [containerH,    setContainerH]    = useState(0);
+  const [isFlipping,    setIsFlipping]    = useState(false);
 
-  // Refs so stable callbacks can read latest state
+  // ── Annotation + audio state ────────────────────────────────────────────────────
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [audioOpen,      setAudioOpen]      = useState(false);
+  const [annoPanelOpen,  setAnnoPanelOpen]  = useState(false);
+  const [selection,      setSelection]      = useState<{ text: string; rect: DOMRect } | null>(null);
+  const [annoColor,      setAnnoColor]      = useState<AnnotationColor>("amber");
+  const [annoNote,       setAnnoNote]       = useState("");
+
+  const containerRef    = useRef<HTMLDivElement>(null);
+  const columnTrackRef  = useRef<HTMLDivElement>(null);
+  const sentinelRef     = useRef<HTMLDivElement>(null);
+  const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flipTimer       = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Touch / swipe tracking
+  const touchStartX     = useRef(0);
+  const touchStartY     = useRef(0);
+  const touchStartTime  = useRef(0);
+
+  // Refs so stable callbacks can read latest panel state
   const tocOpenRef      = useRef(tocOpen);
   const settingsOpenRef = useRef(settingsOpen);
   useEffect(() => { tocOpenRef.current      = tocOpen;      }, [tocOpen]);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
+  // ── Lock page scroll while reader is mounted (prevents iOS rubber-band pan) ─
+  useEffect(() => {
+    const prev = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow              = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prev;
+      document.body.style.overflow             = "";
+    };
+  }, []);
 
-  // Restore settings + position
+  // ── Block native touchmove scroll — only when NOT in annotation mode ────────
+  useEffect(() => {
+    if (annotationMode) return; // browser handles touches for text selection
+    const el = containerRef.current;
+    if (!el) return;
+    const block = (e: TouchEvent) => e.preventDefault();
+    el.addEventListener("touchmove", block, { passive: false });
+    return () => el.removeEventListener("touchmove", block);
+  }, [annotationMode]);
+  // ── Measure container dimensions via ResizeObserver ────────────────────────
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setContainerW(el.clientWidth);
+      setContainerH(el.clientHeight);
+    });
+    ro.observe(el);
+    setContainerW(el.clientWidth);
+    setContainerH(el.clientHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  // ── Count pages after render / chapter / settings change ────────────────
+  // Sentinel div is placed after all chapter content. Its getBoundingClientRect()
+  // left offset relative to the track tells us how many CSS columns were created.
+  // Math.ceil handles the case where sentinel lands exactly at a column boundary.
+  useEffect(() => {
+    if (!containerW || !containerH) return;
+    let raf1: number, raf2: number;
+    const measure = () => {
+      const track    = columnTrackRef.current;
+      const sentinel = sentinelRef.current;
+      if (!track || !sentinel) return;
+      const trackLeft    = track.getBoundingClientRect().left;
+      const sentinelLeft = sentinel.getBoundingClientRect().left;
+      const pages = Math.max(1, Math.ceil((sentinelLeft - trackLeft) / containerW));
+      setTotalPages(pages);
+      setPageIndex(0);
+    };
+    raf1 = requestAnimationFrame(() => { raf2 = requestAnimationFrame(measure); });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+  }, [chapterIndex, containerW, containerH, settings]);
+
+  // ── Restore settings + position ──────────────────────────────────────────
   useEffect(() => {
     const saved = getReaderSettings();
     setSettings(saved);
@@ -452,17 +643,12 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     }
   }, [slug, manifest.chapters.length, initialChapter]);
 
-  // Persist position on chapter change
+  // Persist position whenever chapter or page changes
   useEffect(() => {
-    saveReadingPosition(slug, { chapterIndex, scrollPercentage: 0 });
-  }, [slug, chapterIndex]);
+    saveReadingPosition(slug, { chapterIndex, scrollPercentage: pageIndex / Math.max(1, totalPages - 1) });
+  }, [slug, chapterIndex, pageIndex, totalPages]);
 
-  // Scroll content to top on chapter change
-  useEffect(() => {
-    contentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, [chapterIndex]);
-
-  // Chrome auto-hide on inactivity (stable callback)
+  // ── Chrome auto-hide ──────────────────────────────────────────────────────
   const resetInactivity = useCallback(() => {
     setShowChrome(true);
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
@@ -484,7 +670,6 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     };
   }, [resetInactivity]);
 
-  // Keep chrome visible when a panel is open
   useEffect(() => {
     if (tocOpen || settingsOpen) {
       setShowChrome(true);
@@ -492,23 +677,94 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     }
   }, [tocOpen, settingsOpen]);
 
-  const goToPrev = useCallback(() => setChapterIndex((i) => Math.max(0, i - 1)), []);
-  const goToNext = useCallback(() => {
-    setChapterIndex((i) => Math.min(manifest.chapters.length - 1, i + 1));
-  }, [manifest.chapters.length]);
+  // ── Annotation text-selection detection ─────────────────────────────────────
+  useEffect(() => {
+    if (!annotationMode) { setSelection(null); return; }
+    const detect = () => {
+      const sel  = window.getSelection();
+      const text = sel?.toString().trim() ?? "";
+      if (text.length < 3) { setSelection(null); return; }
+      const rect = sel!.getRangeAt(0).getBoundingClientRect();
+      setSelection({ text, rect });
+    };
+    document.addEventListener("pointerup", detect);
+    document.addEventListener("mouseup",   detect);
+    return () => {
+      document.removeEventListener("pointerup", detect);
+      document.removeEventListener("mouseup",   detect);
+    };
+  }, [annotationMode]);
 
-  // Keyboard shortcuts
+  // ── Page navigation — crossfade (no sliding body) ─────────────────────────
+  // Phase 1: fade content out (160ms)
+  // Phase 2: jump to new page instantly, fade back in
+  const triggerFlip = useCallback((dir: "prev" | "next") => {
+    if (isFlipping) return; // prevent double-tap during animation
+    setIsFlipping(true);
+    if (flipTimer.current) clearTimeout(flipTimer.current);
+    flipTimer.current = setTimeout(() => {
+      // Update page/chapter at the invisible midpoint
+      if (dir === "prev") {
+        setPageIndex((p) => {
+          if (p > 0) return p - 1;
+          setChapterIndex((ci) => Math.max(0, ci - 1));
+          return 0;
+        });
+      } else {
+        setPageIndex((p) => {
+          if (p < totalPages - 1) return p + 1;
+          setChapterIndex((ci) => Math.min(manifest.chapters.length - 1, ci + 1));
+          return 0;
+        });
+      }
+      setIsFlipping(false); // fade back in
+    }, 160);
+  }, [isFlipping, totalPages, manifest.chapters.length]);
+
+  // Chapter-level navigation (from ToC)
+  const goToChapter = useCallback((i: number) => {
+    setChapterIndex(i);
+    setPageIndex(0);
+  }, []);
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "ArrowLeft"  || e.key === "ArrowUp")    goToPrev();
-      if (e.key === "ArrowRight" || e.key === "ArrowDown")  goToNext();
-      if (e.key === "t" || e.key === "T")                   setTocOpen((v) => !v);
+      if (e.key === "ArrowLeft"  || e.key === "ArrowUp")    triggerFlip("prev");
+      if (e.key === "ArrowRight" || e.key === "ArrowDown")  triggerFlip("next");
+      if (e.key === "t" || e.key === "T") setTocOpen((v) => !v);
       if (e.key === "Escape") { setTocOpen(false); setSettingsOpen(false); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [goToPrev, goToNext]);
+  }, [triggerFlip]);
+
+  // ── Touch / swipe gestures ────────────────────────────────────────────────
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  }, []);
+
+  const onTouchEnd = useCallback((e: React.TouchEvent) => {
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    const dy = e.changedTouches[0].clientY - touchStartY.current;
+    // Only horizontal swipes wider than 40px and not mostly vertical
+    if (Math.abs(dx) < 40 || Math.abs(dy) > Math.abs(dx) * 0.9) return;
+    if (dx > 0) triggerFlip("prev"); else triggerFlip("next");
+  }, [triggerFlip]);
+
+  // ── Tap-zone page turn (left 30% = prev, right 30% = next) ───────────────
+  const onAreaClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Ignore clicks on interactive elements
+    if ((e.target as HTMLElement).closest("button,a,select,input,textarea")) return;
+    if (tocOpen || settingsOpen) { setTocOpen(false); setSettingsOpen(false); return; }
+    const x = e.clientX;
+    const w = e.currentTarget.clientWidth;
+    if (x < w * 0.30) triggerFlip("prev");
+    else if (x > w * 0.70) triggerFlip("next");
+    else resetInactivity();
+  }, [tocOpen, settingsOpen, triggerFlip, resetInactivity]);
 
   const updateSettings = (patch: Partial<ReaderSettings>) => {
     const next = { ...settings, ...patch } as ReaderSettings;
@@ -522,8 +778,11 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const fontFamily = FONT_FAMILIES[settings.fontFamily];
   const chapter    = manifest.chapters[chapterIndex];
   const opacity    = showChrome ? 1 : 0.06;
-  const atStart    = chapterIndex === 0;
-  const atEnd      = chapterIndex >= manifest.chapters.length - 1;
+
+  // Global progress across all pages of all chapters
+  const totalChapters = manifest.chapters.length;
+  const globalProgress = totalChapters === 0 ? 0 :
+    ((chapterIndex + (pageIndex + 1) / Math.max(1, totalPages)) / totalChapters) * 100;
 
   const iconBtn = (label: string, onClick: () => void, children: React.ReactNode) => (
     <button
@@ -540,49 +799,37 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     </button>
   );
 
+  // Horizontal offset — each "page" is exactly one CSS column (containerW wide)
+  const translateX = containerW > 0 ? -(pageIndex * containerW) : 0;
+
   return (
     <div
       style={{
-        height:   "100dvh",
-        display:  "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        background: theme.bg,
-        color: theme.text,
+        height: "100dvh", display: "flex", flexDirection: "column",
+        overflow: "hidden", background: theme.bg, color: theme.text,
         position: "relative",
       }}
     >
-      {/* Thin reading progress line */}
-      <ProgressBar
-        current={chapterIndex + 1}
-        total={manifest.chapters.length}
-        accent={theme.accent}
-      />
+      {/* Fine global progress line at very top */}
+      <ProgressBar current={globalProgress} total={100} accent={theme.accent} />
 
       {/* ── Top chrome ── */}
       <header
         style={{
-          flexShrink: 0,
-          height:     CHROME_H,
-          display:    "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding:    "0 1rem",
-          background: theme.chrome,
+          flexShrink: 0, height: CHROME_H, display: "flex",
+          alignItems: "center", justifyContent: "space-between",
+          padding: "0 1rem", background: theme.chrome,
           borderBottom: `1px solid ${theme.chromeBorder}`,
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-          opacity,
-          transition: "opacity 0.6s ease",
-          position:   "relative",
-          zIndex:     10,
+          backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+          opacity, transition: "opacity 0.6s ease",
+          position: "relative", zIndex: 10,
         }}
       >
         <Link
           href={`/library/${slug}`}
           style={{
-            display:    "flex", alignItems: "center", gap: "0.4rem",
-            color:      theme.muted, fontSize: "0.78rem", fontFamily,
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            color: theme.muted, fontSize: "0.78rem", fontFamily,
             textDecoration: "none", minHeight: "2.75rem", padding: "0 0.25rem",
           }}
         >
@@ -592,18 +839,56 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           Library
         </Link>
 
-        <p
-          style={{
-            flex: 1, textAlign: "center", overflow: "hidden",
-            textOverflow: "ellipsis", whiteSpace: "nowrap",
-            padding: "0 0.75rem", color: theme.muted,
-            fontSize: "0.78rem", fontFamily: "Georgia, serif",
-          }}
-        >
-          {manifest.bookTitle}
+        <p style={{
+          flex: 1, textAlign: "center", overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap",
+          padding: "0 0.75rem", color: theme.muted,
+          fontSize: "0.78rem", fontFamily: "Georgia, serif",
+        }}>
+          {chapter ? `Ch ${chapter.number} · ${chapter.title}` : manifest.bookTitle}
         </p>
 
         <div style={{ display: "flex", alignItems: "center" }}>
+          {/* Annotations panel */}
+          {iconBtn("Annotations", () => { setAnnoPanelOpen((v) => !v); setTocOpen(false); setSettingsOpen(false); },
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "1rem", height: "1rem" }}>
+              <path d="M19 3H5a2 2 0 0 0-2 2v14l4-4h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>,
+          )}
+          {/* Annotate mode toggle */}
+          <button
+            onClick={() => { setAnnotationMode((v) => !v); setTocOpen(false); setSettingsOpen(false); }}
+            aria-label={annotationMode ? "Exit annotate mode" : "Annotate"}
+            style={{
+              minHeight: "2.75rem", minWidth: "2.75rem", display: "flex",
+              alignItems: "center", justifyContent: "center",
+              color:      annotationMode ? theme.accent : theme.muted,
+              background: annotationMode ? `${theme.accent}1a` : "none",
+              border: "none", cursor: "pointer", borderRadius: "0.5rem",
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "1rem", height: "1rem" }}>
+              <path d="M12 20h9" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {/* Audio reader */}
+          <button
+            onClick={() => setAudioOpen((v) => !v)}
+            aria-label={audioOpen ? "Close audio reader" : "Read aloud"}
+            style={{
+              minHeight: "2.75rem", minWidth: "2.75rem", display: "flex",
+              alignItems: "center", justifyContent: "center",
+              color:      audioOpen ? theme.accent : theme.muted,
+              background: audioOpen ? `${theme.accent}1a` : "none",
+              border: "none", cursor: "pointer", borderRadius: "0.5rem",
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "1rem", height: "1rem" }}>
+              <path d="M3 18v-6a9 9 0 0 1 18 0v6" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
           {iconBtn("Settings", () => { setSettingsOpen((v) => !v); setTocOpen(false); },
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "1rem", height: "1rem" }}>
               <circle cx="12" cy="12" r="3" />
@@ -623,107 +908,112 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
         </div>
       </header>
 
-      {/* ── Scrollable reading area ── */}
+      {/* ── Page viewport — clips to one page at a time ── */}
       <div
-        ref={contentRef}
-        style={{ flex: 1, overflowY: "auto" }}
-        onClick={resetInactivity}
+        ref={containerRef}
+        style={{
+          flex: 1, overflow: "hidden", position: "relative",
+          // Annotation mode: allow text selection; reading mode: fully locked
+          userSelect:  annotationMode ? "text" : "none",
+          touchAction: annotationMode ? "auto" : "none",
+        }}
+        onClick={onAreaClick}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
       >
+        {/* Invisible tap-zone hints */}
+        <div style={{ position: "absolute", inset: 0, display: "flex", pointerEvents: "none", zIndex: 2 }}>
+          <div style={{ width: "30%", height: "100%" }} />
+          <div style={{ flex: 1, height: "100%" }} />
+          <div style={{ width: "30%", height: "100%" }} />
+        </div>
+
+        {/* Column track — CSS multi-column, one column = one page              */}
+        {/* position:absolute breaks it free of containerW width constraint      */}
+        {/* overflow:hidden on the column track keeps extra empty cols clipped   */}
+        {/* translateX jumps INSTANTLY (no transition) — body never moves        */}
+        {/* Fade on opacity gives the clean Kindle page-cut feel                 */}
         <div
+          ref={columnTrackRef}
           style={{
-            maxWidth: "68ch",
-            margin:   "0 auto",
-            padding:  "3rem 1.5rem 2.5rem",
+            position:    "absolute",
+            top:         0,
+            left:        0,
+            // Large fixed width so CSS can create up to ~200 columns
+            width:       containerW > 0 ? `${containerW * 200}px` : "100%",
+            height:      containerH > 0 ? `${containerH}px` : "100%",
+            // CSS multi-column: each column = containerW × containerH = one page
+            columnWidth: containerW > 0 ? `${containerW}px` : "auto",
+            columnGap:   0,
+            columnFill:  "auto",
+            overflow:    "hidden",
+            // Instant jump — no slide, body stays completely still
+            transform:   `translateX(${translateX}px)`,
+            // Crossfade: fade out on flip start, fade in on flip end
+            opacity:     isFlipping ? 0 : 1,
+            transition:  isFlipping
+              ? "opacity 0.14s ease-out"
+              : "opacity 0.22s ease-in",
+            willChange:  "opacity",
           }}
         >
-          {chapter && (
-            <ChapterView
-              chapter={chapter}
-              theme={theme}
-              fontFamily={fontFamily}
-              fontSize={fontSize}
-              lineHeight={lineHeight}
-            />
-          )}
-
-          {/* In-content chapter nav */}
+          {/* Padding wrapper with box-decoration-break:clone so EVERY page      */}
+          {/* fragment (column) gets its own top/bottom/left/right padding        */}
           <div
             style={{
-              display:        "flex",
-              justifyContent: "space-between",
-              alignItems:     "center",
-              marginTop:      "4rem",
-              paddingTop:     "2rem",
-              borderTop:      `1px solid ${theme.border}`,
-            }}
+              padding:                  "2.5rem max(1.5rem, 6vw) 2rem",
+              boxDecorationBreak:       "clone",
+              WebkitBoxDecorationBreak: "clone",
+              // Text cursor in annotation mode signals to the user they can select
+              userSelect: annotationMode ? "text" : "none",
+              cursor:     annotationMode ? "text" : "default",
+            } as React.CSSProperties}
           >
-            <button
-              onClick={goToPrev}
-              disabled={atStart}
-              style={{
-                display: "flex", alignItems: "center", gap: "0.4rem",
-                color:   atStart ? theme.border : theme.muted,
-                background: "none", border: "none",
-                cursor:  atStart ? "default" : "pointer",
-                fontFamily, fontSize: "0.78rem", minHeight: "2.75rem",
-              }}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "0.9rem", height: "0.9rem" }}>
-                <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              {!atStart ? `Ch ${chapterIndex}` : ""}
-            </button>
-            <span style={{ color: theme.muted, fontSize: "0.72rem", fontFamily }}>
-              {chapterIndex + 1} / {manifest.chapters.length}
-            </span>
-            <button
-              onClick={goToNext}
-              disabled={atEnd}
-              style={{
-                display: "flex", alignItems: "center", gap: "0.4rem",
-                color:   atEnd ? theme.border : theme.muted,
-                background: "none", border: "none",
-                cursor:  atEnd ? "default" : "pointer",
-                fontFamily, fontSize: "0.78rem", minHeight: "2.75rem",
-              }}
-            >
-              {!atEnd ? `Ch ${chapterIndex + 2}` : ""}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "0.9rem", height: "0.9rem" }}>
-                <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+            {chapter && (
+              <ChapterView
+                chapter={chapter}
+                theme={theme}
+                fontFamily={fontFamily}
+                fontSize={fontSize}
+                lineHeight={lineHeight}
+              />
+            )}
+            {/* Sentinel: measures how many columns content spans */}
+            <div ref={sentinelRef} style={{ height: "1px", width: "1px", display: "block" }} />
           </div>
         </div>
+
+        {/* Right-edge shadow — subtle visual page boundary */}
+        <div style={{
+          position:   "absolute", top: 0, right: 0, bottom: 0, width: "3px",
+          background: `linear-gradient(to left, ${theme.border}88, transparent)`,
+          pointerEvents: "none", zIndex: 1,
+        }} />
       </div>
 
       {/* ── Bottom chrome ── */}
       <footer
         style={{
-          flexShrink: 0,
-          minHeight:  CHROME_H,
+          flexShrink: 0, minHeight: CHROME_H,
           paddingBottom: "env(safe-area-inset-bottom)",
-          display:    "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding:    "0 1.25rem",
-          background: theme.chrome,
-          borderTop:  `1px solid ${theme.chromeBorder}`,
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-          opacity,
-          transition: "opacity 0.6s ease",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "0 1.25rem", background: theme.chrome,
+          borderTop: `1px solid ${theme.chromeBorder}`,
+          backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+          opacity, transition: "opacity 0.6s ease",
         }}
       >
+        {/* Prev page */}
         <button
-          onClick={goToPrev}
-          disabled={atStart}
-          aria-label="Previous chapter"
+          onClick={() => triggerFlip("prev")}
+          disabled={chapterIndex === 0 && pageIndex === 0}
+          aria-label="Previous page"
           style={{
             minHeight: "2.75rem", minWidth: "2.75rem", display: "flex",
             alignItems: "center", justifyContent: "center",
-            color:   atStart ? theme.border : theme.muted,
+            color: (chapterIndex === 0 && pageIndex === 0) ? theme.border : theme.muted,
             background: "none", border: "none",
-            cursor:  atStart ? "default" : "pointer",
+            cursor: (chapterIndex === 0 && pageIndex === 0) ? "default" : "pointer",
           }}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "1.1rem", height: "1.1rem" }}>
@@ -731,37 +1021,33 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           </svg>
         </button>
 
-        {/* Progress strip + label */}
+        {/* Page indicator */}
         <div style={{ flex: 1, margin: "0 1rem", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem" }}>
           <div style={{ width: "100%", height: "2px", background: theme.border, borderRadius: "1px" }}>
-            <div
-              style={{
-                height:     "100%",
-                background: theme.accent,
-                borderRadius: "1px",
-                width:      `${((chapterIndex + 1) / manifest.chapters.length) * 100}%`,
-                transition: "width 0.45s ease",
-              }}
-            />
+            <div style={{
+              height: "100%", background: theme.accent, borderRadius: "1px",
+              width: `${globalProgress}%`, transition: "width 0.45s ease",
+            }} />
           </div>
           <p style={{ fontSize: "0.67rem", color: theme.muted, fontFamily }}>
-            Ch {chapterIndex + 1} of {manifest.chapters.length}
-            {chapter?.totalWordCount
-              ? ` · ~${Math.ceil(chapter.totalWordCount / 200)} min`
-              : ""}
+            {totalPages > 1
+              ? `Page ${pageIndex + 1} of ${totalPages} · Ch ${chapterIndex + 1}/${totalChapters}`
+              : `Ch ${chapterIndex + 1} of ${totalChapters}`}
+            {chapter?.totalWordCount ? ` · ~${Math.ceil(chapter.totalWordCount / 200)} min` : ""}
           </p>
         </div>
 
+        {/* Next page */}
         <button
-          onClick={goToNext}
-          disabled={atEnd}
-          aria-label="Next chapter"
+          onClick={() => triggerFlip("next")}
+          disabled={chapterIndex >= totalChapters - 1 && pageIndex >= totalPages - 1}
+          aria-label="Next page"
           style={{
             minHeight: "2.75rem", minWidth: "2.75rem", display: "flex",
             alignItems: "center", justifyContent: "center",
-            color:   atEnd ? theme.border : theme.muted,
+            color: (chapterIndex >= totalChapters - 1 && pageIndex >= totalPages - 1) ? theme.border : theme.muted,
             background: "none", border: "none",
-            cursor:  atEnd ? "default" : "pointer",
+            cursor: (chapterIndex >= totalChapters - 1 && pageIndex >= totalPages - 1) ? "default" : "pointer",
           }}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} style={{ width: "1.1rem", height: "1.1rem" }}>
@@ -770,13 +1056,75 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
         </button>
       </footer>
 
+      {/* ── Annotation mode banner (thin strip below header) ── */}
+      {annotationMode && (
+        <div
+          style={{
+            position: "absolute",
+            top: CHROME_H, left: 0, right: 0,
+            zIndex: 15, pointerEvents: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            gap: "0.5rem", padding: "0.35rem 1rem",
+            background: `${theme.accent}18`,
+            borderBottom: `1px solid ${theme.accent}30`,
+          }}
+        >
+          <span style={{ fontSize: "0.67rem", letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent, fontFamily }}>
+            Annotate mode — select text to highlight
+          </span>
+        </div>
+      )}
+
+      {/* ── Selection popup ── */}
+      {annotationMode && selection && (
+        <SelectionPopup
+          selection={selection}
+          color={annoColor}
+          note={annoNote}
+          onColorChange={setAnnoColor}
+          onNoteChange={setAnnoNote}
+          onSave={() => {
+            saveAnnotation({
+              id:           crypto.randomUUID(),
+              slug,
+              chapterIndex,
+              chapterTitle: chapter?.title ?? "",
+              selectedText: selection.text,
+              note:         annoNote,
+              color:        annoColor,
+              createdAt:    Date.now(),
+            });
+            setSelection(null);
+            setAnnoNote("");
+            window.getSelection()?.removeAllRanges();
+          }}
+          onCancel={() => {
+            setSelection(null);
+            setAnnoNote("");
+            window.getSelection()?.removeAllRanges();
+          }}
+          t={theme}
+          fontFamily={fontFamily}
+        />
+      )}
+
+      {/* ── Audio reader bar (sits between viewport and footer in flex column) ── */}
+      {audioOpen && chapter && (
+        <AudioReader
+          chapter={chapter}
+          theme={theme}
+          fontFamily={fontFamily}
+          onClose={() => setAudioOpen(false)}
+        />
+      )}
+
       {/* ── Overlays ── */}
       <ChapterDrawer
         chapters={manifest.chapters}
         currentIndex={chapterIndex}
         open={tocOpen}
         onClose={() => setTocOpen(false)}
-        onSelect={(i) => { setChapterIndex(i); setTocOpen(false); }}
+        onSelect={(i) => { goToChapter(i); setTocOpen(false); }}
         t={theme}
         fontFamily={fontFamily}
       />
@@ -785,6 +1133,13 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onChange={updateSettings}
+        t={theme}
+        fontFamily={fontFamily}
+      />
+      <AnnotationsPanel
+        slug={slug}
+        open={annoPanelOpen}
+        onClose={() => setAnnoPanelOpen(false)}
         t={theme}
         fontFamily={fontFamily}
       />

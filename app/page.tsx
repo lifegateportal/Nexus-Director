@@ -244,6 +244,53 @@ export default function HomePage() {
     addLog({ level: "success", message: `Project "${snapshot.name}" imported.` });
   }, [addLog]);
 
+  const handlePublishProject = useCallback(async (snapshot: ProjectSnapshot): Promise<string | null> => {
+    const job = snapshot.ebookJobState;
+    const manifest = snapshot.ebookManifest;
+    if (!job?.architecture && !manifest) {
+      addLog({ level: "error", message: "No ebook content found — run the ebook pipeline first." });
+      return null;
+    }
+    const body = manifest
+      ? { manifest, coverAccent: "amber" }
+      : {
+          manifest: {
+            jobId:         job!.jobId,
+            bookTitle:     job!.architecture!.bookTitle,
+            subtitle:      job!.architecture!.subtitle,
+            authorName:    job!.architecture!.authorName,
+            frontMatter:   job!.frontMatter,
+            chapters:      job!.chapters ?? [],
+            totalWordCount: (job!.chapters ?? []).reduce((s: number, c: { totalWordCount?: number }) => s + (c.totalWordCount ?? 0), 0),
+            allQuotes:     job!.contentMap?.allQuotes ?? [],
+            generatedAt:   job!.updatedAt ?? new Date().toISOString(),
+            selectedTemplate: "devotional",
+            printSpec:     { trimSize: "6x9", runningHeaders: true },
+          },
+          coverAccent: "amber",
+        };
+    try {
+      const res = await fetch("/api/ebook/publish", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        addLog({ level: "error", message: err.error ?? "Publish failed." });
+        return null;
+      }
+      const { slug } = await res.json() as { slug: string };
+      await saveProject({ ...snapshot, publishedSlug: slug });
+      setProjects(await listProjects());
+      addLog({ level: "success", message: `Published to /library/${slug}` });
+      return slug;
+    } catch (err) {
+      addLog({ level: "error", message: err instanceof Error ? err.message : "Publish failed." });
+      return null;
+    }
+  }, [addLog]);
+
   const handleStageChange = useCallback((s: PipelineStage) => {
     setStage(s);
     if (s === "done" || s === "error" || s === "idle") {
@@ -473,6 +520,7 @@ export default function HomePage() {
                     onLoad={handleLoadProject}
                     onDelete={handleDeleteProject}
                     onImport={handleImportProject}
+                    onPublish={handlePublishProject}
                   />
                 ) : activeNav === "ebook" ? (
                   <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">

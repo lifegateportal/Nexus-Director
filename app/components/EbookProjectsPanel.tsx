@@ -274,7 +274,7 @@ export function EbookProjectsPanel({
                 </div>
 
                 {/* Publish / Published row */}
-                {onPublish && p.status === "complete" && (
+                {onPublish && (
                   <div className="mt-2">
                     {p.publishedSlug ? (
                       <a
@@ -324,7 +324,6 @@ export function EbookProjectsPanel({
                     )}
                   </div>
                 )}
-              </div>
               </div>
             ))}
           </div>
