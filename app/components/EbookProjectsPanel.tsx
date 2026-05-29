@@ -4,6 +4,7 @@ import { useRef, useState, useEffect } from "react";
 import type { EbookProject } from "@/lib/ebook-project-store";
 import type { EbookJobState, EbookManifest } from "@/lib/schemas/ebook";
 import { EbookManifestSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
+import type { PublishedBookEntry } from "@/lib/schemas/published-book";
 
 type EbookProjectsPanelProps = {
   projects: EbookProject[];
@@ -19,6 +20,8 @@ type EbookProjectsPanelProps = {
   onManifestLoaded?: (manifest: EbookManifest) => void;
   /** Publish a completed project to the Library — returns the slug on success */
   onPublish?: (project: EbookProject) => Promise<string | null>;
+  /** Remove a published book from the Library catalog */
+  onUnpublish?: (project: EbookProject) => Promise<boolean>;
 };
 
 function exportProject(p: EbookProject) {
@@ -43,14 +46,37 @@ export function EbookProjectsPanel({
   onImportManifestJson,
   onManifestLoaded,
   onPublish,
+  onUnpublish,
 }: EbookProjectsPanelProps) {
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmUnpublish, setConfirmUnpublish] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [unpublishingId, setUnpublishingId] = useState<string | null>(null);
   const projectFileRef = useRef<HTMLInputElement>(null);
   const manifestFileRef = useRef<HTMLInputElement>(null);
+
+  // Live published catalog fetched from R2 via API
+  const [liveBooks, setLiveBooks] = useState<PublishedBookEntry[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [removingSlug, setRemovingSlug] = useState<string | null>(null);
+  const [confirmRemoveSlug, setConfirmRemoveSlug] = useState<string | null>(null);
+
+  async function fetchLiveCatalog() {
+    setCatalogLoading(true);
+    try {
+      const res = await fetch("/api/ebook/publish");
+      if (res.ok) {
+        const data = await res.json() as { books?: PublishedBookEntry[] };
+        setLiveBooks(data.books ?? []);
+      }
+    } catch { /* silently ignore */ }
+    finally { setCatalogLoading(false); }
+  }
+
+  useEffect(() => { void fetchLiveCatalog(); }, []);
 
   // Keep the name input in sync when the pipeline produces a title
   useEffect(() => {
@@ -319,6 +345,42 @@ export function EbookProjectsPanel({
                             </>
                           )}
                         </button>
+
+                        {/* Remove from Library (confirm) */}
+                        {onUnpublish && (
+                          confirmUnpublish === p.id ? (
+                            <div className="flex gap-2">
+                              <button
+                                onClick={async () => {
+                                  setUnpublishingId(p.id);
+                                  setConfirmUnpublish(null);
+                                  try { await onUnpublish(p); }
+                                  finally { setUnpublishingId(null); }
+                                }}
+                                disabled={unpublishingId === p.id}
+                                className="flex flex-1 min-h-10 items-center justify-center gap-1.5 rounded-lg bg-red-500/20 text-sm font-semibold text-red-400 transition hover:bg-red-500/30 disabled:opacity-50"
+                              >
+                                {unpublishingId === p.id ? "Removing…" : "Yes, remove"}
+                              </button>
+                              <button
+                                onClick={() => setConfirmUnpublish(null)}
+                                className="flex flex-1 min-h-10 items-center justify-center rounded-lg bg-slate-700/50 text-sm text-slate-400 transition hover:bg-slate-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmUnpublish(p.id)}
+                              className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-red-500/20 text-sm font-medium text-slate-500 transition hover:border-red-500/40 hover:text-red-400"
+                            >
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              Remove from Library
+                            </button>
+                          )
+                        )}
                       </>
                     ) : (
                       <button
@@ -354,6 +416,108 @@ export function EbookProjectsPanel({
                     )}
                   </div>
                 )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Library Books (live catalog from R2) ─────────────────────────── */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+            Library Books {liveBooks.length > 0 && `· ${liveBooks.length}`}
+          </p>
+          <button
+            onClick={() => void fetchLiveCatalog()}
+            disabled={catalogLoading}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 transition hover:text-slate-300 disabled:opacity-40"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={`h-3 w-3 ${catalogLoading ? "animate-spin" : ""}`}>
+              <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 0 0 4.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 0 1-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Refresh
+          </button>
+        </div>
+
+        {liveBooks.length === 0 ? (
+          <div className="rounded-xl border border-slate-700/40 bg-slate-800/20 p-4 text-center">
+            <p className="text-sm text-slate-400">{catalogLoading ? "Loading…" : "No books in library yet."}</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {liveBooks.map((book) => (
+              <div key={book.slug} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                {/* Book info */}
+                <p className="truncate font-semibold text-slate-100">{book.title}</p>
+                {book.subtitle && (
+                  <p className="mt-0.5 truncate text-xs text-slate-500 italic">{book.subtitle}</p>
+                )}
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {book.chapterCount} ch · {book.wordCount.toLocaleString()} words
+                  {" · "}
+                  {new Date(book.publishedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                </p>
+
+                {/* Actions */}
+                <div className="mt-3 flex gap-2">
+                  <a
+                    href={`/library/${book.slug}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-1 min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-600 text-sm font-semibold text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-400"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 shrink-0">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" strokeLinecap="round" strokeLinejoin="round" />
+                      <polyline points="15 3 21 3 21 9" strokeLinecap="round" strokeLinejoin="round" />
+                      <line x1="10" y1="14" x2="21" y2="3" strokeLinecap="round" />
+                    </svg>
+                    View
+                  </a>
+
+                  {confirmRemoveSlug === book.slug ? (
+                    <>
+                      <button
+                        onClick={async () => {
+                          setRemovingSlug(book.slug);
+                          setConfirmRemoveSlug(null);
+                          try {
+                            const res = await fetch("/api/ebook/publish", {
+                              method:  "DELETE",
+                              headers: { "Content-Type": "application/json" },
+                              body:    JSON.stringify({ slug: book.slug }),
+                            });
+                            if (res.ok) {
+                              setLiveBooks((prev) => prev.filter((b) => b.slug !== book.slug));
+                            }
+                          } finally { setRemovingSlug(null); }
+                        }}
+                        disabled={removingSlug === book.slug}
+                        className="flex flex-1 min-h-10 items-center justify-center rounded-lg bg-red-500/20 text-sm font-semibold text-red-400 transition hover:bg-red-500/30 disabled:opacity-50"
+                      >
+                        {removingSlug === book.slug ? "Unpublishing…" : "Yes, unpublish"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmRemoveSlug(null)}
+                        className="flex flex-1 min-h-10 items-center justify-center rounded-lg bg-slate-700/50 text-sm text-slate-400 transition hover:bg-slate-700"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmRemoveSlug(book.slug)}
+                      disabled={removingSlug === book.slug}
+                      className="flex flex-1 min-h-10 items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 shrink-0">
+                        <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" strokeLinecap="round" strokeLinejoin="round" />
+                        <circle cx="12" cy="12" r="3" strokeLinecap="round" />
+                      </svg>
+                      Unpublish
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
