@@ -664,90 +664,121 @@ function SelectionPopup({
   t:             Theme;
   fontFamily:    string;
 }) {
-  // Position popup above selection if there's space, otherwise below it
-  const POPUP_H = 166;
-  const top  = selection.rect.top > POPUP_H + 12
-    ? selection.rect.top  - POPUP_H - 8
-    : selection.rect.bottom + 8;
-  const left = Math.max(8, Math.min(
-    selection.rect.left + selection.rect.width / 2 - 150,
-    (typeof window !== "undefined" ? window.innerWidth : 400) - 308,
-  ));
+  const POPUP_W = 320;
+  const POPUP_H = 220;
+  const vw = typeof window !== "undefined" ? window.innerWidth  : 400;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+
+  const rawTop  = selection.rect.top > POPUP_H + 16
+    ? selection.rect.top - POPUP_H - 10
+    : selection.rect.bottom + 10;
+  const rawLeft = selection.rect.left + selection.rect.width / 2 - POPUP_W / 2;
+
+  const top  = Math.max(8, Math.min(rawTop,  vh - POPUP_H - 8));
+  const left = Math.max(8, Math.min(rawLeft, vw - POPUP_W - 8));
 
   return (
     <div
-      onPointerDown={(e) => e.stopPropagation()} // prevent clearing selection
+      // Block ALL pointer/touch/mouse events from reaching the document-level
+      // selectionchange listener or the dismiss backdrop beneath this popup.
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
       style={{
-        position: "fixed", top, left, width: 300, zIndex: 60,
+        position: "fixed", top, left, width: POPUP_W, zIndex: 62,
         background: t.chrome,
         border: `1px solid ${t.chromeBorder}`,
-        borderRadius: "0.85rem",
-        backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
-        padding: "0.95rem",
-        boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+        borderRadius: "1rem",
+        backdropFilter: "blur(28px)", WebkitBackdropFilter: "blur(28px)",
+        padding: "1.1rem",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
       }}
     >
-      {/* Preview */}
+      {/* Selected text preview */}
       <p style={{
-        fontSize: "0.78rem", fontFamily: "Georgia, serif", fontStyle: "italic",
-        color: t.muted, lineHeight: 1.5, marginBottom: "0.75rem",
-        overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box",
+        fontSize: "0.82rem", fontFamily: "Georgia, serif", fontStyle: "italic",
+        color: t.muted, lineHeight: 1.55, marginBottom: "0.9rem",
+        overflow: "hidden", display: "-webkit-box",
         WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+        textOverflow: "ellipsis",
       } as React.CSSProperties}>
-        "{selection.text.slice(0, 90)}{selection.text.length > 90 ? "…" : ""}"
+        "{selection.text.slice(0, 100)}{selection.text.length > 100 ? "…" : ""}"
       </p>
 
       {/* Color swatches */}
-      <div style={{ display: "flex", gap: "0.55rem", marginBottom: "0.7rem" }}>
+      <div style={{ display: "flex", gap: "0.6rem", marginBottom: "0.85rem", alignItems: "center" }}>
+        <span style={{
+          fontSize: "0.6rem", letterSpacing: "0.1em", textTransform: "uppercase",
+          color: t.muted, fontFamily, marginRight: "0.1rem",
+        }}>
+          Color
+        </span>
         {ANNO_SWATCHES.map(({ key, dot }) => (
           <button
             key={key}
             onClick={() => onColorChange(key)}
             aria-label={key}
             style={{
-              width: "1.65rem", height: "1.65rem", borderRadius: "50%",
-              background: dot, cursor: "pointer",
-              border: color === key ? `2.5px solid ${t.text}` : "2.5px solid transparent",
-              transition: "border-color 0.15s",
+              width: "1.75rem", height: "1.75rem", borderRadius: "50%",
+              background: dot, cursor: "pointer", flexShrink: 0,
+              border: color === key ? `3px solid ${t.text}` : "3px solid transparent",
+              outline: color === key ? `2px solid ${dot}` : "none",
+              outlineOffset: "1px",
+              transition: "border-color 0.15s, outline 0.15s",
             }}
           />
         ))}
       </div>
 
-      {/* Note input */}
-      <input
-        type="text"
+      {/* Note textarea — 16px font prevents iOS auto-zoom */}
+      <textarea
         placeholder="Add a note (optional)…"
         value={note}
         onChange={(e) => onNoteChange(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSave();
+          if (e.key === "Escape") onCancel();
+        }}
+        rows={2}
         style={{
           width: "100%", fontSize: "1rem", fontFamily,
           background: "transparent",
-          border: `1px solid ${t.border}`, borderRadius: "0.4rem",
-          padding: "0.4rem 0.6rem", color: t.text,
-          marginBottom: "0.7rem", outline: "none",
-          boxSizing: "border-box",
+          border: `1px solid ${t.border}`, borderRadius: "0.45rem",
+          padding: "0.45rem 0.65rem", color: t.text,
+          marginBottom: "0.8rem", outline: "none",
+          resize: "none", lineHeight: 1.5,
+          boxSizing: "border-box", display: "block",
         } as React.CSSProperties}
       />
 
       {/* Actions */}
-      <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
         <button
           onClick={onCancel}
           style={{
-            fontSize: "0.78rem", fontFamily, color: t.muted,
-            background: "none", border: "none", cursor: "pointer",
-            minHeight: "2.25rem", padding: "0 0.75rem",
+            fontSize: "0.82rem", fontFamily, color: t.muted,
+            background: "none", border: `1px solid ${t.border}`,
+            borderRadius: "0.45rem", cursor: "pointer",
+            minHeight: "2.5rem", padding: "0 1rem",
           }}
-        >Cancel</button>
+        >
+          Cancel
+        </button>
         <button
           onClick={onSave}
           style={{
-            fontSize: "0.78rem", fontFamily, color: "#fff",
-            background: t.accent, border: "none", borderRadius: "0.4rem",
-            cursor: "pointer", minHeight: "2.25rem", padding: "0 1rem",
+            fontSize: "0.82rem", fontFamily, color: "#fff",
+            background: t.accent, border: "none",
+            borderRadius: "0.45rem", cursor: "pointer",
+            minHeight: "2.5rem", padding: "0 1.25rem",
+            fontWeight: 600,
           }}
-        >Save highlight</button>
+        >
+          Save highlight
+        </button>
       </div>
     </div>
   );
@@ -759,7 +790,7 @@ type Props = { manifest: EbookManifest; slug: string; initialChapter?: number };
 
 export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [settings, setSettings] = useState<ReaderSettings>({
-    theme: "night", fontSize: 3, lineHeight: 2, fontFamily: "serif",
+    theme: "paper", fontSize: 3, lineHeight: 2, fontFamily: "serif",
   });
   const [chapterIndex, setChapterIndex] = useState(initialChapter ?? 0);
   const [showChrome,   setShowChrome]   = useState(true);
@@ -792,9 +823,11 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const flipTimer       = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioOpenRef    = useRef(audioOpen);
   const pageIndexRef    = useRef(pageIndex);
-  const paraKeyMapRef   = useRef<Record<string, number>>({});
+  const paraKeyMapRef      = useRef<Record<string, number>>({});
   // When navigating back to a previous chapter, land on its last page
-  const goToLastPageRef = useRef(false);
+  const goToLastPageRef    = useRef(false);
+  // True while the highlight popup is visible — blocks selectionchange from closing it
+  const selectionLockRef   = useRef(false);
 
   // Touch / swipe tracking
   const touchStartX     = useRef(0);
@@ -973,20 +1006,35 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   }, [tocOpen, settingsOpen]);
 
   // ── Annotation text-selection detection ─────────────────────────────────────
+  // Keep the lock ref in sync with selection state (runs on every render, no effect needed)
+  selectionLockRef.current = selection !== null;
+
   useEffect(() => {
     if (!annotationMode) { setSelection(null); return; }
+    let debounce: ReturnType<typeof setTimeout>;
     const detect = () => {
-      const sel  = window.getSelection();
-      const text = sel?.toString().trim() ?? "";
-      if (text.length < 3) { setSelection(null); return; }
-      const rect = sel!.getRangeAt(0).getBoundingClientRect();
-      setSelection({ text, rect });
+      // While the popup is visible, ignore selectionchange so typing a note
+      // or tapping a color swatch doesn't dismiss the popup.
+      if (selectionLockRef.current) return;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        if (selectionLockRef.current) return;
+        const sel  = window.getSelection();
+        const text = sel?.toString().trim() ?? "";
+        if (text.length >= 3) {
+          try {
+            const rect = sel!.getRangeAt(0).getBoundingClientRect();
+            setSelection({ text, rect });
+          } catch { /* range detached — ignore */ }
+        } else {
+          setSelection(null);
+        }
+      }, 120); // debounce lets the selection stabilise (important on iOS)
     };
-    document.addEventListener("pointerup", detect);
-    document.addEventListener("mouseup",   detect);
+    document.addEventListener("selectionchange", detect);
     return () => {
-      document.removeEventListener("pointerup", detect);
-      document.removeEventListener("mouseup",   detect);
+      document.removeEventListener("selectionchange", detect);
+      clearTimeout(debounce);
     };
   }, [annotationMode]);
 
@@ -1047,18 +1095,21 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   }, []);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (annotationMode) return; // browser owns touch for text selection
     const dx = e.changedTouches[0].clientX - touchStartX.current;
     const dy = e.changedTouches[0].clientY - touchStartY.current;
     // Only horizontal swipes wider than 40px and not mostly vertical
     if (Math.abs(dx) < 40 || Math.abs(dy) > Math.abs(dx) * 0.9) return;
     if (dx > 0) triggerFlip("prev"); else triggerFlip("next");
-  }, [triggerFlip]);
+  }, [annotationMode, triggerFlip]);
 
   // ── Tap-zone page turn (left 30% = prev, right 30% = next) ───────────────
   const onAreaClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     // Ignore clicks on interactive elements
     if ((e.target as HTMLElement).closest("button,a,select,input,textarea")) return;
     if (tocOpen || settingsOpen) { setTocOpen(false); setSettingsOpen(false); return; }
+    // In annotation mode, let the browser manage taps for text selection
+    if (annotationMode) { resetInactivity(); return; }
     // When audio is open, tapping a paragraph starts reading from that position
     if (audioOpenRef.current) {
       const pkey = (e.target as HTMLElement).closest("[data-pkey]")?.getAttribute("data-pkey");
@@ -1072,7 +1123,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     if (x < w * 0.30) triggerFlip("prev");
     else if (x > w * 0.70) triggerFlip("next");
     else resetInactivity();
-  }, [tocOpen, settingsOpen, triggerFlip, resetInactivity]);
+  }, [annotationMode, tocOpen, settingsOpen, triggerFlip, resetInactivity]);
 
   const updateSettings = (patch: Partial<ReaderSettings>) => {
     const next = { ...settings, ...patch } as ReaderSettings;
@@ -1454,57 +1505,52 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
         </button>
       </footer>
 
-      {/* ── Annotation mode banner (thin strip below header) ── */}
-      {annotationMode && (
-        <div
-          style={{
-            position: "absolute",
-            top: CHROME_H, left: 0, right: 0,
-            zIndex: 15, pointerEvents: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            gap: "0.5rem", padding: "0.35rem 1rem",
-            background: `${theme.accent}18`,
-            borderBottom: `1px solid ${theme.accent}30`,
-          }}
-        >
-          <span style={{ fontSize: "0.67rem", letterSpacing: "0.12em", textTransform: "uppercase", color: theme.accent, fontFamily }}>
-            Annotate mode — select text to highlight
-          </span>
-        </div>
-      )}
+
 
       {/* ── Selection popup ── */}
       {annotationMode && selection && (
-        <SelectionPopup
-          selection={selection}
-          color={annoColor}
-          note={annoNote}
-          onColorChange={setAnnoColor}
-          onNoteChange={setAnnoNote}
-          onSave={() => {
-            saveAnnotation({
-              id:           crypto.randomUUID(),
-              slug,
-              chapterIndex,
-              chapterTitle: currentSection.kind === "chapter" ? currentSection.chapter.title : sectionLabel,
-              selectedText: selection.text,
-              note:         annoNote,
-              color:        annoColor,
-              createdAt:    Date.now(),
-            });
-            reloadAnnotations(); // refresh inline highlights immediately
-            setSelection(null);
-            setAnnoNote("");
-            window.getSelection()?.removeAllRanges();
-          }}
-          onCancel={() => {
-            setSelection(null);
-            setAnnoNote("");
-            window.getSelection()?.removeAllRanges();
-          }}
-          t={theme}
-          fontFamily={fontFamily}
-        />
+        <>
+          {/* Full-screen backdrop: pointer down anywhere outside the popup cancels it */}
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 60 }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setSelection(null);
+              setAnnoNote("");
+              window.getSelection()?.removeAllRanges();
+            }}
+          />
+          <SelectionPopup
+            selection={selection}
+            color={annoColor}
+            note={annoNote}
+            onColorChange={setAnnoColor}
+            onNoteChange={setAnnoNote}
+            onSave={() => {
+              saveAnnotation({
+                id:           crypto.randomUUID(),
+                slug,
+                chapterIndex,
+                chapterTitle: currentSection.kind === "chapter" ? currentSection.chapter.title : sectionLabel,
+                selectedText: selection.text,
+                note:         annoNote,
+                color:        annoColor,
+                createdAt:    Date.now(),
+              });
+              reloadAnnotations();
+              setSelection(null);
+              setAnnoNote("");
+              window.getSelection()?.removeAllRanges();
+            }}
+            onCancel={() => {
+              setSelection(null);
+              setAnnoNote("");
+              window.getSelection()?.removeAllRanges();
+            }}
+            t={theme}
+            fontFamily={fontFamily}
+          />
+        </>
       )}
 
       {/* ── Overlays ── */}
