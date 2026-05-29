@@ -479,6 +479,24 @@ function ChapterView({
         </p>
       )}
 
+      {/* Chapter intro — italic hook paragraph(s) before body sections */}
+      {chapter.intro && (
+        <div
+          data-pkey="intro"
+          style={{
+            ...hlBg("intro"),
+            fontStyle:    "italic",
+            color:        theme.muted,
+            fontSize:     "1.03em",
+            lineHeight:   1.8,
+            marginBottom: "3em",
+            cursor:       audioOpen ? "pointer" : undefined,
+          } as React.CSSProperties}
+        >
+          {renderBody(chapter.intro, theme, false, annotations, "intro", audioParaKey, audioOpen)}
+        </div>
+      )}
+
       {/* Sections */}
       {chapter.sections.map((section, idx) => (
         <section key={section.sectionNumber} style={{ marginBottom: "0.5em" }}>
@@ -978,7 +996,10 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
 
   // ── Chrome auto-hide ──────────────────────────────────────────────────────
   const resetInactivity = useCallback(() => {
-    setShowChrome(true);
+    // Functional update: if chrome is already visible, return same value so React
+    // bails out without scheduling a re-render. This prevents selection handle drags
+    // from being disrupted by spurious re-renders on every touchstart.
+    setShowChrome((prev) => prev ? prev : true);
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     inactivityTimer.current = setTimeout(() => {
       if (!tocOpenRef.current && !settingsOpenRef.current) setShowChrome(false);
@@ -1021,12 +1042,38 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
         if (selectionLockRef.current) return;
         const sel  = window.getSelection();
         const text = sel?.toString().trim() ?? "";
-        if (text.length >= 3) {
+        // Cap at 600 chars: longer almost always means the selection accidentally
+        // extended into a hidden CSS column ("whole page" selection on iOS).
+        if (text.length >= 3 && text.length <= 600) {
           try {
-            const rect = sel!.getRangeAt(0).getBoundingClientRect();
+            const range   = sel!.getRangeAt(0);
+            const rect    = range.getBoundingClientRect();
+            const cBounds = containerRef.current?.getBoundingClientRect();
+            const pageH   = cBounds?.height ?? window.innerHeight;
+
+            // Reject if the selection rect bleeds outside the visible viewport
+            // width (selection jumped into a hidden next-page CSS column).
+            if (cBounds && rect.right > cBounds.right + 24) {
+              sel!.removeAllRanges();
+              return;
+            }
+            // Reject if the selection is taller than 35% of the page height.
+            // iOS "whole page" grabs produce a tall bounding rect even when
+            // the selected text is short — this catches that case reliably.
+            if (rect.height > pageH * 0.35) {
+              sel!.removeAllRanges();
+              return;
+            }
+            // Reject if getClientRects() returns more than 8 line fragments —
+            // a normal sentence spans 1-4 lines; whole-page grabs span many more.
+            if (range.getClientRects().length > 8) {
+              sel!.removeAllRanges();
+              return;
+            }
             setSelection({ text, rect });
           } catch { /* range detached — ignore */ }
         } else {
+          if (text.length > 600) sel?.removeAllRanges(); // clear runaway column selection
           setSelection(null);
         }
       }, 120); // debounce lets the selection stabilise (important on iOS)
@@ -1037,6 +1084,16 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       clearTimeout(debounce);
     };
   }, [annotationMode]);
+
+  // ── Dismiss the iOS native "Copy / Look Up / Translate" callout ───────────
+  // As soon as our custom popup opens (selection goes null → non-null), clear the
+  // browser selection. At this point selectionLockRef.current is already true, so
+  // the resulting selectionchange event returns early without closing the popup.
+  useEffect(() => {
+    if (selection !== null) {
+      window.getSelection()?.removeAllRanges();
+    }
+  }, [selection]);
 
   // ── Page navigation — crossfade (no sliding body) ─────────────────────────
   // Phase 1: fade content out (160ms)
@@ -1090,9 +1147,10 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
 
   // ── Touch / swipe gestures ────────────────────────────────────────────────
   const onTouchStart = useCallback((e: React.TouchEvent) => {
+    if (annotationMode) return; // browser owns touch for text selection; don't record swipe coords
     touchStartX.current = e.touches[0].clientX;
     touchStartY.current = e.touches[0].clientY;
-  }, []);
+  }, [annotationMode]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (annotationMode) return; // browser owns touch for text selection

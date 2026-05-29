@@ -17,6 +17,8 @@ type ProjectsPanelProps = {
   onPublish?: (project: ProjectSnapshot) => Promise<string | null>;
   /** Unpublish (remove from library) a published project */
   onUnpublish?: (project: ProjectSnapshot) => Promise<boolean>;
+  /** Called after a cover or author image is uploaded, to persist the new URL */
+  onUpdateImages?: (id: string, coverImageUrl?: string, authorImageUrl?: string) => Promise<void>;
 };
 
 function exportProject(p: ProjectSnapshot) {
@@ -40,6 +42,7 @@ export function ProjectsPanel({
   onImport,
   onPublish,
   onUnpublish,
+  onUpdateImages,
 }: ProjectsPanelProps) {
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -47,7 +50,43 @@ export function ProjectsPanel({
   const [importError, setImportError] = useState<string | null>(null);
   const [publishingId, setPublishingId] = useState<string | null>(null);
   const [unpublishingId, setUnpublishingId] = useState<string | null>(null);
+  const [imageUploading, setImageUploading] = useState<{ id: string; type: "cover" | "author" } | null>(null);
+  const imageTargetRef = useRef<{ id: string; type: "cover" | "author" } | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleImageFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    const target = imageTargetRef.current;
+    if (!file || !target || !onUpdateImages) return;
+    setImageUploading(target);
+    try {
+      const presignRes = await fetch("/api/r2-presign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, contentType: file.type, prefix: "images" }),
+      });
+      if (!presignRes.ok) throw new Error("Could not get upload URL.");
+      const { presignedUrl, publicUrl } = await presignRes.json() as { presignedUrl: string; publicUrl: string | null };
+      if (!presignedUrl || !publicUrl) throw new Error("Storage not configured.");
+      const uploadRes = await fetch(presignedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!uploadRes.ok) throw new Error("Upload failed.");
+      await onUpdateImages(
+        target.id,
+        target.type === "cover"  ? publicUrl : undefined,
+        target.type === "author" ? publicUrl : undefined,
+      );
+    } catch { /* silently ignore — user can retry */ }
+    finally {
+      setImageUploading(null);
+      imageTargetRef.current = null;
+    }
+  }
 
   function handleFileImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -140,7 +179,8 @@ export function ProjectsPanel({
           </svg>
           Import
         </button>
-        <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={handleFileImport} />
+        <input ref={fileInputRef}  type="file" accept=".json,application/json" className="hidden" onChange={handleFileImport} />
+        <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageFileChange} />
       </div>
 
       {importError && (
@@ -251,6 +291,74 @@ export function ProjectsPanel({
                   </svg>
                 </button>
               </div>
+
+              {/* Book images — only for ebook projects */}
+              {onUpdateImages && (p.ebookJobState || p.ebookManifest) && (
+                <div className="mt-2 flex items-center gap-3 rounded-xl border border-slate-700/40 bg-slate-800/30 p-3">
+                  {/* Cover image slot */}
+                  <button
+                    onClick={() => {
+                      imageTargetRef.current = { id: p.id, type: "cover" };
+                      imageInputRef.current?.click();
+                    }}
+                    title="Upload book cover"
+                    className="relative flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-600 bg-slate-800 transition hover:border-cyan-500/60"
+                  >
+                    {p.coverImageUrl ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img src={p.coverImageUrl} alt="Cover" className="h-full w-full object-cover" />
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-slate-500">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                    {imageUploading?.id === p.id && imageUploading.type === "cover" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-slate-900/70">
+                        <svg className="h-4 w-4 animate-spin text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
+                        </svg>
+                      </div>
+                    )}
+                  </button>
+
+                  {/* Author photo slot */}
+                  <button
+                    onClick={() => {
+                      imageTargetRef.current = { id: p.id, type: "author" };
+                      imageInputRef.current?.click();
+                    }}
+                    title="Upload author photo"
+                    className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-slate-600 bg-slate-800 transition hover:border-cyan-500/60"
+                  >
+                    {p.authorImageUrl ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img src={p.authorImageUrl} alt="Author" className="h-full w-full object-cover" />
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-slate-500">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" strokeLinecap="round" strokeLinejoin="round" />
+                        <circle cx="12" cy="7" r="4" strokeLinecap="round" />
+                      </svg>
+                    )}
+                    {imageUploading?.id === p.id && imageUploading.type === "author" && (
+                      <div className="absolute inset-0 flex items-center justify-center rounded-full bg-slate-900/70">
+                        <svg className="h-4 w-4 animate-spin text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
+                        </svg>
+                      </div>
+                    )}
+                  </button>
+
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-slate-400">
+                      {p.coverImageUrl ? "Cover uploaded ✓" : "Tap to add cover"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-600">
+                      {p.authorImageUrl ? "Author photo set ✓" : "Tap ○ for author photo"}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Publish / Published row — shown when project has ebook content */}
               {onPublish && (p.ebookJobState || p.ebookManifest) && (
