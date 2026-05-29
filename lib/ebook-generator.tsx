@@ -448,55 +448,55 @@ function parseMarkdownBlockquote(paragraph: string): { text: string; reference?:
 
 function writeScriptureBlock(doc: any, quote: { text: string; reference?: string; translation?: string }, fonts: PdfFontSet, tpl: BookTemplateConfig) {
   const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-  const barX = doc.page.margins.left + Math.round(tpl.scriptureIndent * 0.3);
   const textX = doc.page.margins.left + tpl.scriptureIndent;
-  const textWidth = contentWidth - tpl.scriptureIndent - 8;
+  const textWidth = contentWidth - tpl.scriptureIndent * 2;
 
   // Pre-split lines so we can estimate height before committing to a y-position
   const verseLines = quote.text.split(/\n/).filter((l) => l.trim().length > 0);
 
-  // If the block fits on one page but won't fit in remaining space, push to a fresh page.
-  // This prevents the quote from splitting mid-text across a page boundary.
+  // Push to a fresh page if the block fits on one page but would otherwise split
   const lineH = tpl.scriptureFontSize * 1.6 + 4;
   const refH = quote.reference ? (tpl.scriptureFontSize - 1.5) * 2.5 + 12 : 0;
-  const estimatedH = 12 + verseLines.length * lineH + refH + 12;
+  const estimatedH = 14 + verseLines.length * lineH + refH + 14;
   const pageContentH = doc.page.height - doc.page.margins.top - doc.page.margins.bottom;
   const remaining = doc.page.height - doc.page.margins.bottom - doc.y;
   if (remaining < estimatedH && estimatedH <= pageContentH * 0.85) {
     doc.addPage();
   }
 
-  doc.moveDown(0.6);
-  const yStart = doc.y;
+  doc.moveDown(0.75);
 
-  // Write verse text line-by-line to preserve natural verse / stanza breaks
+  // When PDFKit auto-breaks to a new page mid-block it resets doc.x to the left margin.
+  // This listener restores the scripture indent so the continuation is still indented.
+  const _restoreIndent = () => { doc.x = textX; };
+  doc.on("pageAdded", _restoreIndent);
+
+  // Verse text — indented italic, no sidebar
   verseLines.forEach((line, i) => {
     doc
       .fontSize(tpl.scriptureFontSize)
       .font(fonts.serifItalic)
       .fillColor("#1a1a1a")
-      .text(line.trim(), textX, undefined, { width: textWidth, lineGap: 4, continued: false });
-    if (i < verseLines.length - 1) doc.moveDown(0.08);
+      .text(line.trim(), textX, undefined, { width: textWidth, lineGap: 5, align: "left", continued: false });
+    if (i < verseLines.length - 1) doc.moveDown(0.1);
   });
 
-  const yEnd = doc.y;
-  // Draw left accent bar retroactively over the rendered verse range
-  doc.save().rect(barX, yStart, 2.5, yEnd - yStart).fill(tpl.accentColor).restore();
+  doc.removeListener("pageAdded", _restoreIndent);
 
-  // Reference line: em-dash · reference · optional translation
+  // Reference line: em-dash · reference · optional translation — right-aligned, accent colour
   const reference = quote.reference
     ? `\u2014 ${quote.reference}${quote.translation ? ` (${quote.translation})` : ""}`
     : "";
   if (reference) {
     doc
-      .moveDown(0.2)
+      .moveDown(0.25)
       .fontSize(tpl.scriptureFontSize - 1.5)
       .font(fonts.serifBold)
       .fillColor(tpl.accentColor)
-      .text(reference, { align: "right", width: contentWidth - 8 });
+      .text(reference, doc.page.margins.left, undefined, { align: "right", width: contentWidth });
   }
 
-  doc.moveDown(0.6);
+  doc.moveDown(0.75);
 }
 
 /**
@@ -661,7 +661,7 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
       const restText = words.slice(capCount).join(" ");
       const capOpts = { lineGap: tpl.bodyLineGap, indent: 0, paragraphGap: tpl.paragraphGap, align: tpl.bodyAlign as "left" | "justify" | "right" | "center" };
       doc.fontSize(fontSize - 0.5).font(fonts.serifBold).fillColor("#1a1a1a")
-        .text(restText ? capText + " " : capText, { ...capOpts, continued: restText.length > 0 });
+        .text(restText ? capText + " " : capText, doc.page.margins.left, undefined, { ...capOpts, continued: restText.length > 0 });
       if (restText) {
         doc.fontSize(fontSize).font(fonts.serif).fillColor("#1a1a1a")
           .text(restText, { ...capOpts, continued: false });
@@ -674,7 +674,8 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
     if (options?.italicFirstParagraph && renderedIndex === 0) {
       const cleanParagraph = stripMarkdownForPdf(applySmartTypography(paragraph));
       if (!cleanParagraph) return;
-      doc.fontSize(fontSize).font(fonts.serifItalic).fillColor("#333333").text(cleanParagraph, textOpts);
+      doc.fontSize(fontSize).font(fonts.serifItalic).fillColor("#333333")
+        .text(cleanParagraph, doc.page.margins.left, undefined, textOpts);
       renderedIndex++;
       return;
     }
@@ -697,7 +698,12 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
       const isLast = i === runs.length - 1;
       const font = run.bold ? fonts.serifBold : run.italic ? fonts.serifItalic : fonts.serif;
       doc.fontSize(fontSize).font(font).fillColor("#1a1a1a");
-      doc.text(run.text, i === 0 ? { ...paraOpts, continued: !isLast } : { continued: !isLast });
+      if (i === 0) {
+        // Explicit x resets PDFKit's inherited cursor from any prior indented block (e.g. scripture)
+        doc.text(run.text, doc.page.margins.left, undefined, { ...paraOpts, continued: !isLast });
+      } else {
+        doc.text(run.text, { continued: !isLast });
+      }
     });
     renderedIndex++;
   });
