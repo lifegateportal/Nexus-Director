@@ -244,19 +244,20 @@ type RewrittenLocation = {
   field: "intro" | "conclusion" | { sectionNumber: number };
 };
 
+type TransitionTask = {
+  chapterIndex: number;
+  field: "intro" | "conclusion" | { sectionNumber: number };
+  role: "preceding" | "following";
+  headingContext: string;
+  bodyToFix: string;
+  adjacentEdge: string;
+};
+
 async function repairTransitions(
   chapters: ChapterInput[],
   rewritten: RewrittenLocation[],
   voiceDNA?: VoiceDNAType | null,
 ): Promise<ChapterInput[]> {
-  type TransitionTask = {
-    chapterIndex: number;
-    field: "intro" | "conclusion" | { sectionNumber: number };
-    role: "preceding" | "following";
-    headingContext: string;
-    bodyToFix: string;
-    adjacentEdge: string;
-  };
 
   const tasks: TransitionTask[] = [];
 
