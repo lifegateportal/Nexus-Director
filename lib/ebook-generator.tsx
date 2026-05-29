@@ -19,7 +19,6 @@ import {
   HeadingLevel,
   AlignmentType,
   PageBreak,
-  BorderStyle,
   TableOfContents,
   LevelFormat,
 } from "docx";
@@ -625,6 +624,105 @@ function parseRunsForPdf(text: string): Array<{ text: string; italic?: boolean; 
   return runs.length > 0 ? runs : [{ text }];
 }
 
+/**
+ * Renders a multi-run paragraph (bold + italic inline markup) with correct
+ * justified text by composing lines manually.
+ *
+ * PDFKit's built-in justify + continued:true calculates word-spacing per-run
+ * against the FULL line width, not the remaining space, causing extreme gaps
+ * around short inline segments (e.g. a bold scripture reference). This function
+ * fixes that by:
+ *   1. Tokenising all runs into word/space tokens preserving font info.
+ *   2. Greedy-wrapping tokens into lines using measured widths.
+ *   3. Rendering each line at an explicit y with manually-calculated per-space
+ *      extra width so the result is indistinguishable from native PDFKit justify.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeRunsParagraph(
+  doc: any,
+  runs: Array<{ text: string; italic?: boolean; bold?: boolean }>,
+  fonts: PdfFontSet,
+  fontSize: number,
+  leftX: number,
+  lineWidth: number,
+  lineGap: number,
+  paragraphGap: number,
+  firstLineIndent: number,
+  align: string,
+): void {
+  type Tok = { t: string; w: number; sp: boolean; font: string };
+  const tokens: Tok[] = [];
+  for (const run of runs) {
+    const font = run.bold ? fonts.serifBold : run.italic ? fonts.serifItalic : fonts.serif;
+    for (const part of run.text.split(/(\s+)/).filter(Boolean)) {
+      doc.font(font).fontSize(fontSize);
+      tokens.push({ t: part, w: doc.widthOfString(part), sp: /^\s+$/.test(part), font });
+    }
+  }
+
+  // Greedy line-wrap
+  const lines: Tok[][] = [];
+  let cur: Tok[] = [], curW = 0, firstUsed = false;
+  for (const tok of tokens) {
+    const avail = lineWidth - (!firstUsed ? firstLineIndent : 0);
+    if (!tok.sp && cur.length > 0 && curW + tok.w > avail) {
+      while (cur.length > 0 && cur[cur.length - 1].sp) cur.pop();
+      lines.push([...cur]);
+      cur = []; curW = 0; firstUsed = true;
+    }
+    if (!tok.sp || cur.length > 0) { cur.push(tok); curW += tok.w; }
+  }
+  while (cur.length > 0 && cur[cur.length - 1].sp) cur.pop();
+  if (cur.length > 0) lines.push(cur);
+  if (lines.length === 0) return;
+
+  // Exact line height from font metrics (no gap; we add lineGap manually)
+  doc.font(fonts.serif).fontSize(fontSize);
+  const lineH = doc.currentLineHeight(false);
+
+  let lastY = doc.y;
+  for (let li = 0; li < lines.length; li++) {
+    const ln = lines[li];
+    const isLastLine = li === lines.length - 1;
+    const isFirstLine = li === 0;
+    const indent = isFirstLine ? firstLineIndent : 0;
+    const startX = leftX + indent;
+    const avail = lineWidth - indent;
+
+    // Page break before this line if it won't fit
+    if (doc.y + lineH > doc.page.height - doc.page.margins.bottom) {
+      doc.addPage();
+    }
+    lastY = doc.y;
+
+    // Per-space extra width for justify (not on the last line)
+    let spExtra = 0;
+    if (align === 'justify' && !isLastLine) {
+      const totalW = ln.reduce((s, t) => s + t.w, 0);
+      const spCount = ln.filter(t => t.sp).length;
+      if (spCount > 0) spExtra = Math.max(0, (avail - totalW) / spCount);
+    }
+
+    // Render: skip space tokens (advance x only), render word tokens at explicit position
+    let x = startX;
+    for (const tok of ln) {
+      if (tok.sp) { x += tok.w + spExtra; continue; }
+      doc.font(tok.font).fontSize(fontSize).fillColor('#1a1a1a');
+      doc.text(tok.t, x, lastY, { lineBreak: false });
+      x += tok.w;
+    }
+
+    if (!isLastLine) {
+      doc.y = lastY + lineH + lineGap;
+      doc.x = leftX;
+    }
+  }
+
+  // Advance past the paragraph
+  doc.y = lastY + lineH + paragraphGap;
+  doc.x = leftX;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean; smallCapOpener?: boolean }, bodyFontSize?: number) {
   const fontSize = bodyFontSize ?? tpl.bodyFontSize;
@@ -686,25 +784,21 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
     const runs = parseRunsForPdf(preprocessed);
     if (runs.length === 0) return; // heading or rule line — dropped
 
-    // PDFKit's continued:true + align:justify applies word-spacing to each run
-    // independently against the FULL line width rather than the remaining width,
-    // causing extreme gaps in short italic or bold segments mid-paragraph.
-    // Workaround: use left alignment for paragraphs that have inline markup runs.
-    const paraOpts = runs.length > 1
-      ? { ...textOpts, align: "left" as const }
-      : textOpts;
-
-    runs.forEach((run, i) => {
-      const isLast = i === runs.length - 1;
-      const font = run.bold ? fonts.serifBold : run.italic ? fonts.serifItalic : fonts.serif;
+    if (runs.length === 1) {
+      // Single run — PDFKit's native rendering is fine (no multi-font justify issue)
+      const font = runs[0].bold ? fonts.serifBold : runs[0].italic ? fonts.serifItalic : fonts.serif;
       doc.fontSize(fontSize).font(font).fillColor("#1a1a1a");
-      if (i === 0) {
-        // Explicit x resets PDFKit's inherited cursor from any prior indented block (e.g. scripture)
-        doc.text(run.text, doc.page.margins.left, undefined, { ...paraOpts, continued: !isLast });
-      } else {
-        doc.text(run.text, { continued: !isLast });
-      }
-    });
+      doc.text(runs[0].text, doc.page.margins.left, undefined, textOpts);
+    } else {
+      // Multi-run — use manual line composition so justify word-spacing is correct
+      const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      writeRunsParagraph(
+        doc, runs, fonts, fontSize,
+        doc.page.margins.left, contentWidth,
+        tpl.bodyLineGap, tpl.paragraphGap,
+        indent, tpl.bodyAlign,
+      );
+    }
     renderedIndex++;
   });
 }
@@ -1300,8 +1394,9 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
   const { bookTitle, subtitle, authorName, frontMatter, chapters } = manifest;
   const tpl = getTemplate(templateId ?? manifest.selectedTemplate);
 
-  // Map template body alignment to DOCX AlignmentType
-  const bodyAlign = tpl.bodyAlign === "justify" ? AlignmentType.JUSTIFIED : AlignmentType.LEFT;
+  // DOCX body always uses full justification — matches typeset book standard.
+  // (tpl.bodyAlign controls PDF; DOCX is always JUSTIFIED for clean Word output.)
+  const bodyAlign = AlignmentType.JUSTIFIED;
   const titleAlign = tpl.titlePageAlign === "center" ? AlignmentType.CENTER
     : tpl.titlePageAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT;
   // Body font size in half-points (docx unit): bodyFontSize pt × 2
@@ -1322,10 +1417,9 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     const verseParagraphs = verseLines.map((line) =>
       new Paragraph({
         children: [new TextRun({ text: line.trim(), italics: true, size: scriptureHalfPt })],
-        alignment: bodyAlign,
+        alignment: AlignmentType.LEFT,
         spacing: { before: 40, after: 40 },
-        indent: { left: scriptureIndentTwips },
-        border: { left: { style: BorderStyle.THICK, size: 12, color: accentRgb, space: 8 } },
+        indent: { left: scriptureIndentTwips, right: scriptureIndentTwips },
       })
     );
     const refParagraphs: Paragraph[] = [];
@@ -1659,7 +1753,10 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     },
     styles: {
       default: {
-        document: { run: { size: bodyHalfPt } },
+        document: {
+          run: { size: bodyHalfPt },
+          paragraph: { alignment: AlignmentType.JUSTIFIED },
+        },
         heading1: {
           run: { size: Math.round(tpl.chapterTitleSize * 2), bold: true, color: tpl.chapterTitleColor.replace("#", "") },
           paragraph: { spacing: { before: 480, after: 240 } },
