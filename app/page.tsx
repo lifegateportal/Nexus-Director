@@ -341,7 +341,12 @@ export default function HomePage() {
           selectedTemplate: "devotional",
           printSpec:     { trimSize: "6x9", runningHeaders: true },
         };
-    const body = { manifest: publishManifest, coverAccent: "amber" };
+    const body = {
+      manifest: publishManifest,
+      coverAccent: "amber",
+      ...(snapshot.coverImageUrl  ? { coverImageUrl:  snapshot.coverImageUrl  } : {}),
+      ...(snapshot.authorImageUrl ? { authorImageUrl: snapshot.authorImageUrl } : {}),
+    };
     try {
       const res = await fetch("/api/ebook/publish", {
         method:  "POST",
@@ -381,6 +386,34 @@ export default function HomePage() {
       return null;
     }
   }, [addLog]);
+
+  const handleUpdateImages = useCallback(async (id: string, coverImageUrl?: string, authorImageUrl?: string) => {
+    const p = projects.find((proj) => proj.id === id);
+    if (!p) return;
+    const updated: ProjectSnapshot = {
+      ...p,
+      ...(coverImageUrl  !== undefined ? { coverImageUrl  } : {}),
+      ...(authorImageUrl !== undefined ? { authorImageUrl } : {}),
+    };
+    await saveProject(updated);
+    const freshMain = await listProjects();
+    const freshMainIds = new Set(freshMain.map((pr) => pr.id));
+    const freshEbook = (await listEbookProjects().catch(() => [])).filter((e) => !freshMainIds.has(e.id)).map((e) => ({
+      id: e.id, name: e.name, createdAt: e.createdAt, updatedAt: e.updatedAt,
+      academy: null, siteConfig: SiteConfigSchema.parse({}), deliveryInstructions: "",
+      chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
+      ebookManifest: null, ebookJobState: e.jobState, publishedSlug: e.publishedSlug,
+    }));
+    setProjects([...freshMain, ...freshEbook]);
+    fetch("/api/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: updated }),
+    }).catch(() => {});
+    // If already published, push the new images to the library immediately
+    if (updated.publishedSlug) {
+      handlePublishProject(updated).catch(() => {});
+    }
+  }, [projects, handlePublishProject]);
 
   const handleUnpublishProject = useCallback(async (snapshot: ProjectSnapshot): Promise<boolean> => {
     if (!snapshot.publishedSlug) return false;
@@ -654,6 +687,7 @@ export default function HomePage() {
                     onImport={handleImportProject}
                     onPublish={handlePublishProject}
                     onUnpublish={handleUnpublishProject}
+                    onUpdateImages={handleUpdateImages}
                   />
                 ) : activeNav === "ebook" ? (
                   <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
