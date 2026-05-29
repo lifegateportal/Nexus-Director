@@ -230,6 +230,15 @@ async function mapWithConcurrency<T, R>(
 // immediately following section and closing paragraph of the preceding one so
 // the seam reads naturally without manual intervention.
 
+type LLMTask = {
+  chapterIndex: number;
+  field: "intro" | "conclusion" | { sectionNumber: number };
+  task: string;
+  heading: string;
+  body: string;
+  voiceDNA?: VoiceDNAType | null;
+};
+
 type RewrittenLocation = {
   chapterIndex: number;
   field: "intro" | "conclusion" | { sectionNumber: number };
@@ -430,15 +439,6 @@ async function repairTransitions(
   // ── Tier 2: Targeted LLM fixes — only the affected section is sent ───────────
 
   // Collect all LLM work items before running them
-  type LLMTask = {
-    chapterIndex: number;
-    field: "intro" | "conclusion" | { sectionNumber: number };
-    task: string;
-    heading: string;
-    body: string;
-    voiceDNA?: VoiceDNAType | null;
-  };
-
   const llmTasks: LLMTask[] = [];
 
   for (const key of appliedKeys) {
