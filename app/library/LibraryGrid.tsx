@@ -45,36 +45,48 @@ function BookCard({ book }: { book: PublishedBookEntry }) {
   return (
     <Link href={`/library/${book.slug}`} className="group block">
       {/* Book cover illustration */}
+      {/* Book cover — real photo if available, gradient fallback */}
       <div
-        className={`relative mb-4 h-64 w-full overflow-hidden rounded-2xl bg-gradient-to-br ${grad} shadow-xl ring-1 ring-white/5 transition duration-300 group-hover:scale-[1.02] group-hover:shadow-2xl group-hover:ring-white/10`}
+        className={`relative mb-4 h-64 w-full overflow-hidden rounded-2xl ${book.coverImageUrl ? "bg-slate-900" : `bg-gradient-to-br ${grad}`} shadow-xl ring-1 ring-white/5 transition duration-300 group-hover:scale-[1.02] group-hover:shadow-2xl group-hover:ring-white/10`}
       >
-        {/* Spine */}
-        <div className="absolute inset-y-0 left-0 w-3 bg-black/25" />
-        {/* Page edges */}
-        <div className="absolute inset-y-2 right-2 w-2 rounded-sm bg-white/[0.06]" />
-        <div className="absolute inset-y-3 right-5 w-1 rounded-sm bg-white/[0.03]" />
-        {/* Bottom gradient */}
-        <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 to-transparent" />
-        {/* Cover text */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center px-7 text-center">
-          <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
-            {book.authorName}
-          </p>
-          <h2
-            className={`text-xl font-bold leading-snug tracking-tight ${title}`}
-            style={{ fontFamily: "Georgia, serif" }}
-          >
-            {book.title}
-          </h2>
-          {book.subtitle && (
-            <p
-              className="mt-2 text-sm leading-snug text-white/45"
-              style={{ fontFamily: "Georgia, serif" }}
-            >
-              {book.subtitle}
-            </p>
-          )}
-        </div>
+        {book.coverImageUrl ? (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={book.coverImageUrl}
+            alt={`${book.title} cover`}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <>
+            {/* Spine */}
+            <div className="absolute inset-y-0 left-0 w-3 bg-black/25" />
+            {/* Page edges */}
+            <div className="absolute inset-y-2 right-2 w-2 rounded-sm bg-white/[0.06]" />
+            <div className="absolute inset-y-3 right-5 w-1 rounded-sm bg-white/[0.03]" />
+            {/* Bottom gradient */}
+            <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 to-transparent" />
+            {/* Cover text */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center px-7 text-center">
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
+                {book.authorName}
+              </p>
+              <h2
+                className={`text-xl font-bold leading-snug tracking-tight ${title}`}
+                style={{ fontFamily: "Georgia, serif" }}
+              >
+                {book.title}
+              </h2>
+              {book.subtitle && (
+                <p
+                  className="mt-2 text-sm leading-snug text-white/45"
+                  style={{ fontFamily: "Georgia, serif" }}
+                >
+                  {book.subtitle}
+                </p>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Below-cover metadata */}

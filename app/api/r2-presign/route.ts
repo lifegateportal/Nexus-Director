@@ -9,6 +9,7 @@ export const runtime = "nodejs";
 const RequestSchema = z.object({
   filename:    z.string().min(1).max(255),
   contentType: z.string().min(1),
+  prefix:      z.enum(["videos", "images"]).default("videos"),
 });
 
 export async function POST(req: NextRequest) {
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json() as unknown;
-    const { filename, contentType } = RequestSchema.parse(body);
+    const { filename, contentType, prefix } = RequestSchema.parse(body);
 
     const s3 = new S3Client({
       region: "auto",
@@ -34,9 +35,9 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Sanitise filename and namespace under videos/
+    // Sanitise filename and namespace under the requested prefix
     const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const key = `videos/${Date.now()}-${safe}`;
+    const key = `${prefix}/${Date.now()}-${safe}`;
 
     const command = new PutObjectCommand({
       Bucket: R2_BUCKET_NAME,

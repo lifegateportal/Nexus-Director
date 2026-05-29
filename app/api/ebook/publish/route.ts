@@ -48,8 +48,10 @@ export async function GET() {
 }
 
 const PublishRequestSchema = z.object({
-  manifest:    EbookManifestSchema,
-  coverAccent: CoverAccentSchema.default("amber"),
+  manifest:       EbookManifestSchema,
+  coverAccent:    CoverAccentSchema.default("amber"),
+  coverImageUrl:  z.string().url().optional().nullable(),
+  authorImageUrl: z.string().url().optional().nullable(),
 });
 
 function slugify(title: string, jobId: string): string {
@@ -112,16 +114,20 @@ export async function POST(req: NextRequest) {
   }
 
   const { manifest, coverAccent } = input;
+  // Prefer image URLs passed explicitly; fall back to URLs embedded in the manifest
+  const coverImageUrl  = input.coverImageUrl  ?? manifest.coverImageUrl  ?? null;
+  const authorImageUrl = input.authorImageUrl ?? manifest.authorImageUrl ?? null;
   const slug = slugify(manifest.bookTitle, manifest.jobId);
   const s3   = makeS3Client(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
 
   try {
-    // 1. Write the full manifest to R2
+    // 1. Write the full manifest to R2 (include image URLs so the reader can use them)
+    const manifestWithImages = { ...manifest, coverImageUrl, authorImageUrl };
     await s3.send(
       new PutObjectCommand({
         Bucket:       R2_BUCKET_NAME,
         Key:          `published/${slug}/manifest.json`,
-        Body:         JSON.stringify(manifest),
+        Body:         JSON.stringify(manifestWithImages),
         ContentType:  "application/json",
         CacheControl: "public, max-age=60",
       }),
@@ -131,16 +137,18 @@ export async function POST(req: NextRequest) {
     const now   = new Date().toISOString();
     const entry = PublishedBookEntrySchema.parse({
       slug,
-      title:        manifest.bookTitle,
-      subtitle:     manifest.subtitle,
-      authorName:   manifest.authorName,
-      publishedAt:  now,
-      updatedAt:    now,
-      wordCount:    manifest.totalWordCount,
-      chapterCount: manifest.chapters.length,
-      synopsis:     buildSynopsis(manifest),
+      title:          manifest.bookTitle,
+      subtitle:       manifest.subtitle,
+      authorName:     manifest.authorName,
+      publishedAt:    now,
+      updatedAt:      now,
+      wordCount:      manifest.totalWordCount,
+      chapterCount:   manifest.chapters.length,
+      synopsis:       buildSynopsis(manifest),
       coverAccent,
-      template:     manifest.selectedTemplate,
+      template:       manifest.selectedTemplate,
+      coverImageUrl,
+      authorImageUrl,
     });
 
     // 3. Read existing catalog (best-effort — index may not yet exist)

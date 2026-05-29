@@ -188,6 +188,10 @@ export const EbookManifestSchema = z.object({
   selectedTemplate: BookTemplateEnum.default("devotional"),
   /** Print trim size and running-header preferences */
   printSpec: PrintSpecSchema.default({ trimSize: "6x9", runningHeaders: true }),
+  /** Optional R2 public URL for the book cover image */
+  coverImageUrl: z.string().url().optional().nullable(),
+  /** Optional R2 public URL for the author's photo */
+  authorImageUrl: z.string().url().optional().nullable(),
 });
 
 // ─── Job State (IndexedDB persistence) ───────────────────────────────────────

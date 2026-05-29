@@ -167,6 +167,38 @@ export default function EbookPage() {
     setStatusMsg({ type: "success", text: `"${project.name}" imported.` });
   }, []);
 
+  const handleUpdateImages = useCallback(async (
+    id: string,
+    coverImageUrl?: string,
+    authorImageUrl?: string,
+  ) => {
+    const p = projects.find((proj) => proj.id === id);
+    if (!p) return;
+    const updated: EbookProject = {
+      ...p,
+      ...(coverImageUrl  !== undefined ? { coverImageUrl  } : {}),
+      ...(authorImageUrl !== undefined ? { authorImageUrl } : {}),
+    };
+    await saveEbookProject(updated);
+    setProjects(await listEbookProjects());
+    // Sync to R2
+    fetch("/api/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: {
+          id: updated.id, name: updated.name,
+          createdAt: updated.createdAt, updatedAt: updated.updatedAt,
+          academy: null, siteConfig: {}, deliveryInstructions: "",
+          chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
+          ebookManifest: null, ebookJobState: updated.jobState,
+          publishedSlug: updated.publishedSlug,
+          coverImageUrl: updated.coverImageUrl,
+          authorImageUrl: updated.authorImageUrl,
+        },
+      }),
+    }).catch(() => {});
+  }, [projects]);
+
   // ── Publish handler ───────────────────────────────────────────────────────
 
   const handlePublish = useCallback(async (project: EbookProject): Promise<string | null> => {
@@ -187,6 +219,8 @@ export default function EbookPage() {
       generatedAt:   job.updatedAt ?? new Date().toISOString(),
       selectedTemplate: "devotional",
       printSpec:     { trimSize: "6x9", runningHeaders: true },
+      coverImageUrl:  project.coverImageUrl  ?? null,
+      authorImageUrl: project.authorImageUrl ?? null,
     };
     try {
       const res = await fetch("/api/ebook/publish", {
@@ -409,6 +443,7 @@ export default function EbookPage() {
             onImportManifestJson={buildManifestFromJob}
             onPublish={handlePublish}
             onUnpublish={handleUnpublish}
+            onUpdateImages={handleUpdateImages}
             onManifestLoaded={(manifest) => {
               setEbookManifest(manifest);
               setActiveTab("pipeline");

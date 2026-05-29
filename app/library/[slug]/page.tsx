@@ -134,26 +134,37 @@ export default async function BookLandingPage({
           {/* Two-column hero: cover mockup + text */}
           <div className="flex flex-col items-center gap-10 pt-4 lg:flex-row lg:items-center lg:gap-16 lg:pt-8">
 
-            {/* Book cover mockup */}
+            {/* Book cover mockup or real image */}
             <div className="w-44 shrink-0 lg:w-56">
               <div
-                className={`relative h-64 w-full overflow-hidden rounded-2xl bg-gradient-to-br ${coverGrad} shadow-2xl ring-1 ring-white/10 lg:h-80`}
+                className={`relative h-64 w-full overflow-hidden rounded-2xl ${manifest.coverImageUrl ? "bg-slate-900" : `bg-gradient-to-br ${coverGrad}`} shadow-2xl ring-1 ring-white/10 lg:h-80`}
               >
-                <div className="absolute inset-y-0 left-0 w-3 rounded-l-2xl bg-black/30" />
-                <div className="absolute inset-y-2 right-2 w-2 rounded-sm bg-white/[0.08]" />
-                <div className="absolute inset-y-3 right-5 w-1 rounded-sm bg-white/[0.04]" />
-                <div className="absolute inset-x-0 bottom-0 h-1/3 rounded-b-2xl bg-gradient-to-t from-black/60 to-transparent" />
-                <div className="absolute inset-0 flex flex-col items-center justify-center px-5 text-center">
-                  <p className="mb-3 text-[9px] font-semibold uppercase tracking-[0.28em] text-white/40">
-                    {manifest.authorName}
-                  </p>
-                  <h2
-                    className="text-sm font-bold leading-snug text-white/90"
-                    style={{ fontFamily: "Georgia, serif" }}
-                  >
-                    {manifest.bookTitle}
-                  </h2>
-                </div>
+                {manifest.coverImageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={manifest.coverImageUrl}
+                    alt={`${manifest.bookTitle} cover`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <>
+                    <div className="absolute inset-y-0 left-0 w-3 rounded-l-2xl bg-black/30" />
+                    <div className="absolute inset-y-2 right-2 w-2 rounded-sm bg-white/[0.08]" />
+                    <div className="absolute inset-y-3 right-5 w-1 rounded-sm bg-white/[0.04]" />
+                    <div className="absolute inset-x-0 bottom-0 h-1/3 rounded-b-2xl bg-gradient-to-t from-black/60 to-transparent" />
+                    <div className="absolute inset-0 flex flex-col items-center justify-center px-5 text-center">
+                      <p className="mb-3 text-[9px] font-semibold uppercase tracking-[0.28em] text-white/40">
+                        {manifest.authorName}
+                      </p>
+                      <h2
+                        className="text-sm font-bold leading-snug text-white/90"
+                        style={{ fontFamily: "Georgia, serif" }}
+                      >
+                        {manifest.bookTitle}
+                      </h2>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -254,11 +265,20 @@ export default async function BookLandingPage({
             {manifest.frontMatter.aboutAuthor && (
               <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-5">
                 <div className="mb-4 flex items-center gap-3">
-                  <div
-                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg font-bold ring-1 ${avatarCls}`}
-                  >
-                    {manifest.authorName.charAt(0).toUpperCase()}
-                  </div>
+                  {manifest.authorImageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={manifest.authorImageUrl}
+                      alt={manifest.authorName}
+                      className={`h-12 w-12 shrink-0 rounded-full object-cover ring-2 ${avatarCls.replace(/bg-[^\s]+\s*/, "")}`}
+                    />
+                  ) : (
+                    <div
+                      className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg font-bold ring-1 ${avatarCls}`}
+                    >
+                      {manifest.authorName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
                   <div>
                     <p className="text-sm font-semibold text-slate-200">{manifest.authorName}</p>
                     <p className="text-[10px] uppercase tracking-widest text-slate-500">Author</p>
