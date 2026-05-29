@@ -628,13 +628,10 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
       const restText = words.slice(capCount).join(" ");
       const capOpts = { lineGap: tpl.bodyLineGap, indent: 0, paragraphGap: tpl.paragraphGap, align: tpl.bodyAlign as "left" | "justify" | "right" | "center" };
       doc.fontSize(fontSize - 0.5).font(fonts.serifBold).fillColor("#1a1a1a")
-        .characterSpacing(1.0)
         .text(capText, { ...capOpts, continued: restText.length > 0 });
       if (restText) {
-        doc.characterSpacing(0).fontSize(fontSize).font(fonts.serif)
+        doc.fontSize(fontSize).font(fonts.serif).fillColor("#1a1a1a")
           .text(" " + restText, { ...capOpts, continued: false });
-      } else {
-        doc.characterSpacing(0);
       }
       renderedIndex++;
       return;
