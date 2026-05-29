@@ -15,6 +15,8 @@ type ProjectsPanelProps = {
   onImport: (snapshot: ProjectSnapshot) => void;
   /** Publish an ebook project to the Library — returns the slug on success */
   onPublish?: (project: ProjectSnapshot) => Promise<string | null>;
+  /** Unpublish (remove from library) a published project */
+  onUnpublish?: (project: ProjectSnapshot) => Promise<boolean>;
 };
 
 function exportProject(p: ProjectSnapshot) {
@@ -37,11 +39,14 @@ export function ProjectsPanel({
   onDelete,
   onImport,
   onPublish,
+  onUnpublish,
 }: ProjectsPanelProps) {
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmUnpublish, setConfirmUnpublish] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [unpublishingId, setUnpublishingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleFileImport(e: React.ChangeEvent<HTMLInputElement>) {
@@ -290,6 +295,43 @@ export function ProjectsPanel({
                           </>
                         )}
                       </button>
+
+                      {/* Unpublish */}
+                      {onUnpublish && (
+                        confirmUnpublish === p.id ? (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={async () => {
+                                setUnpublishingId(p.id);
+                                setConfirmUnpublish(null);
+                                try { await onUnpublish(p); }
+                                finally { setUnpublishingId(null); }
+                              }}
+                              disabled={unpublishingId === p.id}
+                              className="flex flex-1 min-h-10 items-center justify-center rounded-lg bg-red-500/20 text-sm font-semibold text-red-400 transition hover:bg-red-500/30 disabled:opacity-50"
+                            >
+                              {unpublishingId === p.id ? "Unpublishing…" : "Yes, unpublish"}
+                            </button>
+                            <button
+                              onClick={() => setConfirmUnpublish(null)}
+                              className="flex flex-1 min-h-10 items-center justify-center rounded-lg bg-slate-700/50 text-sm text-slate-400 transition hover:bg-slate-700"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmUnpublish(p.id)}
+                            disabled={unpublishingId === p.id}
+                            className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 shrink-0">
+                              <path d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            Unpublish
+                          </button>
+                        )
+                      )}
                     </>
                   ) : (
                     <button
