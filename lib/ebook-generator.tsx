@@ -407,18 +407,35 @@ function findMatchingBlockQuote(paragraph: string, quotes: Quote[]): Quote | nul
 // a Quote-compatible object. Returns null if not a markdown blockquote.
 function parseMarkdownBlockquote(paragraph: string): { text: string; reference?: string; translation?: string } | null {
   if (!paragraph.startsWith("> ") && !paragraph.startsWith(">")) return null;
-  const lines = paragraph.split("\n").map((l) => l.replace(/^>\s?/, "").trim()).filter(Boolean);
+  // Strip ALL leading '>' levels — handles nested '> > text' and LLM '> > ref' formats
+  const lines = paragraph.split("\n")
+    .map((l) => l.replace(/^(>\s*)+/, "").trim())
+    .filter(Boolean);
   if (lines.length === 0) return null;
 
-  // Find reference line: last line starting with —, -, –, or *—
-  const refPattern = /^[\u2014\-\u2013]|^\*[\u2014\-\u2013]/;
+  // Reference detection: em-dash prefix OR a bare scripture citation (Book Chapter:Verse)
+  const refPattern = /^[\u2014\-\u2013]|^\*[\u2014\-\u2013]|^(?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+/;
   let refLineIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (refPattern.test(lines[i].trim())) { refLineIdx = i; break; }
   }
 
-  const verseLines = refLineIdx > 0 ? lines.slice(0, refLineIdx) : lines;
-  const refRaw = refLineIdx >= 0 ? lines[refLineIdx] : "";
+  // Handle inline ">.  BookName chapter:verse" separators embedded at the end of a verse line
+  // e.g. LLM output: "...themselves. >. Genesis 3:6-7 (NIV)"
+  let verseLines = refLineIdx > 0 ? lines.slice(0, refLineIdx) : lines;
+  let inlineRef = "";
+  if (refLineIdx < 0 && verseLines.length > 0) {
+    const lastLine = verseLines[verseLines.length - 1];
+    const inlineMatch = lastLine.match(
+      /^(.*?)\s*>\.?\s+((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[:\u2013\-]\d+)?\s*(?:\([^)]*\))?)\s*$/
+    );
+    if (inlineMatch && inlineMatch[1].trim()) {
+      verseLines = [...verseLines.slice(0, -1), inlineMatch[1].trim()];
+      inlineRef = inlineMatch[2].trim();
+    }
+  }
+
+  const refRaw = inlineRef || (refLineIdx >= 0 ? lines[refLineIdx] : "");
   const refClean = refRaw.replace(/^\*?[\u2014\-\u2013]\s*/, "").replace(/\*$/, "").trim();
   const transMatch = refClean.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
 
@@ -430,15 +447,29 @@ function parseMarkdownBlockquote(paragraph: string): { text: string; reference?:
 }
 
 function writeScriptureBlock(doc: any, quote: { text: string; reference?: string; translation?: string }, fonts: PdfFontSet, tpl: BookTemplateConfig) {
-  doc.moveDown(0.6);
   const contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const barX = doc.page.margins.left + Math.round(tpl.scriptureIndent * 0.3);
   const textX = doc.page.margins.left + tpl.scriptureIndent;
   const textWidth = contentWidth - tpl.scriptureIndent - 8;
+
+  // Pre-split lines so we can estimate height before committing to a y-position
+  const verseLines = quote.text.split(/\n/).filter((l) => l.trim().length > 0);
+
+  // If the block fits on one page but won't fit in remaining space, push to a fresh page.
+  // This prevents the quote from splitting mid-text across a page boundary.
+  const lineH = tpl.scriptureFontSize * 1.6 + 4;
+  const refH = quote.reference ? (tpl.scriptureFontSize - 1.5) * 2.5 + 12 : 0;
+  const estimatedH = 12 + verseLines.length * lineH + refH + 12;
+  const pageContentH = doc.page.height - doc.page.margins.top - doc.page.margins.bottom;
+  const remaining = doc.page.height - doc.page.margins.bottom - doc.y;
+  if (remaining < estimatedH && estimatedH <= pageContentH * 0.85) {
+    doc.addPage();
+  }
+
+  doc.moveDown(0.6);
   const yStart = doc.y;
 
   // Write verse text line-by-line to preserve natural verse / stanza breaks
-  const verseLines = quote.text.split(/\n/).filter((l) => l.trim().length > 0);
   verseLines.forEach((line, i) => {
     doc
       .fontSize(tpl.scriptureFontSize)
@@ -557,11 +588,13 @@ function markInlineScriptureRefs(text: string): string {
       return `*${rawQuote}* **${nbsRef(ref)}**`;
     },
   );
-  // Pass 2: pre-citation — BibleRef[: or .] "verse text"
-  // Matches: optional-number BookName chapter:verse[–range] followed immediately
-  // by an optional colon or period, then whitespace, then an opening quote.
+  // Pass 2: pre-citation — BibleRef [optional connecting phrase up to 80 chars] "verse text"
+  // The broader connector `[^"\u201c\n]{0,80}?` catches all preaching styles:
+  //   Hebrews 7:26: "For such a high priest…"      (direct colon)
+  //   Colossians 1:12-14 puts it this way: "For he…" (phrase + colon)
+  //   1 Cor 1:30, he wrote, "It is because…"       (comma phrase)
   result = result.replace(
-    /\b((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[-\u2013]\d+)?)\s*[:.]?\s*(["\u201c][^\u201d"\n]{4,}["\u201d])/g,
+    /\b((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[-\u2013]\d+)?)[^"\u201c\n]{0,80}?(["\u201c][^\u201d"\n]{4,}["\u201d])/g,
     (_, ref, quote) => `**${nbsRef(ref)}** *${quote}*`,
   );
   return result;
@@ -628,10 +661,10 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
       const restText = words.slice(capCount).join(" ");
       const capOpts = { lineGap: tpl.bodyLineGap, indent: 0, paragraphGap: tpl.paragraphGap, align: tpl.bodyAlign as "left" | "justify" | "right" | "center" };
       doc.fontSize(fontSize - 0.5).font(fonts.serifBold).fillColor("#1a1a1a")
-        .text(capText, { ...capOpts, continued: restText.length > 0 });
+        .text(restText ? capText + " " : capText, { ...capOpts, continued: restText.length > 0 });
       if (restText) {
         doc.fontSize(fontSize).font(fonts.serif).fillColor("#1a1a1a")
-          .text(" " + restText, { ...capOpts, continued: false });
+          .text(restText, { ...capOpts, continued: false });
       }
       renderedIndex++;
       return;
@@ -843,6 +876,9 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
+    // Orphan prevention: keep heading with at least 3 bullet lines
+    const _ktLineH = (bodyFontSize ?? tpl.bodyFontSize) + tpl.bodyLineGap;
+    if (doc.page.height - doc.page.margins.bottom - doc.y < _ktLineH * 4) doc.addPage();
     writeDivider(doc, tpl);
     doc.fontSize(tpl.sectionSize - 1).font(fonts[tpl.sectionFont]).fillColor(tpl.labelColor).text("KEY TAKEAWAYS");
     doc.moveDown(0.4);
@@ -853,6 +889,9 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
   }
 
   if ((chapter.reflectionQuestions ?? []).length > 0) {
+    // Orphan prevention: keep heading with at least 3 question lines
+    const _rqLineH = (bodyFontSize ?? tpl.bodyFontSize) + tpl.bodyLineGap;
+    if (doc.page.height - doc.page.margins.bottom - doc.y < _rqLineH * 4) doc.addPage();
     writeDivider(doc, tpl);
     doc.fontSize(tpl.sectionSize - 1).font(fonts[tpl.sectionFont]).fillColor(tpl.labelColor).text("REFLECTION QUESTIONS");
     doc.moveDown(0.4);
@@ -940,11 +979,10 @@ function markupInlineScripture(html: string): string {
     (_, verse, ref) =>
       `<span class="scripture-inline">${verse}</span><span class="scripture-inline-ref"> ${ref}</span>`,
   );
-  // Pass 3: pre-citation style — BibleRef[: or .] "verse text"
-  // e.g. Hebrews 7:26: &quot;For such a high priest…&quot;
-  // e.g. 1 Peter 1:24. &quot;For all flesh is as grass…&quot;
+  // Pass 3: pre-citation style — BibleRef [optional connecting phrase up to 80 chars] "verse text"
+  // Broadened connector `[^\u201c"\n]{0,80}?` catches phrases like "puts it this way:"
   result = result.replace(
-    /\b((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[-\u2013]\d+)?)\s*[:.]?\s*((?:&ldquo;|&quot;|\u201c)[^\u201d&\n]{4,}(?:&rdquo;|&quot;|\u201d))/g,
+    /\b((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[-\u2013]\d+)?)[^\u201c"\n]{0,80}?((?:&ldquo;|&quot;|\u201c)[^\u201d&\n]{4,}(?:&rdquo;|&quot;|\u201d))/g,
     (_, ref, verse) =>
       `<span class="scripture-inline-ref">${ref}</span> <span class="scripture-inline">${verse}</span>`,
   );
