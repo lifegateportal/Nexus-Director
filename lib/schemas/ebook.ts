@@ -210,6 +210,8 @@ export const EbookManifestSchema = z.object({
   coverImageUrl: z.string().url().optional().nullable(),
   /** Optional R2 public URL for the author's photo */
   authorImageUrl: z.string().url().optional().nullable(),
+  /** Voice DNA captured during the pipeline — threaded into audit + apply-audit for voice fidelity */
+  voiceDNA: VoiceDNASchema.optional().nullable(),
 });
 
 // ─── Job State (IndexedDB persistence) ───────────────────────────────────────

@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { z } from "zod";
+import { VoiceDNASchema } from "@/lib/schemas/ebook";
+
+type VoiceDNAType = z.infer<typeof VoiceDNASchema>;
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -75,6 +78,7 @@ const RequestSchema = z.object({
     })).default([]),
   }),
   appliedKeys: z.array(z.string()),
+  voiceDNA: VoiceDNASchema.optional().nullable(),
 });
 
 type ChapterInput = z.infer<typeof ChapterSchema>;
@@ -152,7 +156,26 @@ async function reviseSectionBody(
   heading: string,
   body: string,
   task: string,
+  voiceDNA?: VoiceDNAType | null,
 ): Promise<string> {
+  // Compact, human-readable voice block to keep surgical edits in the author's voice
+  const voiceDnaBlock = voiceDNA
+    ? ((): string => {
+        const lines: string[] = ["\nAUTHOR VOICE DNA — maintain throughout:"];
+        if (voiceDNA.toneProfile) lines.push(`- Tone: ${voiceDNA.toneProfile}`);
+        if (voiceDNA.vocabularyLevel) lines.push(`- Register: ${voiceDNA.vocabularyLevel}`);
+        if (voiceDNA.sentencePattern) lines.push(`- Sentence rhythm: ${voiceDNA.sentencePattern}`);
+        if (voiceDNA.pacingFingerprint) lines.push(`- Pacing: ${voiceDNA.pacingFingerprint}`);
+        if ((voiceDNA.avoidWords ?? []).length > 0)
+          lines.push(`- Forbidden words (zero tolerance): ${voiceDNA.avoidWords.slice(0, 15).join(", ")}`);
+        if ((voiceDNA.avoidStructures ?? []).length > 0)
+          lines.push(`- Forbidden structures: ${(voiceDNA.avoidStructures ?? []).join("; ")}`);
+        if ((voiceDNA.signaturePhrases ?? []).length > 0)
+          lines.push(`- Signature phrases (use naturally): ${voiceDNA.signaturePhrases.join(", ")}`);
+        return lines.join("\n");
+      })()
+    : "";
+
   let text = "";
   try {
     const result = await generateText({
@@ -160,7 +183,7 @@ async function reviseSectionBody(
       temperature: 0.3,
       system:
         "You are a surgical book editor. Make only the minimum changes required by the task. Return ONLY the revised section body as plain prose — no JSON, no markdown, no commentary.",
-      prompt: `SECTION HEADING: ${heading}
+      prompt: `SECTION HEADING: ${heading}${voiceDnaBlock}
 
 SECTION BODY:
 ${body}
@@ -173,6 +196,7 @@ RULES:
 - Preserve every scripture reference, quote, and theological teaching point exactly
 - Do not add new content, illustrations, or arguments not already present
 - Keep the same approximate length and sentence rhythm
+- Never use an em dash (— or --)
 - Return the revised body as plain prose text only`,
     });
     text = result.text.trim();
@@ -201,9 +225,161 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-// ─── Route Handler ────────────────────────────────────────────────────────────
+// \u2500\u2500\u2500 Upgrade 7: Post-rewrite transition repair \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// After concept-duplicate removal, auto-patches the opening paragraph of the
+// immediately following section and closing paragraph of the preceding one so
+// the seam reads naturally without manual intervention.
 
-export async function POST(req: NextRequest) {
+type RewrittenLocation = {
+  chapterIndex: number;
+  field: "intro" | "conclusion" | { sectionNumber: number };
+};
+
+async function repairTransitions(
+  chapters: ChapterInput[],
+  rewritten: RewrittenLocation[],
+  voiceDNA?: VoiceDNAType | null,
+): Promise<ChapterInput[]> {
+  type TransitionTask = {
+    chapterIndex: number;
+    field: "intro" | "conclusion" | { sectionNumber: number };
+    role: "preceding" | "following";
+    headingContext: string;
+    bodyToFix: string;
+    adjacentEdge: string;
+  };
+
+  const tasks: TransitionTask[] = [];
+
+  for (const { chapterIndex, field } of rewritten) {
+    const ch = chapters[chapterIndex];
+
+    // Resolve rewritten body for edge extraction
+    let rewrittenBody = "";
+    if (field === "intro") {
+      rewrittenBody = ch.intro;
+    } else if (field === "conclusion") {
+      rewrittenBody = ch.conclusion;
+    } else {
+      const secNum = (field as { sectionNumber: number }).sectionNumber;
+      rewrittenBody = ch.sections.find((s) => s.sectionNumber === secNum)?.body ?? "";
+    }
+
+    const paras = rewrittenBody.split(/\n\n+/);
+    const rewrittenOpen = (paras[0] ?? "").trim().slice(0, 220);
+    const rewrittenClose = (paras.at(-1) ?? "").trim().slice(-220);
+
+    if (field === "intro") {
+      // Nothing precedes a chapter intro in the same chapter
+    } else if (field === "conclusion") {
+      // Preceding = last section
+      const lastSec = [...ch.sections].reverse()[0];
+      if (lastSec?.body) {
+        tasks.push({
+          chapterIndex,
+          field: { sectionNumber: lastSec.sectionNumber },
+          role: "preceding",
+          headingContext: lastSec.heading,
+          bodyToFix: lastSec.body,
+          adjacentEdge: rewrittenOpen,
+        });
+      }
+    } else {
+      const secNum = (field as { sectionNumber: number }).sectionNumber;
+      const secIdx = ch.sections.findIndex((s) => s.sectionNumber === secNum);
+
+      // Preceding neighbor
+      if (secIdx > 0) {
+        const prev = ch.sections[secIdx - 1];
+        tasks.push({
+          chapterIndex,
+          field: { sectionNumber: prev.sectionNumber },
+          role: "preceding",
+          headingContext: prev.heading,
+          bodyToFix: prev.body,
+          adjacentEdge: rewrittenOpen,
+        });
+      } else if (ch.intro) {
+        tasks.push({
+          chapterIndex,
+          field: "intro",
+          role: "preceding",
+          headingContext: `Chapter ${ch.number} Introduction`,
+          bodyToFix: ch.intro,
+          adjacentEdge: rewrittenOpen,
+        });
+      }
+
+      // Following neighbor
+      if (secIdx >= 0 && secIdx < ch.sections.length - 1) {
+        const next = ch.sections[secIdx + 1];
+        tasks.push({
+          chapterIndex,
+          field: { sectionNumber: next.sectionNumber },
+          role: "following",
+          headingContext: next.heading,
+          bodyToFix: next.body,
+          adjacentEdge: rewrittenClose,
+        });
+      } else if (ch.conclusion) {
+        tasks.push({
+          chapterIndex,
+          field: "conclusion",
+          role: "following",
+          headingContext: `Chapter ${ch.number} Conclusion`,
+          bodyToFix: ch.conclusion,
+          adjacentEdge: rewrittenClose,
+        });
+      }
+    }
+  }
+
+  // Deduplicate by chapterIndex + field + role (same neighbor can appear multiple times)
+  const seen = new Set<string>();
+  const unique = tasks.filter((t) => {
+    const key = `${t.chapterIndex}|${JSON.stringify(t.field)}|${t.role}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  if (unique.length === 0) return chapters;
+
+  const results = await mapWithConcurrency(unique, 2, async (task) => {
+    const taskPrompt =
+      task.role === "preceding"
+        ? `The section immediately after this one has been revised. It now opens with:\n"${task.adjacentEdge}"\n\nRewrite ONLY the final paragraph of this section so it transitions naturally into that opening. Change nothing else.`
+        : `The section immediately before this one has been revised. It now ends with:\n"${task.adjacentEdge}"\n\nRewrite ONLY the opening paragraph of this section so it follows naturally from that closing. Change nothing else.`;
+    return {
+      task,
+      revisedBody: await reviseSectionBody(task.headingContext, task.bodyToFix, taskPrompt, voiceDNA),
+    };
+  });
+
+  let updated = [...chapters];
+  for (const { task, revisedBody } of results) {
+    const ch = updated[task.chapterIndex];
+    if (task.field === "intro") {
+      updated[task.chapterIndex] = { ...ch, intro: revisedBody };
+    } else if (task.field === "conclusion") {
+      updated[task.chapterIndex] = { ...ch, conclusion: revisedBody };
+    } else {
+      const secNum = (task.field as { sectionNumber: number }).sectionNumber;
+      updated[task.chapterIndex] = {
+        ...ch,
+        sections: ch.sections.map((s) =>
+          s.sectionNumber === secNum
+            ? { ...s, body: revisedBody, wordCount: revisedBody.split(/\s+/).filter(Boolean).length }
+            : s,
+        ),
+      };
+    }
+  }
+
+  return updated;
+}
+
+// \u2500\u2500\u2500 Route Handler \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nexport async function POST(req: NextRequest) {
   let body: unknown;
   try {
     body = await req.json();
@@ -216,7 +392,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { manifest, report, appliedKeys } = parsed.data;
+  const { manifest, report, appliedKeys, voiceDNA } = parsed.data;
 
   if (appliedKeys.length === 0) {
     return NextResponse.json({ chapters: manifest.chapters }, { status: 200 });
@@ -260,6 +436,7 @@ export async function POST(req: NextRequest) {
     task: string;
     heading: string;
     body: string;
+    voiceDNA?: VoiceDNAType | null;
   };
 
   const llmTasks: LLMTask[] = [];
@@ -288,6 +465,7 @@ export async function POST(req: NextRequest) {
             task: `This section contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
             heading: sec.heading,
             body: sec.body,
+            voiceDNA: voiceDNA ?? null,
           });
         } else if (loc.location.toLowerCase().includes("intro")) {
           llmTasks.push({
@@ -296,6 +474,7 @@ export async function POST(req: NextRequest) {
             task: `This intro contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
             heading: `Chapter ${ch.number} Introduction`,
             body: ch.intro,
+            voiceDNA: voiceDNA ?? null,
           });
         } else if (loc.location.toLowerCase().includes("conclusion")) {
           llmTasks.push({
@@ -304,6 +483,7 @@ export async function POST(req: NextRequest) {
             task: `This conclusion contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
             heading: `Chapter ${ch.number} Conclusion`,
             body: ch.conclusion,
+            voiceDNA: voiceDNA ?? null,
           });
         }
       }
@@ -337,6 +517,7 @@ export async function POST(req: NextRequest) {
           task: `This section has ${Math.round(pair.similarity * 100)}% content overlap with ${otherLoc}. Rewrite it to present a more distinct angle while preserving its core teaching point.`,
           heading: sec.heading,
           body: sec.body,
+          voiceDNA: voiceDNA ?? null,
         });
       }
     }
@@ -346,7 +527,7 @@ export async function POST(req: NextRequest) {
   if (llmTasks.length > 0) {
     const results = await mapWithConcurrency(llmTasks, 4, async (task) => ({
       task,
-      revisedBody: await reviseSectionBody(task.heading, task.body, task.task),
+      revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
     }));
 
     // Apply results back into the chapters array
@@ -368,6 +549,13 @@ export async function POST(req: NextRequest) {
         };
       }
     }
+
+    // Upgrade 7: patch transition seams in sections adjacent to any rewritten section
+    const rewrittenLocations: RewrittenLocation[] = results.map(({ task }) => ({
+      chapterIndex: task.chapterIndex,
+      field: task.field,
+    }));
+    chapters = await repairTransitions(chapters, rewrittenLocations, voiceDNA);
   }
 
   return NextResponse.json({ chapters }, { status: 200 });

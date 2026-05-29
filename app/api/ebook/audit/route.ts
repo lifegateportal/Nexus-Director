@@ -3,7 +3,7 @@ import { generateText } from "ai";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { EbookManifestSchema } from "@/lib/schemas/ebook";
-import type { EbookManifest } from "@/lib/schemas/ebook";
+import type { EbookManifest, VoiceDNA } from "@/lib/schemas/ebook";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -71,15 +71,53 @@ export type OverusedWord = {
   alternatives: string[];
 };
 
+// ── Upgrade 4: Style bible violation ─────────────────────────────────────────
+export type StyleViolation = {
+  location: string;
+  ruleType: "em-dash" | "forbidden-phrase" | "avoid-word";
+  match: string;
+  context: string;
+  suggestion: string;
+};
+
+// ── Upgrade 5: Scripture issue ────────────────────────────────────────────────
+export type ScriptureIssue = {
+  location: string;
+  issueType: "missing-translation" | "malformed-reference" | "duplicate-full-quote" | "inconsistent-format";
+  reference: string;
+  excerpt: string;
+  recommendation: string;
+};
+
+// ── Upgrade 6: Readability metrics ───────────────────────────────────────────
+export type SectionPacingNote = {
+  location: string;
+  wordCount: number;
+  fleschGrade: number;
+  avgSentenceLength: number;
+  flag: "over-complex" | "under-developed" | "ok";
+};
+
+export type ReadabilityMetrics = {
+  overallFleschGrade: number;
+  overallAvgSentenceLength: number;
+  sections: SectionPacingNote[];
+};
+
 export type AuditReport = {
   conceptDuplicates: ConceptDuplicate[];
   similarPairs: SimilarPair[];
   repetitions: RepetitionEntry[];
   overusedWords: OverusedWord[];
+  styleViolations: StyleViolation[];
+  scriptureIssues: ScriptureIssue[];
+  readabilityMetrics: ReadabilityMetrics;
   totalConceptDuplicates: number;
   totalSimilarPairs: number;
   totalRepetitionPhrases: number;
   totalOverusedWords: number;
+  totalStyleViolations: number;
+  totalScriptureIssues: number;
 };
 
 // ── Segment extraction ────────────────────────────────────────────────────────
@@ -255,6 +293,208 @@ function findOverusedWords(manifest: EbookManifest): Omit<OverusedWord, "alterna
     .slice(0, 15);
 }
 
+// ── Upgrade 4: Style Bible enforcement scan ─────────────────────────────────
+// Deterministic pass: flags every em dash, forbidden editorial phrase, and
+// author-specific avoidWord hit with exact location + surrounding context.
+
+const STYLE_FORBIDDEN_PATTERNS: Array<{ source: string; flags: string; suggestion: string }> = [
+  { source: "\u2014", flags: "g", suggestion: "Replace em dash with comma, colon, semicolon, or subordinate clause" },
+  { source: " -- ", flags: "g", suggestion: "Replace spaced double-hyphen em dash with comma, colon, or semicolon" },
+  { source: "\\bin conclusion\\b", flags: "gi", suggestion: "Remove \u2014 land the point directly" },
+  { source: "\\bdelve[sd]?\\s+into\\b", flags: "gi", suggestion: "Use 'examine', 'explore', or 'address'" },
+  { source: "\\ba tapestry of\\b", flags: "gi", suggestion: "Be specific \u2014 name what it is" },
+  { source: "\\bnavigating (the )?(landscape|world|challenges|complexities|waters)\\b", flags: "gi", suggestion: "Rewrite with a concrete verb" },
+  { source: "\\bit'?s important to note\\b", flags: "gi", suggestion: "Delete \u2014 the note speaks for itself" },
+  { source: "\\bit is crucial (to|that)\\b", flags: "gi", suggestion: "Cut the throat-clearing; make the point" },
+  { source: "\\bin today'?s fast-?paced world\\b", flags: "gi", suggestion: "Delete entirely" },
+  { source: "\\bfurthermore[,.]?\\s", flags: "gi", suggestion: "Cut or restructure without a connector" },
+  { source: "\\bmoreover[,.]?\\s", flags: "gi", suggestion: "Cut or restructure without a connector" },
+  { source: "\\bit is worth noting\\b", flags: "gi", suggestion: "Delete \u2014 just say the thing" },
+  { source: "\\bat the end of the day\\b", flags: "gi", suggestion: "Delete \u2014 land the actual point" },
+  { source: "\\bgame[-\\s]?changer\\b", flags: "gi", suggestion: "Use a concrete description of the change" },
+  { source: "\\bparadigm shift\\b", flags: "gi", suggestion: "Name the actual shift" },
+  { source: "\\bdeep dive\\b", flags: "gi", suggestion: "Use 'close examination' or begin examining" },
+  { source: "\\bunpack(s|ed|ing)?\\b", flags: "gi", suggestion: "Use 'explain', 'examine', 'break down'" },
+  { source: "\\bmoving forward\\b", flags: "gi", suggestion: "Delete or state the next action directly" },
+  { source: "\\brobust\\b", flags: "gi", suggestion: "Use 'thorough', 'complete', 'detailed'" },
+  { source: "\\bleverag(e|es|ed|ing)\\b", flags: "gi", suggestion: "Use 'use', 'apply', 'draw on'" },
+  { source: "\\bsynergy\\b", flags: "gi", suggestion: "Describe the actual relationship" },
+  { source: "\\bit goes without saying\\b", flags: "gi", suggestion: "Delete \u2014 if it goes without saying, don't say it" },
+  { source: "\\bthe truth is[,.]?\\s", flags: "gi", suggestion: "Delete the throat-clearing; state the truth" },
+  { source: "\\bthe fact of the matter is\\b", flags: "gi", suggestion: "Delete \u2014 state the fact directly" },
+  { source: "\\bindeed[,.]?\\s", flags: "gi", suggestion: "Delete \u2014 adds nothing" },
+  { source: "\\bcertainly[,.]?\\s", flags: "gi", suggestion: "Delete \u2014 reads robotic" },
+  { source: "\\bultimately[,.]?\\s", flags: "gi", suggestion: "Delete or rewrite without it" },
+  { source: "\\bat its core[,.]?\\s", flags: "gi", suggestion: "State the core directly" },
+  { source: "\\bin essence[,.]?\\s", flags: "gi", suggestion: "Delete \u2014 state the essence directly" },
+  { source: "\\bsimply put[,.]?\\s", flags: "gi", suggestion: "Delete \u2014 the simplicity should be in the writing" },
+  { source: "\\bnot just\\b.{1,60}?\\bbut\\b", flags: "gi", suggestion: "Rewrite: avoid 'not just\u2026but' frame" },
+  { source: "\\bnot merely\\b.{1,60}?\\bbut\\b", flags: "gi", suggestion: "Rewrite: avoid 'not merely\u2026but' frame" },
+  { source: "\\bthis is not merely\\b", flags: "gi", suggestion: "Rewrite: avoid 'this is not merely' frame" },
+  { source: "\\bprofoundly\\b", flags: "gi", suggestion: "Show the depth; delete the label" },
+  { source: "\\bdeeply meaningful\\b", flags: "gi", suggestion: "Show the meaning; delete the label" },
+  { source: "\\btransformative\\b", flags: "gi", suggestion: "Describe the actual transformation" },
+  { source: "\\bvibrant\\b", flags: "gi", suggestion: "Use a specific, concrete adjective" },
+  { source: "\\bfostering\\b", flags: "gi", suggestion: "Use 'building', 'creating', 'developing'" },
+  { source: "\\bthis means that\\b", flags: "gi", suggestion: "Land the implication directly" },
+  { source: "\\bwhat this tells us is\\b", flags: "gi", suggestion: "State the lesson directly" },
+  { source: "\\bso,? as we have seen\\b", flags: "gi", suggestion: "Delete mid-chapter summary transitions" },
+  { source: "\\bto summarize\\b", flags: "gi", suggestion: "Delete \u2014 do not summarize mid-chapter" },
+];
+
+function styleBibleScan(
+  segments: SegmentMeta[],
+  voiceDNA?: VoiceDNA,
+): StyleViolation[] {
+  const violations: StyleViolation[] = [];
+
+  for (const seg of segments) {
+    const { text, location } = seg;
+    const sentences = text.split(/(?<=[.!?])\s+/);
+
+    function getContext(matchStart: number): string {
+      let best = "";
+      let bestDist = Infinity;
+      for (const s of sentences) {
+        const idx = text.indexOf(s);
+        if (idx >= 0 && idx <= matchStart) {
+          const dist = matchStart - idx;
+          if (dist < bestDist) { bestDist = dist; best = s; }
+        }
+      }
+      return best.slice(0, 120) + (best.length > 120 ? "\u2026" : "");
+    }
+
+    // ── Editorial forbidden patterns ───────────────────────────────────────
+    for (const pat of STYLE_FORBIDDEN_PATTERNS) {
+      const isEmDash = pat.suggestion.startsWith("Replace em dash") || pat.suggestion.startsWith("Replace spaced");
+      const ruleType: StyleViolation["ruleType"] = isEmDash ? "em-dash" : "forbidden-phrase";
+      const re = new RegExp(pat.source, pat.flags);
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        violations.push({ location, ruleType, match: m[0].trim(), context: getContext(m.index), suggestion: pat.suggestion });
+      }
+    }
+
+    // ── Voice DNA: author-specific avoidWords (skip baseline clichés already covered) ──
+    const authorSpecificAvoid = (voiceDNA?.avoidWords ?? []).slice(30);
+    for (const word of authorSpecificAvoid) {
+      if (word.length < 3) continue;
+      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = word.includes(" ")
+        ? new RegExp(escaped, "gi")
+        : new RegExp(`\\b${escaped}\\b`, "gi");
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        violations.push({
+          location,
+          ruleType: "avoid-word",
+          match: m[0],
+          context: getContext(m.index),
+          suggestion: `"${word}" is in the author's voice DNA avoidWords \u2014 rewrite without it`,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
+// ── Upgrade 6: Readability + pacing metrics ───────────────────────────────────
+
+function countSyllables(word: string): number {
+  const w = word.toLowerCase().replace(/[^a-z]/g, "");
+  if (w.length === 0) return 0;
+  if (w.length <= 3) return 1;
+  const reduced = w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, "");
+  const groups = reduced.match(/[aeiouy]{1,2}/g);
+  return Math.max(1, groups?.length ?? 1);
+}
+
+function fleschKincaidGrade(text: string): { grade: number; avgSentenceLength: number } {
+  const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 5);
+  const words = text.split(/\s+/).filter((w) => w.replace(/[^a-zA-Z]/g, "").length > 0);
+  if (sentences.length === 0 || words.length === 0) return { grade: 0, avgSentenceLength: 0 };
+  const syllables = words.reduce((sum, w) => sum + countSyllables(w), 0);
+  const asl = words.length / sentences.length;
+  const asw = syllables / words.length;
+  return {
+    grade: Math.max(0, Math.round((0.39 * asl + 11.8 * asw - 15.59) * 10) / 10),
+    avgSentenceLength: Math.round(asl * 10) / 10,
+  };
+}
+
+function computeReadabilityMetrics(segments: SegmentMeta[]): ReadabilityMetrics {
+  const sectionNotes: SectionPacingNote[] = [];
+  const allTexts: string[] = [];
+
+  for (const seg of segments) {
+    const { grade, avgSentenceLength } = fleschKincaidGrade(seg.text);
+    const wordCount = seg.text.split(/\s+/).filter(Boolean).length;
+    let flag: SectionPacingNote["flag"] = "ok";
+    if (grade > 14 || avgSentenceLength > 32) flag = "over-complex";
+    else if (wordCount < 80) flag = "under-developed";
+    sectionNotes.push({ location: seg.location, wordCount, fleschGrade: grade, avgSentenceLength, flag });
+    allTexts.push(seg.text);
+  }
+
+  const overall = fleschKincaidGrade(allTexts.join(" "));
+  return {
+    overallFleschGrade: overall.grade,
+    overallAvgSentenceLength: overall.avgSentenceLength,
+    sections: sectionNotes,
+  };
+}
+
+// ── Upgrade 5: Scripture & reference consistency audit ────────────────────────
+// LLM pass: cross-checks every scripture quote for missing translation labels,
+// malformed references, duplicate full quotes, and format inconsistency.
+
+async function runScriptureAudit(segments: SegmentMeta[]): Promise<ScriptureIssue[]> {
+  const scriptureRe = /[A-Z][a-z]+\s+\d+:\d+|(?:NIV|KJV|ESV|NKJV|NLT|NASB|AMP|MSG|translation unspecified)/;
+  const relevant = segments.filter((s) => scriptureRe.test(s.text));
+  if (relevant.length === 0) return [];
+
+  const index = relevant
+    .map((s) => `[${s.location}]\n${s.text.trim().slice(0, 600)}${s.text.length > 600 ? "\u2026" : ""}`)
+    .join("\n\n---\n\n");
+
+  try {
+    const { text } = await generateText({
+      model: deepSeekReasonerModel,
+      maxTokens: 4096,
+      prompt: `You are a manuscript editor specializing in scripture citation accuracy. Review the passages below and identify ONLY genuine issues:
+
+1. MISSING TRANSLATION: A scripture is quoted with a Bible reference but no translation label (NIV, KJV, ESV, NKJV, NLT, NASB, AMP, MSG, etc.)
+2. MALFORMED REFERENCE: A Bible reference with missing verse number, missing space, or non-standard format (e.g. "John3:16" or "John 3" without a verse)
+3. DUPLICATE FULL QUOTE: The exact same scripture verse text is quoted in full in more than one location — only the reference should appear after first use
+4. INCONSISTENT FORMAT: The same scripture appears as inline in one place and as a blockquote in another
+
+PASSAGES:
+${index}
+
+Return ONLY valid JSON — no markdown fences, no commentary:
+{
+  "issues": [
+    {
+      "location": "exact location label from input",
+      "issueType": "missing-translation|malformed-reference|duplicate-full-quote|inconsistent-format",
+      "reference": "the scripture reference e.g. John 3:16",
+      "excerpt": "40-80 word excerpt showing the issue",
+      "recommendation": "specific editorial fix"
+    }
+  ]
+}`,
+    });
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return [];
+    const parsed = JSON.parse(match[0]) as { issues?: ScriptureIssue[] };
+    return Array.isArray(parsed.issues) ? parsed.issues : [];
+  } catch {
+    return [];
+  }
+}
+
 // ── LLM: semantic concept duplicate analysis ──────────────────────────────────
 // This is the core new capability: the LLM reads ALL section summaries and
 // identifies conceptually duplicated content regardless of surface wording.
@@ -372,8 +612,17 @@ export async function POST(req: NextRequest) {
     // Layer 3: overused words
     const overusedWordsRaw = findOverusedWords(manifest);
 
-    // Layer 4: LLM semantic audit (concept duplicates + amendments)
-    const llm = await runSemanticAudit(segments, similarPairs, lexicalRepetitions, overusedWordsRaw);
+    // Layer 4: deterministic style bible enforcement scan (Upgrade 4)
+    const styleViolations = styleBibleScan(segments, manifest.voiceDNA ?? undefined);
+
+    // Layer 5: readability + pacing metrics (Upgrade 6)
+    const readabilityMetrics = computeReadabilityMetrics(segments);
+
+    // Layer 6 + 7: LLM semantic audit + scripture audit run in parallel (Upgrades 4-orig + 5)
+    const [llm, scriptureIssues] = await Promise.all([
+      runSemanticAudit(segments, similarPairs, lexicalRepetitions, overusedWordsRaw),
+      runScriptureAudit(segments),
+    ]);
 
     // Merge LLM amendments into lexical repetitions
     const repetitions: RepetitionEntry[] = lexicalRepetitions.map((r) => {
@@ -391,10 +640,15 @@ export async function POST(req: NextRequest) {
       similarPairs,
       repetitions,
       overusedWords,
+      styleViolations,
+      scriptureIssues,
+      readabilityMetrics,
       totalConceptDuplicates: (llm.conceptDuplicates ?? []).length,
       totalSimilarPairs: similarPairs.length,
       totalRepetitionPhrases: repetitions.length,
       totalOverusedWords: overusedWords.length,
+      totalStyleViolations: styleViolations.length,
+      totalScriptureIssues: scriptureIssues.length,
     };
 
     return NextResponse.json(report, { status: 200 });
