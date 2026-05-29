@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { env } from "@/lib/env";
 import { EbookManifestSchema } from "@/lib/schemas/ebook";
@@ -16,6 +18,34 @@ import { z } from "zod";
 
 export const runtime    = "nodejs";
 export const maxDuration = 30;
+
+// ── GET /api/ebook/publish — fetch the live published catalog ─────────────────
+
+export async function GET() {
+  const {
+    R2_ACCOUNT_ID,
+    R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY,
+    R2_BUCKET_NAME,
+  } = env;
+
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
+    return NextResponse.json({ books: [] }, { status: 200 });
+  }
+
+  try {
+    const s3 = makeS3Client(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
+    const res = await s3.send(
+      new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: "published/index.json" }),
+    );
+    const raw = await res.Body?.transformToString();
+    if (!raw) return NextResponse.json({ books: [] }, { status: 200 });
+    const parsed = PublishedCatalogSchema.safeParse(JSON.parse(raw));
+    return NextResponse.json(parsed.success ? parsed.data : { books: [] }, { status: 200 });
+  } catch {
+    return NextResponse.json({ books: [] }, { status: 200 });
+  }
+}
 
 const PublishRequestSchema = z.object({
   manifest:    EbookManifestSchema,
@@ -148,9 +178,91 @@ export async function POST(req: NextRequest) {
       ? `${R2_PUBLIC_URL.replace(/\/$/, "")}/published/${slug}/manifest.json`
       : null;
 
+    revalidatePath("/library");
+
     return NextResponse.json({ slug, publicUrl }, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Publish failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// ── DELETE /api/ebook/publish — remove a book from the library catalog ────────
+
+const DeleteRequestSchema = z.object({ slug: z.string().min(1) });
+
+export async function DELETE(req: NextRequest) {
+  let input;
+  try {
+    input = DeleteRequestSchema.parse(await req.json() as unknown);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Invalid input" },
+      { status: 400 },
+    );
+  }
+
+  const {
+    R2_ACCOUNT_ID,
+    R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY,
+    R2_BUCKET_NAME,
+  } = env;
+
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
+    return NextResponse.json(
+      { error: "R2 storage must be configured to manage books." },
+      { status: 503 },
+    );
+  }
+
+  const { slug } = input;
+  const s3 = makeS3Client(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
+
+  try {
+    // 1. Remove book from catalog index
+    const now = new Date().toISOString();
+    let catalog: PublishedCatalog = { updatedAt: now, books: [] };
+    try {
+      const existing = await s3.send(
+        new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: "published/index.json" }),
+      );
+      const raw = await existing.Body?.transformToString();
+      if (raw) {
+        const parsed = PublishedCatalogSchema.safeParse(JSON.parse(raw));
+        if (parsed.success) catalog = parsed.data;
+      }
+    } catch {
+      // Index missing — nothing to remove
+    }
+
+    catalog.books     = catalog.books.filter((b) => b.slug !== slug);
+    catalog.updatedAt = now;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket:       R2_BUCKET_NAME,
+        Key:          "published/index.json",
+        Body:         JSON.stringify(catalog),
+        ContentType:  "application/json",
+        CacheControl: "public, max-age=30",
+      }),
+    );
+
+    // 2. Delete the manifest file from R2
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: R2_BUCKET_NAME,
+        Key:    `published/${slug}/manifest.json`,
+      }),
+    ).catch(() => { /* best-effort — file may not exist */ });
+
+    // 3. Bust the Next.js ISR cache so the library page reflects the removal immediately
+    revalidatePath("/library");
+
+    return NextResponse.json({ slug }, { status: 200 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Delete failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
