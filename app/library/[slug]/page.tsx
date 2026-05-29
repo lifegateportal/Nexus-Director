@@ -270,11 +270,11 @@ export default async function BookLandingPage({
                     <img
                       src={manifest.authorImageUrl}
                       alt={manifest.authorName}
-                      className={`h-12 w-12 shrink-0 rounded-full object-cover ring-2 ${avatarCls.replace(/bg-[^\s]+\s*/, "")}`}
+                      className={`h-20 w-20 shrink-0 rounded-full object-cover ring-2 ${avatarCls.replace(/bg-[^\s]+\s*/, "")}`}
                     />
                   ) : (
                     <div
-                      className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg font-bold ring-1 ${avatarCls}`}
+                      className={`flex h-20 w-20 shrink-0 items-center justify-center rounded-full text-lg font-bold ring-1 ${avatarCls}`}
                     >
                       {manifest.authorName.charAt(0).toUpperCase()}
                     </div>
