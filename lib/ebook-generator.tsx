@@ -21,6 +21,7 @@ import {
   PageBreak,
   BorderStyle,
   TableOfContents,
+  LevelFormat,
 } from "docx";
 
 type PdfFontSet = {
@@ -174,6 +175,14 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       size: pageSize,
       autoFirstPage: false, // we add pages manually so pageAdded tracking is accurate
       bufferPages: true,    // hold all pages in memory for the second-pass header stamp
+      info: {
+        Title: manifest.bookTitle,
+        Author: manifest.authorName,
+        Subject: manifest.subtitle || manifest.bookTitle,
+        Creator: "Nexus Director",
+        Producer: "Nexus Director",
+        Keywords: [manifest.authorName, manifest.bookTitle].filter(Boolean).join(", "),
+      },
     });
     const fonts = resolvePdfFonts(doc);
     const chunks: Buffer[] = [];
@@ -499,6 +508,28 @@ function stripMarkdownForPdf(paragraph: string): string {
 }
 
 /**
+ * Apply smart typography to manuscript text before rendering.
+ * Converts straight quotes → curly, double-hyphens → em-dash, ... → ellipsis.
+ * Called on each paragraph in PDF, DOCX, and EPUB renderers before inline
+ * markup is parsed, so the typographic glyphs appear in the final output.
+ */
+function applySmartTypography(text: string): string {
+  return text
+    // Em-dash: double hyphen (with or without surrounding spaces)
+    .replace(/\s*--\s*/g, "\u2014")
+    // Ellipsis
+    .replace(/\.{3}/g, "\u2026")
+    // Opening double quote: preceded by whitespace, em-dash, open bracket/paren, or line start
+    .replace(/(^|[\s\u2014(\[{])"(?=\S)/gm, "$1\u201c")
+    // Remaining double quotes → closing curly
+    .replace(/"/g, "\u201d")
+    // Opening single quote: preceded by whitespace, em-dash, open bracket/paren, or line start
+    .replace(/(^|[\s\u2014(\[{])'(?=\S)/gm, "$1\u2018")
+    // Remaining single quotes → closing curly / apostrophe
+    .replace(/'/g, "\u2019");
+}
+
+/**
  * Pre-process inline scripture citations in manuscript text.
  * Ensures verse text is wrapped in *italic* and the reference in **bold**
  * before run-based rendering (PDF and DOCX).
@@ -562,7 +593,7 @@ function parseRunsForPdf(text: string): Array<{ text: string; italic?: boolean; 
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean }, bodyFontSize?: number) {
+function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, options?: { italicFirstParagraph?: boolean; noIndentFirstParagraph?: boolean; smallCapOpener?: boolean }, bodyFontSize?: number) {
   const fontSize = bodyFontSize ?? tpl.bodyFontSize;
   const paragraphs = normalizeParagraphBreaks(text).split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
   // Track rendered index separately so dropped heading lines don't shift the
@@ -587,9 +618,31 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
     const indent = noIndentFirst && renderedIndex === 0 ? 0 : tpl.paragraphIndent;
     const textOpts = { lineGap: tpl.bodyLineGap, indent, paragraphGap: tpl.paragraphGap, align: tpl.bodyAlign };
 
+    // Small-cap chapter opener: first 5 words uppercase + letter-spacing (traditional chapter opener)
+    if (options?.smallCapOpener && renderedIndex === 0) {
+      const clean = stripMarkdownForPdf(applySmartTypography(paragraph));
+      if (!clean) return;
+      const words = clean.split(/\s+/);
+      const capCount = Math.min(5, words.length);
+      const capText = words.slice(0, capCount).join(" ").toUpperCase();
+      const restText = words.slice(capCount).join(" ");
+      const capOpts = { lineGap: tpl.bodyLineGap, indent: 0, paragraphGap: tpl.paragraphGap, align: tpl.bodyAlign as "left" | "justify" | "right" | "center" };
+      doc.fontSize(fontSize - 0.5).font(fonts.serifBold).fillColor("#1a1a1a")
+        .characterSpacing(1.0)
+        .text(capText, { ...capOpts, continued: restText.length > 0 });
+      if (restText) {
+        doc.characterSpacing(0).fontSize(fontSize).font(fonts.serif)
+          .text(" " + restText, { ...capOpts, continued: false });
+      } else {
+        doc.characterSpacing(0);
+      }
+      renderedIndex++;
+      return;
+    }
+
     // Italic-first-paragraph (chapter intro): strip markdown and render whole paragraph in italic
     if (options?.italicFirstParagraph && renderedIndex === 0) {
-      const cleanParagraph = stripMarkdownForPdf(paragraph);
+      const cleanParagraph = stripMarkdownForPdf(applySmartTypography(paragraph));
       if (!cleanParagraph) return;
       doc.fontSize(fontSize).font(fonts.serifItalic).fillColor("#333333").text(cleanParagraph, textOpts);
       renderedIndex++;
@@ -598,7 +651,7 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
 
     // Regular paragraphs: render inline bold/italic markup so scripture is italic
     // and scripture references (John 3:16) are bolded.
-    const preprocessed = markInlineScriptureRefs(paragraph);
+    const preprocessed = markInlineScriptureRefs(applySmartTypography(paragraph));
     const runs = parseRunsForPdf(preprocessed);
     if (runs.length === 0) return; // heading or rule line — dropped
 
@@ -773,13 +826,18 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
     writeRichBody(doc, chapter.intro, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true }, bodyFontSize);
   }
 
+  let _firstSectionDone = false;
   for (const section of chapter.sections) {
+    // Orphan prevention: if fewer than 5 body-line heights remain on this page, start a new one
+    const _lineH = (bodyFontSize ?? tpl.bodyFontSize) + tpl.bodyLineGap;
+    if (doc.page.height - doc.page.margins.bottom - doc.y < _lineH * 5) doc.addPage();
     doc.moveDown(0.35);
     doc.fontSize(tpl.sectionSize).font(fonts[tpl.sectionFont]).fillColor(tpl.sectionColor)
       .text(section.heading, { align: tpl.sectionAlign });
     if (tpl.sectionRule) writeDivider(doc, tpl);
     doc.moveDown(0.5);
-    writeRichBody(doc, section.body, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
+    writeRichBody(doc, section.body, quotes, fonts, tpl, { noIndentFirstParagraph: true, smallCapOpener: !_firstSectionDone }, bodyFontSize);
+    _firstSectionDone = true;
   }
 
   if (chapter.conclusion) {
@@ -1046,6 +1104,8 @@ body {
   hyphens: auto;
   -webkit-hyphens: auto;
   adobe-hyphenate: auto;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 p.book-paragraph {
   margin: 0 0 ${paraGap} 0;
@@ -1066,6 +1126,8 @@ h1.chapter-title {
   font-size: 1.7em;
   margin-top: 0.5em;
   margin-bottom: 0.6em;
+  page-break-before: always;
+  break-before: always;
 }
 .chapter-label {
   display: block;
@@ -1084,6 +1146,8 @@ h2 {
   color: ${tpl.sectionColor};
   page-break-after: avoid;
   break-after: avoid;
+  page-break-inside: avoid;
+  break-inside: avoid;
 }
 h3 {
   margin-top: 1.25em;
@@ -1111,6 +1175,7 @@ blockquote.scripture-block {
   border-left: 4px solid ${accentHex};
   background: transparent;
   page-break-inside: avoid;
+  break-inside: avoid;
 }
 .scripture-verse {
   display: block;
@@ -1278,7 +1343,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         if (mdQuote) return docxScriptureBlock(mdQuote);
         // Pre-process inline scripture: ensures *"verse"* **ref** markdown
         // so parseRunsForDocx renders verses italic and references bold.
-        const processedPara = markInlineScriptureRefs(para);
+        const processedPara = markInlineScriptureRefs(applySmartTypography(para));
         return [
           new Paragraph({
             children: parseRunsForDocx(processedPara, bodyHalfPt),
@@ -1391,7 +1456,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     if (chapter.epigraph?.trim()) {
       children.push(
         new Paragraph({
-          children: parseRunsForDocx(chapter.epigraph, bodyHalfPt, true),
+          children: parseRunsForDocx(applySmartTypography(chapter.epigraph), bodyHalfPt, true),
           alignment: AlignmentType.CENTER,
           spacing: { after: paraSpacingAfter },
         })
@@ -1402,7 +1467,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     if (chapter.premiseLine?.trim()) {
       children.push(
         new Paragraph({
-          children: parseRunsForDocx(chapter.premiseLine, bodyHalfPt, true),
+          children: parseRunsForDocx(applySmartTypography(chapter.premiseLine), bodyHalfPt, true),
           alignment: AlignmentType.CENTER,
           spacing: { after: paraSpacingAfter },
         })
@@ -1418,7 +1483,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         .forEach((introPara) => {
           children.push(
             new Paragraph({
-              children: parseRunsForDocx(markInlineScriptureRefs(introPara), bodyHalfPt, true),
+              children: parseRunsForDocx(markInlineScriptureRefs(applySmartTypography(introPara)), bodyHalfPt, true),
               alignment: bodyAlign,
               spacing: { after: paraSpacingAfter },
             })
@@ -1456,9 +1521,10 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       for (const t of (chapter.keyTakeaways ?? [])) {
         children.push(
           new Paragraph({
-            children: [new TextRun({ text: `• ${t}`, size: bodyHalfPt })],
+            children: [new TextRun({ text: t, size: bodyHalfPt })],
             alignment: bodyAlign,
             spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+            numbering: { reference: "nxBullet", level: 0 },
           })
         );
       }
@@ -1472,12 +1538,13 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           spacing: { before: 280, after: 120 },
         })
       );
-      (chapter.reflectionQuestions ?? []).forEach((q, i) => {
+      (chapter.reflectionQuestions ?? []).forEach((q) => {
         children.push(
           new Paragraph({
-            children: [new TextRun({ text: `${i + 1}. ${q}`, size: bodyHalfPt })],
+            children: [new TextRun({ text: q, size: bodyHalfPt })],
             alignment: bodyAlign,
             spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+            numbering: { reference: "nxNumbered", level: 0 },
           })
         );
       });
@@ -1510,9 +1577,10 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     for (const r of (frontMatter.resourcesList ?? [])) {
       children.push(
         new Paragraph({
-          children: [new TextRun({ text: `• ${r}`, size: bodyHalfPt })],
+          children: [new TextRun({ text: r, size: bodyHalfPt })],
           alignment: bodyAlign,
           spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+          numbering: { reference: "nxBullet", level: 0 },
         })
       );
     }
@@ -1520,7 +1588,47 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
   const doc = new DocxDocument({
     sections: [{ children }],
-    styles: { default: { document: { run: { size: bodyHalfPt } } } },
+    numbering: {
+      config: [
+        {
+          reference: "nxBullet",
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.BULLET,
+              text: "\u2022",
+              alignment: AlignmentType.LEFT,
+              style: { paragraph: { indent: { left: 360, hanging: 360 } } },
+            },
+          ],
+        },
+        {
+          reference: "nxNumbered",
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.DECIMAL,
+              text: "%1.",
+              alignment: AlignmentType.LEFT,
+              style: { paragraph: { indent: { left: 360, hanging: 360 } } },
+            },
+          ],
+        },
+      ],
+    },
+    styles: {
+      default: {
+        document: { run: { size: bodyHalfPt } },
+        heading1: {
+          run: { size: Math.round(tpl.chapterTitleSize * 2), bold: true, color: tpl.chapterTitleColor.replace("#", "") },
+          paragraph: { spacing: { before: 480, after: 240 } },
+        },
+        heading2: {
+          run: { size: Math.round(tpl.sectionSize * 2), bold: true, color: tpl.sectionColor.replace("#", "") },
+          paragraph: { spacing: { before: 320, after: 160 } },
+        },
+      },
+    },
   });
 
   return Packer.toBuffer(doc);
