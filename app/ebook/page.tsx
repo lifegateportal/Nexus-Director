@@ -68,6 +68,28 @@ export default function EbookPage() {
       setCurrentProjectId(id);
       setProjects(await listEbookProjects());
       setStatusMsg({ type: "success", text: `"${name}" saved.` });
+      // Sync to R2 as a ProjectSnapshot (fire-and-forget)
+      fetch("/api/projects", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: {
+            id: project.id,
+            name: project.name,
+            createdAt: project.createdAt,
+            updatedAt: project.updatedAt,
+            academy: null,
+            siteConfig: {},
+            deliveryInstructions: "",
+            chatHistory: [],
+            blueprint: null,
+            logicResult: null,
+            uiResult: null,
+            ebookManifest: null,
+            ebookJobState: project.jobState,
+            publishedSlug: project.publishedSlug,
+          },
+        }),
+      }).catch(() => {});
     } catch (err) {
       setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Save failed." });
     }
@@ -92,7 +114,52 @@ export default function EbookPage() {
     await deleteEbookProject(id);
     setProjects(await listEbookProjects());
     if (currentProjectId === id) setCurrentProjectId("");
+    // Remove from R2 (fire-and-forget)
+    fetch("/api/projects", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
   }, [currentProjectId]);
+
+  // ── Unpublish handler ─────────────────────────────────────────────────────
+
+  const handleUnpublish = useCallback(async (project: EbookProject): Promise<boolean> => {
+    if (!project.publishedSlug) return false;
+    try {
+      const res = await fetch("/api/ebook/publish", {
+        method:  "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ slug: project.publishedSlug }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        setStatusMsg({ type: "error", text: err.error ?? "Remove from library failed." });
+        return false;
+      }
+      // Clear publishedSlug from local project record
+      const updated: EbookProject = { ...project, publishedSlug: undefined };
+      await saveEbookProject(updated);
+      setProjects(await listEbookProjects());
+      setStatusMsg({ type: "success", text: `"${project.name}" removed from the library.` });
+      // Sync cleared slug to R2
+      fetch("/api/projects", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: {
+            id: updated.id, name: updated.name,
+            createdAt: updated.createdAt, updatedAt: updated.updatedAt,
+            academy: null, siteConfig: {}, deliveryInstructions: "",
+            chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
+            ebookManifest: null, ebookJobState: updated.jobState, publishedSlug: undefined,
+          },
+        }),
+      }).catch(() => {});
+      return true;
+    } catch (err) {
+      setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Remove failed." });
+      return false;
+    }
+  }, []);
 
   const handleImportProject = useCallback(async (project: EbookProject) => {
     await saveEbookProject(project);
@@ -341,6 +408,7 @@ export default function EbookPage() {
             onImport={handleImportProject}
             onImportManifestJson={buildManifestFromJob}
             onPublish={handlePublish}
+            onUnpublish={handleUnpublish}
             onManifestLoaded={(manifest) => {
               setEbookManifest(manifest);
               setActiveTab("pipeline");

@@ -98,6 +98,59 @@ export default function HomePage() {
             }));
         } catch { /* ignore */ }
         setProjects([...main, ...ebook]);
+
+        // ── Background R2 bidirectional sync ──────────────────────────────
+        void (async () => {
+          try {
+            const r2res = await fetch("/api/projects");
+            if (!r2res.ok) return;
+            const { projects: r2projects } = await r2res.json() as { projects: ProjectSnapshot[] };
+            if (!Array.isArray(r2projects) || r2projects.length === 0) {
+              // R2 is empty — push all local projects up (initial upload)
+              const allLocal = [...main, ...ebook];
+              for (const p of allLocal) {
+                await fetch("/api/projects", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ project: p }),
+                }).catch(() => {});
+              }
+              return;
+            }
+            const r2ById  = new Map(r2projects.map((p: ProjectSnapshot) => [p.id, p]));
+            const localById = new Map([...main, ...ebook].map((p) => [p.id, p]));
+            const toPullLocal: ProjectSnapshot[] = [];
+            const toPushR2: ProjectSnapshot[] = [];
+            // Pull: R2 has newer or unknown project
+            for (const r2p of r2projects) {
+              const local = localById.get(r2p.id);
+              if (!local || new Date(r2p.updatedAt) > new Date(local.updatedAt)) {
+                toPullLocal.push(r2p as ProjectSnapshot);
+              }
+            }
+            // Push: local has newer or unknown project
+            for (const localP of [...main, ...ebook]) {
+              const r2p = r2ById.get(localP.id);
+              if (!r2p || new Date(localP.updatedAt) > new Date((r2p as ProjectSnapshot).updatedAt)) {
+                toPushR2.push(localP);
+              }
+            }
+            for (const p of toPullLocal) {
+              await saveProject(p).catch(() => {});
+            }
+            for (const p of toPushR2) {
+              await fetch("/api/projects", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ project: p }),
+              }).catch(() => {});
+            }
+            if (toPullLocal.length > 0) {
+              const refreshed = await listProjects();
+              const refreshedIds = new Set(refreshed.map((p) => p.id));
+              const ebookOnly = ebook.filter((e) => !refreshedIds.has(e.id));
+              setProjects([...refreshed, ...ebookOnly]);
+            }
+          } catch { /* R2 sync is best-effort */ }
+        })();
       } catch { /* ignore */ }
       try {
         setDeliveryInstructions(localStorage.getItem("nexus_delivery_instructions") ?? "");
@@ -185,6 +238,11 @@ export default function HomePage() {
       setCurrentProjectId(id);
       setProjects(await listProjects());
       addLog({ level: "success", message: `Project "${name}" saved.` });
+      // Sync to R2 (fire-and-forget)
+      fetch("/api/projects", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: snapshot }),
+      }).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Save failed";
       addLog({ level: "error", message: `Could not save project: ${msg}` });
@@ -237,12 +295,21 @@ export default function HomePage() {
       }));
     setProjects([...main, ...ebookConverted]);
     if (currentProjectId === id) setCurrentProjectId("");
+    // Remove from R2 (fire-and-forget)
+    fetch("/api/projects", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
   }, [currentProjectId]);
 
   const handleImportProject = useCallback(async (snapshot: ProjectSnapshot) => {
     await saveProject(snapshot);
     setProjects(await listProjects());
     addLog({ level: "success", message: `Project "${snapshot.name}" imported.` });
+    fetch("/api/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: snapshot }),
+    }).catch(() => {});
   }, [addLog]);
 
   const handlePublishProject = useCallback(async (snapshot: ProjectSnapshot): Promise<string | null> => {
@@ -303,10 +370,56 @@ export default function HomePage() {
       }));
       setProjects([...freshMain, ...freshEbook]);
       addLog({ level: "success", message: `Published to /library/${slug}` });
+      // Sync updated publishedSlug to R2
+      fetch("/api/projects", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: { ...snapshot, publishedSlug: slug } }),
+      }).catch(() => {});
       return slug;
     } catch (err) {
       addLog({ level: "error", message: err instanceof Error ? err.message : "Publish failed." });
       return null;
+    }
+  }, [addLog]);
+
+  const handleUnpublishProject = useCallback(async (snapshot: ProjectSnapshot): Promise<boolean> => {
+    if (!snapshot.publishedSlug) return false;
+    try {
+      const res = await fetch("/api/ebook/publish", {
+        method:  "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ slug: snapshot.publishedSlug }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        addLog({ level: "error", message: err.error ?? "Unpublish failed." });
+        return false;
+      }
+      // Clear publishedSlug from both stores
+      await saveProject({ ...snapshot, publishedSlug: undefined });
+      const ebookProjects = await listEbookProjects().catch(() => []);
+      const ep = ebookProjects.find((e) => e.id === snapshot.id);
+      if (ep) await saveEbookProject({ ...ep, publishedSlug: undefined }).catch(() => {});
+      // Refresh project list
+      const freshMain = await listProjects();
+      const freshMainIds = new Set(freshMain.map((p) => p.id));
+      const freshEbook = (await listEbookProjects().catch(() => [])).filter((e) => !freshMainIds.has(e.id)).map((e) => ({
+        id: e.id, name: e.name, createdAt: e.createdAt, updatedAt: e.updatedAt,
+        academy: null, siteConfig: SiteConfigSchema.parse({}), deliveryInstructions: "",
+        chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
+        ebookManifest: null, ebookJobState: e.jobState, publishedSlug: e.publishedSlug,
+      }));
+      setProjects([...freshMain, ...freshEbook]);
+      addLog({ level: "success", message: `"${snapshot.name}" removed from library.` });
+      // Sync cleared publishedSlug to R2
+      fetch("/api/projects", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: { ...snapshot, publishedSlug: undefined } }),
+      }).catch(() => {});
+      return true;
+    } catch (err) {
+      addLog({ level: "error", message: err instanceof Error ? err.message : "Unpublish failed." });
+      return false;
     }
   }, [addLog]);
 
@@ -540,6 +653,7 @@ export default function HomePage() {
                     onDelete={handleDeleteProject}
                     onImport={handleImportProject}
                     onPublish={handlePublishProject}
+                    onUnpublish={handleUnpublishProject}
                   />
                 ) : activeNav === "ebook" ? (
                   <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
