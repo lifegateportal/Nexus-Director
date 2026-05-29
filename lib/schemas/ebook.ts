@@ -14,13 +14,31 @@ export const QuoteSchema = z.object({
 // ─── Voice DNA ───────────────────────────────────────────────────────────────
 
 export const VoiceDNASchema = z.object({
-  signaturePhrases: z.array(z.string()).default([]),        // repeated phrases, verbal stamps
-  preferredTerminology: z.array(z.string()).default([]),   // domain vocabulary the author uses
-  toneProfile: z.string().default(""),                      // e.g. "authoritative, pastoral, warm"
+  // ── Core voice fingerprint ──────────────────────────────────────────────
+  signaturePhrases: z.array(z.string()).default([]),        // exact repeated phrases, verbal stamps (max 8)
+  preferredTerminology: z.array(z.string()).default([]),   // domain vocabulary the author uses consistently (max 10)
+  toneProfile: z.string().default(""),                      // emotional/relational tone, e.g. "pastoral, direct, warm"
   sentencePattern: z.enum(["short-punchy", "long-explanatory", "mixed"]).default("mixed"),
-  rhetoricalPatterns: z.array(z.string()).default([]),      // "uses threes", "rhetorical questions"
-  teachingStyle: z.string().default(""),                    // how they open/develop/close points
-  avoidWords: z.array(z.string()).default([]),             // words the author never says (for ghost-writing guard)
+  rhetoricalPatterns: z.array(z.string()).default([]),      // teaching devices e.g. "repeats key point three times" (max 6)
+  teachingStyle: z.string().default(""),                    // how they open topics, develop arguments, and land points
+  avoidWords: z.array(z.string()).default([]),              // forbidden words list incl. AI clichés (max 30)
+  // ── Industry upgrade: 8 precision fields ───────────────────────────────
+  /** Vocabulary register: granularity beyond tone */
+  vocabularyLevel: z.enum(["conversational", "pastoral", "academic", "technical"]).default("conversational"),
+  /** Rhythm / momentum signature, e.g. "slow build then rapid-fire landing" */
+  pacingFingerprint: z.string().default(""),
+  /** How the author structures stories, e.g. "opens mid-scene, extracts principle after" */
+  narrativeDevice: z.string().default(""),
+  /** Emotional modulation arc, e.g. "opens with challenge, builds conviction, releases into hope" */
+  emotionalArc: z.string().default(""),
+  /** Community-specific idioms that authenticate voice, must appear verbatim (max 10) */
+  vernacularMarkers: z.array(z.string()).default([]),
+  /** Forbidden sentence-level structural patterns, e.g. "never stacks 3 rhetorical questions" (max 10) */
+  avoidStructures: z.array(z.string()).default([]),
+  /** How the author launches new points, e.g. "poses question then answers it" */
+  openingPattern: z.string().default(""),
+  /** How the author lands points, e.g. "restates core with a twist, ends on imperative" */
+  closingPattern: z.string().default(""),
 });
 
 // ─── Content Segment ─────────────────────────────────────────────────────────

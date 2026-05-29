@@ -312,7 +312,47 @@ ${READER_NORMALIZATION_RULES}`,
     // Build a per-request system prompt: Voice DNA at the top (system-level weight),
     // then the dedup prohibition block if any points have already been covered.
     const voiceDnaBlock = assignment.voiceDNA
-      ? `\n\n════════════════════════════════════════════\nAUTHOR VOICE DNA — ENFORCE IN EVERY SENTENCE\n════════════════════════════════════════════\nThis is the speaker's unique voice fingerprint. Every sentence you write MUST reflect these patterns:\n${JSON.stringify(assignment.voiceDNA, null, 2)}`
+      ? (() => {
+          const dna = assignment.voiceDNA;
+          const lines: string[] = [
+            "\n\n════════════════════════════════════════════",
+            "AUTHOR VOICE DNA — ENFORCE IN EVERY SENTENCE",
+            "════════════════════════════════════════════",
+            "This is the speaker's unique voice fingerprint. Every sentence you write MUST reflect these patterns.",
+            "",
+          ];
+          if (dna.toneProfile)
+            lines.push(`TONE: ${dna.toneProfile}`);
+          if (dna.vocabularyLevel)
+            lines.push(`VOCABULARY REGISTER: ${dna.vocabularyLevel}`);
+          if (dna.sentencePattern)
+            lines.push(`SENTENCE RHYTHM: ${dna.sentencePattern}`);
+          if (dna.pacingFingerprint)
+            lines.push(`PACING: ${dna.pacingFingerprint}`);
+          if (dna.emotionalArc)
+            lines.push(`EMOTIONAL ARC: ${dna.emotionalArc}`);
+          if (dna.openingPattern)
+            lines.push(`HOW TO OPEN A NEW POINT: ${dna.openingPattern}`);
+          if (dna.closingPattern)
+            lines.push(`HOW TO CLOSE A POINT: ${dna.closingPattern}`);
+          if (dna.narrativeDevice)
+            lines.push(`STORY/ILLUSTRATION STRUCTURE: ${dna.narrativeDevice}`);
+          if (dna.teachingStyle)
+            lines.push(`TEACHING STYLE: ${dna.teachingStyle}`);
+          if ((dna.signaturePhrases ?? []).length > 0)
+            lines.push(`\nSIGNATURE PHRASES (use naturally, verbatim):\n${dna.signaturePhrases.map((p) => `  • ${p}`).join("\n")}`);
+          if ((dna.preferredTerminology ?? []).length > 0)
+            lines.push(`\nPREFERRED TERMINOLOGY (always prefer these terms):\n${dna.preferredTerminology.map((t) => `  • ${t}`).join("\n")}`);
+          if ((dna.vernacularMarkers ?? []).length > 0)
+            lines.push(`\nVERNACULAR MARKERS (must appear verbatim to authenticate the voice):\n${dna.vernacularMarkers.map((v) => `  • ${v}`).join("\n")}`);
+          if ((dna.rhetoricalPatterns ?? []).length > 0)
+            lines.push(`\nRHETORICAL PATTERNS (replicate these devices):\n${dna.rhetoricalPatterns.map((r) => `  • ${r}`).join("\n")}`);
+          if ((dna.avoidStructures ?? []).length > 0)
+            lines.push(`\nFORBIDDEN SENTENCE STRUCTURES (never construct sentences this way):\n${dna.avoidStructures.map((s) => `  • ${s}`).join("\n")}`);
+          if ((dna.avoidWords ?? []).length > 0)
+            lines.push(`\nFORBIDDEN WORDS & PHRASES (zero tolerance — not one instance):\n${dna.avoidWords.map((w) => `  • ${w}`).join("\n")}`);
+          return lines.join("\n");
+        })()
       : "";
 
     const deduplicatedSystem =
