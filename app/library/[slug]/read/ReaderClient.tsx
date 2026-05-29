@@ -14,7 +14,7 @@ import { ChapterDrawer } from "./ChapterDrawer";
 import type { TocItem } from "./ChapterDrawer";
 import { ReaderSettingsPanel } from "./ReaderSettings";
 import { ProgressBar } from "./ProgressBar";
-import { AudioReader } from "./AudioReader";
+import { AudioReader, parseChapter } from "./AudioReader";
 import { AnnotationsPanel, saveAnnotation, loadAnnotations, ANNO_COLOR_MAP } from "./AnnotationsPanel";
 import type { AnnotationColor, Annotation } from "./AnnotationsPanel";
 
@@ -177,44 +177,28 @@ function renderBody(
   theme: Theme,
   isFirstSection: boolean,
   annotations: { selectedText: string; color: AnnotationColor }[] = [],
+  paraKeyPrefix?: string,
+  audioParaKey?: string | null,
+  audioOpen?: boolean,
 ): React.ReactNode[] {
   const lines = text.split("\n");
   const nodes: React.ReactNode[] = [];
   let i         = 0;
   let paraCount = 0;
+  let blockIdx  = 0;
+
+  const pkey  = () => paraKeyPrefix ? `${paraKeyPrefix}_b${blockIdx}` : undefined;
+  const isAct = (k: string | undefined) => !!k && k === audioParaKey;
+  const hlBg  = (k: string | undefined): React.CSSProperties => isAct(k)
+    ? { background: `${theme.accent}1c`, borderRadius: "0.2rem", transition: "background 0.35s ease" }
+    : { transition: "background 0.35s ease" };
 
   while (i < lines.length) {
     const raw  = lines[i];
     const line = raw.trim();
     if (!line) { i++; continue; }
 
-    // H1 / H2 / H3 — breakInside/breakAfter prevent orphaned headings at column boundary
-    if (/^### /.test(line)) {
-      nodes.push(
-        <h3 key={i} style={{ color: theme.muted, fontSize: "0.68em", letterSpacing: "0.16em", textTransform: "uppercase" as const, marginTop: "2.5em", marginBottom: "0.5em", fontWeight: 700, breakInside: "avoid", breakAfter: "avoid" } as React.CSSProperties}>
-          <InlineText text={line.slice(4)} />
-        </h3>,
-      );
-      i++; continue;
-    }
-    if (/^## /.test(line)) {
-      nodes.push(
-        <h2 key={i} style={{ color: theme.heading, fontSize: "1.15em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", letterSpacing: "-0.01em", breakInside: "avoid", breakAfter: "avoid" } as React.CSSProperties}>
-          <InlineText text={line.slice(3)} />
-        </h2>,
-      );
-      i++; continue;
-    }
-    if (/^# /.test(line)) {
-      nodes.push(
-        <h2 key={i} style={{ color: theme.heading, fontSize: "1.25em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", breakInside: "avoid", breakAfter: "avoid" } as React.CSSProperties}>
-          <InlineText text={line.slice(2)} />
-        </h2>,
-      );
-      i++; continue;
-    }
-
-    // Ornamental divider
+    // Ornamental divider — no blockIdx increment (matches AudioReader processBody)
     if (/^---+$/.test(line)) {
       nodes.push(
         <div key={i} style={{ textAlign: "center", margin: "2.75em 0", color: theme.scriptureBar, letterSpacing: "0.5em", fontSize: "0.85em" }}>
@@ -224,8 +208,38 @@ function renderBody(
       i++; continue;
     }
 
+    // H1 / H2 / H3 — breakInside/breakAfter prevent orphaned headings at column boundary
+    if (/^### /.test(line)) {
+      const k = pkey();
+      nodes.push(
+        <h3 key={i} data-pkey={k} style={{ ...hlBg(k), color: theme.muted, fontSize: "0.68em", letterSpacing: "0.16em", textTransform: "uppercase" as const, marginTop: "2.5em", marginBottom: "0.5em", fontWeight: 700, breakInside: "avoid", breakAfter: "avoid", cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
+          <InlineText text={line.slice(4)} />
+        </h3>,
+      );
+      blockIdx++; i++; continue;
+    }
+    if (/^## /.test(line)) {
+      const k = pkey();
+      nodes.push(
+        <h2 key={i} data-pkey={k} style={{ ...hlBg(k), color: theme.heading, fontSize: "1.15em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", letterSpacing: "-0.01em", breakInside: "avoid", breakAfter: "avoid", cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
+          <InlineText text={line.slice(3)} />
+        </h2>,
+      );
+      blockIdx++; i++; continue;
+    }
+    if (/^# /.test(line)) {
+      const k = pkey();
+      nodes.push(
+        <h2 key={i} data-pkey={k} style={{ ...hlBg(k), color: theme.heading, fontSize: "1.25em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", breakInside: "avoid", breakAfter: "avoid", cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
+          <InlineText text={line.slice(2)} />
+        </h2>,
+      );
+      blockIdx++; i++; continue;
+    }
+
     // Blockquote (scripture / pull quote)
     if (/^> /.test(line)) {
+      const k = pkey();
       const qLines: string[] = [];
       while (i < lines.length && /^> /.test(lines[i].trim())) {
         qLines.push(lines[i].trim().slice(2));
@@ -234,7 +248,9 @@ function renderBody(
       nodes.push(
         <blockquote
           key={`bq-${i}`}
+          data-pkey={k}
           style={{
+            ...hlBg(k),
             borderLeft:    `3px solid ${theme.scriptureBar}`,
             paddingLeft:   "1.25em",
             margin:        "2em 0",
@@ -242,7 +258,8 @@ function renderBody(
             color:         theme.muted,
             fontSize:      "0.97em",
             lineHeight:    1.75,
-            breakInside:   "avoid",  // prevent quote from splitting across pages
+            breakInside:   "avoid",
+            cursor:        audioOpen ? "pointer" : undefined,
           } as React.CSSProperties}
         >
           {qLines.map((ql, qi) => (
@@ -252,11 +269,12 @@ function renderBody(
           ))}
         </blockquote>,
       );
-      continue;
+      blockIdx++; continue;
     }
 
     // Unordered list
     if (/^[*-] /.test(line)) {
+      const k = pkey();
       const items: string[] = [];
       const s = i;
       while (i < lines.length && /^[*-] /.test(lines[i].trim())) {
@@ -264,7 +282,7 @@ function renderBody(
         i++;
       }
       nodes.push(
-        <ul key={`ul-${s}`} style={{ paddingLeft: "1.5em", margin: "1em 0", color: theme.text }}>
+        <ul key={`ul-${s}`} data-pkey={k} style={{ ...hlBg(k), paddingLeft: "1.5em", margin: "1em 0", color: theme.text, cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
           {items.map((item, ii) => (
             <li key={ii} style={{ marginBottom: "0.4em", lineHeight: 1.7 }}>
               <HighlightedLine text={item} annotations={annotations} />
@@ -272,11 +290,12 @@ function renderBody(
           ))}
         </ul>,
       );
-      continue;
+      blockIdx++; continue;
     }
 
     // Ordered list
     if (/^\d+\. /.test(line)) {
+      const k = pkey();
       const items: string[] = [];
       const s = i;
       while (i < lines.length && /^\d+\. /.test(lines[i].trim())) {
@@ -284,7 +303,7 @@ function renderBody(
         i++;
       }
       nodes.push(
-        <ol key={`ol-${s}`} style={{ paddingLeft: "1.5em", margin: "1em 0", color: theme.text }}>
+        <ol key={`ol-${s}`} data-pkey={k} style={{ ...hlBg(k), paddingLeft: "1.5em", margin: "1em 0", color: theme.text, cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
           {items.map((item, ii) => (
             <li key={ii} style={{ marginBottom: "0.4em", lineHeight: 1.7 }}>
               <HighlightedLine text={item} annotations={annotations} />
@@ -292,22 +311,21 @@ function renderBody(
           ))}
         </ol>,
       );
-      continue;
+      blockIdx++; continue;
     }
 
-    // Scripture block: ONLY when the ENTIRE line is a quoted scripture text + citation.
-    // e.g.  "The Lord is my shepherd" (Psalm 23:1, NIV)
-    // e.g.  *"For God so loved the world"* (John 3:16)
-    // Author narrative paragraphs that START with a Bible reference but continue with
-    // the author's own words ("Isaiah 61:10 names two kinds...") are NOT scripture blocks.
+    // Scripture inline block
     const isInlineScripture =
       /^(?:\*{1,3}"[^"]{1,600}"\*{0,3}|\u201c[^\u201d]{1,600}\u201d|"[^"]{1,600}")\s*\([^)]+\d+:\d+[^)]*\)\s*$/.test(line);
 
     if (isInlineScripture) {
+      const k = pkey();
       nodes.push(
         <blockquote
           key={`scr-${i}`}
+          data-pkey={k}
           style={{
+            ...hlBg(k),
             borderLeft:  `3px solid ${theme.scriptureBar}`,
             paddingLeft: "1.25em",
             margin:      "2em 0",
@@ -316,6 +334,7 @@ function renderBody(
             fontSize:    "0.97em",
             lineHeight:  1.75,
             breakInside: "avoid",
+            cursor:      audioOpen ? "pointer" : undefined,
           } as React.CSSProperties}
         >
           <p style={{ margin: 0 }}>
@@ -323,22 +342,26 @@ function renderBody(
           </p>
         </blockquote>,
       );
-      i++; continue;
+      blockIdx++; i++; continue;
     }
 
     // Paragraph
     paraCount++;
     const isDropCap = isFirstSection && paraCount === 1 && line.length > 1;
+    const k = pkey();
 
     nodes.push(
       <p
         key={i}
+        data-pkey={k}
         style={{
+          ...hlBg(k),
           marginBottom: "1.4em",
           color:        theme.text,
           textIndent:   isDropCap ? undefined : "1.6em",
           textAlign:    "justify" as const,
-        }}
+          cursor:       audioOpen ? "pointer" : undefined,
+        } as React.CSSProperties}
       >
         {isDropCap ? (
           <>
@@ -363,7 +386,7 @@ function renderBody(
         )}
       </p>,
     );
-    i++;
+    blockIdx++; i++;
   }
 
   return nodes;
@@ -373,17 +396,24 @@ function renderBody(
 
 function ChapterView({
   chapter, theme, fontFamily, fontSize, lineHeight, annotations,
+  audioParaKey, audioOpen,
 }: {
-  chapter:     ChapterDraft;
-  theme:       Theme;
-  fontFamily:  string;
-  fontSize:    number;
-  lineHeight:  number;
-  annotations: { selectedText: string; color: AnnotationColor }[];
+  chapter:      ChapterDraft;
+  theme:        Theme;
+  fontFamily:   string;
+  fontSize:     number;
+  lineHeight:   number;
+  annotations:  { selectedText: string; color: AnnotationColor }[];
+  audioParaKey?: string | null;
+  audioOpen?:   boolean;
 }) {
   const [showExtras, setShowExtras] = useState(false);
 
   const baseStyle: React.CSSProperties = { fontFamily, fontSize: `${fontSize}px`, lineHeight, color: theme.text };
+  const isAct = (k: string) => k === audioParaKey;
+  const hlBg  = (k: string): React.CSSProperties => isAct(k)
+    ? { background: `${theme.accent}1c`, borderRadius: "0.2rem", transition: "background 0.35s ease" }
+    : { transition: "background 0.35s ease" };
 
   return (
     <article style={baseStyle}>
@@ -393,11 +423,14 @@ function ChapterView({
           Chapter {chapter.number}
         </p>
         <h1
+          data-pkey="title"
           style={{
+            ...hlBg("title"),
             fontSize: "1.9em", fontWeight: 700, color: theme.heading,
             lineHeight: 1.2, letterSpacing: "-0.02em", marginBottom: "0.5em",
             fontFamily: "Georgia, serif",
-          }}
+            cursor: audioOpen ? "pointer" : undefined,
+          } as React.CSSProperties}
         >
           {chapter.title}
         </h1>
@@ -407,7 +440,9 @@ function ChapterView({
       {/* Epigraph */}
       {chapter.epigraph && (
         <blockquote
+          data-pkey="epigraph"
           style={{
+            ...hlBg("epigraph"),
             textAlign:  "center",
             fontStyle:  "italic",
             color:      theme.muted,
@@ -416,7 +451,8 @@ function ChapterView({
             margin:     "0 auto 3.5em",
             maxWidth:   "32em",
             padding:    "0 1em",
-          }}
+            cursor:     audioOpen ? "pointer" : undefined,
+          } as React.CSSProperties}
         >
           {chapter.epigraph.split("\n").map((line, i, arr) => (
             <p key={i} style={{ marginBottom: i < arr.length - 1 ? "0.35em" : 0 }}>{line}</p>
@@ -427,14 +463,17 @@ function ChapterView({
       {/* Premise line */}
       {chapter.premiseLine && (
         <p
+          data-pkey="premise"
           style={{
+            ...hlBg("premise"),
             textAlign:   "center",
             fontStyle:   "italic",
             fontWeight:  600,
             color:       theme.heading,
             fontSize:    "1.06em",
             marginBottom: "3em",
-          }}
+            cursor:       audioOpen ? "pointer" : undefined,
+          } as React.CSSProperties}
         >
           {chapter.premiseLine}
         </p>
@@ -445,7 +484,9 @@ function ChapterView({
         <section key={section.sectionNumber} style={{ marginBottom: "0.5em" }}>
           {section.heading && (
             <h2
+              data-pkey={`s${idx}_h`}
               style={{
+                ...hlBg(`s${idx}_h`),
                 fontSize:      "0.65em",
                 fontWeight:    700,
                 letterSpacing: "0.18em",
@@ -456,12 +497,13 @@ function ChapterView({
                 paddingBottom: "0.65em",
                 borderBottom:  `1px solid ${theme.border}`,
                 fontFamily,
-              }}
+                cursor:        audioOpen ? "pointer" : undefined,
+              } as React.CSSProperties}
             >
               {section.heading}
             </h2>
           )}
-          <div>{renderBody(section.body, theme, idx === 0, annotations)}</div>
+          <div>{renderBody(section.body, theme, idx === 0, annotations, `s${idx}`, audioParaKey, audioOpen)}</div>
         </section>
       ))}
 
@@ -471,7 +513,7 @@ function ChapterView({
           <div style={{ textAlign: "center", margin: "2.5em 0", color: theme.accent, letterSpacing: "0.5em", fontSize: "0.85em" }}>
             ✦ ✦ ✦
           </div>
-          {renderBody(chapter.conclusion, theme, false, annotations)}
+          {renderBody(chapter.conclusion, theme, false, annotations, "conc", audioParaKey, audioOpen)}
         </section>
       )}
 
@@ -734,6 +776,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   // ── Annotation + audio state ────────────────────────────────────────────────────
   const [annotationMode, setAnnotationMode] = useState(false);
   const [audioOpen,      setAudioOpen]      = useState(false);
+  const [audioParaKey,   setAudioParaKey]   = useState<string | null>(null);
+  const [audioStartSeg,  setAudioStartSeg]  = useState<number | undefined>(undefined);
   const [annoPanelOpen,  setAnnoPanelOpen]  = useState(false);
   const [selection,      setSelection]      = useState<{ text: string; rect: DOMRect } | null>(null);
   const [annoColor,      setAnnoColor]      = useState<AnnotationColor>("amber");
@@ -746,6 +790,9 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const sentinelRef     = useRef<HTMLDivElement>(null);
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flipTimer       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioOpenRef    = useRef(audioOpen);
+  const pageIndexRef    = useRef(pageIndex);
+  const paraKeyMapRef   = useRef<Record<string, number>>({});
   // When navigating back to a previous chapter, land on its last page
   const goToLastPageRef = useRef(false);
 
@@ -759,6 +806,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const settingsOpenRef = useRef(settingsOpen);
   useEffect(() => { tocOpenRef.current      = tocOpen;      }, [tocOpen]);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
+  useEffect(() => { audioOpenRef.current    = audioOpen;    }, [audioOpen]);
+  useEffect(() => { pageIndexRef.current    = pageIndex;    }, [pageIndex]);
 
   // ── Reload annotation highlights when chapter / slug changes ─────────────
   const reloadAnnotations = useCallback(() => {
@@ -852,6 +901,32 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
 
   const totalSections = virtualSections.length;
   const currentSection = virtualSections[chapterIndex] ?? virtualSections[0];
+
+  // ── Build paraKey→segIdx map whenever audio opens for a chapter ──────────
+  // (placed here because it depends on currentSection, declared above)
+  useEffect(() => {
+    if (!audioOpen || currentSection.kind !== "chapter") { paraKeyMapRef.current = {}; return; }
+    const segs = parseChapter(currentSection.chapter);
+    const map: Record<string, number> = {};
+    segs.forEach((seg, idx) => { if (!(seg.paraKey in map)) map[seg.paraKey] = idx; });
+    paraKeyMapRef.current = map;
+  }, [audioOpen, currentSection]);
+
+  // ── Reset audio tracking state on chapter change or audio close ──────────
+  useEffect(() => { setAudioParaKey(null); setAudioStartSeg(undefined); }, [chapterIndex]);
+  useEffect(() => { if (!audioOpen) setAudioParaKey(null); }, [audioOpen]);
+
+  // ── Auto-flip page when audio advances to a paragraph on another page ─────
+  useEffect(() => {
+    if (!audioParaKey || !columnTrackRef.current || !containerW) return;
+    const raf = requestAnimationFrame(() => {
+      const el = columnTrackRef.current?.querySelector(`[data-pkey="${audioParaKey}"]`) as HTMLElement | null;
+      if (!el) return;
+      const targetPage = Math.floor(el.offsetLeft / containerW);
+      if (targetPage !== pageIndexRef.current) setPageIndex(targetPage);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [audioParaKey, containerW]);
 
   // ── Restore settings + position ──────────────────────────────────────────
   useEffect(() => {
@@ -984,6 +1059,14 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     // Ignore clicks on interactive elements
     if ((e.target as HTMLElement).closest("button,a,select,input,textarea")) return;
     if (tocOpen || settingsOpen) { setTocOpen(false); setSettingsOpen(false); return; }
+    // When audio is open, tapping a paragraph starts reading from that position
+    if (audioOpenRef.current) {
+      const pkey = (e.target as HTMLElement).closest("[data-pkey]")?.getAttribute("data-pkey");
+      if (pkey) {
+        const segIdx = paraKeyMapRef.current[pkey];
+        if (segIdx !== undefined) { setAudioStartSeg(segIdx); return; }
+      }
+    }
     const x = e.clientX;
     const w = e.currentTarget.clientWidth;
     if (x < w * 0.30) triggerFlip("prev");
@@ -1246,6 +1329,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
                 fontSize={fontSize}
                 lineHeight={lineHeight}
                 annotations={annotations}
+                audioParaKey={audioOpen ? audioParaKey : null}
+                audioOpen={audioOpen}
               />
             )}
             {/* Sentinel: measures how many columns content spans */}
@@ -1289,6 +1374,18 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           </>
         )}
       </div>
+
+      {/* ── Audio reader bar (sits between viewport and footer in flex column) ── */}
+      {audioOpen && currentSection.kind === "chapter" && (
+        <AudioReader
+          chapter={currentSection.chapter}
+          theme={theme}
+          fontFamily={fontFamily}
+          onClose={() => setAudioOpen(false)}
+          onProgress={(_segIdx, paraKey) => setAudioParaKey(paraKey)}
+          startFrom={audioStartSeg}
+        />
+      )}
 
       {/* ── Bottom chrome ── */}
       <footer
@@ -1407,16 +1504,6 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           }}
           t={theme}
           fontFamily={fontFamily}
-        />
-      )}
-
-      {/* ── Audio reader bar (sits between viewport and footer in flex column) ── */}
-      {audioOpen && currentSection.kind === "chapter" && (
-        <AudioReader
-          chapter={currentSection.chapter}
-          theme={theme}
-          fontFamily={fontFamily}
-          onClose={() => setAudioOpen(false)}
         />
       )}
 

@@ -7,9 +7,10 @@ import type { ChapterDraft } from "@/lib/schemas/ebook";
 
 type SegmentType = "chapter-title" | "heading" | "quote" | "body";
 
-interface Segment {
+export interface Segment {
   type: SegmentType;
   text: string;
+  paraKey: string;
 }
 
 // ── 1. Text pre-processing — clean abbreviations, punctuation, noise ──────────
@@ -58,8 +59,9 @@ function splitSentences(text: string): string[] {
 }
 
 // ── Parse chapter into typed segments ─────────────────────────────────────────
+// Also exported so ReaderClient can build a paraKey→segIdx map for click-to-start.
 
-function parseChapter(chapter: ChapterDraft): Segment[] {
+export function parseChapter(chapter: ChapterDraft): Segment[] {
   const segs: Segment[] = [];
 
   const stripMd = (s: string) =>
@@ -68,47 +70,69 @@ function parseChapter(chapter: ChapterDraft): Segment[] {
      .replace(/\*([^*]+)\*/g, "$1")
      .trim();
 
-  const pushSentences = (type: SegmentType, raw: string) => {
+  const pushSentences = (type: SegmentType, raw: string, paraKey: string) => {
     const clean = sanitizeForSpeech(stripMd(raw));
     if (!clean) return;
-    // headings and chapter-titles are already short — no sentence split needed
     if (type === "heading" || type === "chapter-title") {
-      segs.push({ type, text: clean });
+      segs.push({ type, text: clean, paraKey });
     } else {
       for (const sentence of splitSentences(clean)) {
-        if (sentence.trim()) segs.push({ type, text: sentence.trim() });
+        if (sentence.trim()) segs.push({ type, text: sentence.trim(), paraKey });
       }
     }
   };
 
-  const processBody = (text: string) => {
-    for (const raw of text.split("\n")) {
-      const line = raw.trim();
-      if (!line || /^---+$/.test(line)) continue;
+  // Mirrors the block-grouping logic in renderBody so paraKeys align between
+  // AudioReader segments and data-pkey attributes on rendered DOM elements.
+  const processBody = (text: string, prefix: string) => {
+    const lines = text.split("\n");
+    let blockIdx = 0;
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i].trim();
+      if (!line || /^---+$/.test(line)) { i++; continue; }
+      const key = `${prefix}_b${blockIdx}`;
       if (/^#{1,3} /.test(line)) {
-        pushSentences("heading", line.replace(/^#{1,3} /, ""));
-      } else if (/^> /.test(line)) {
-        pushSentences("quote", line.slice(2));
-      } else if (/^[*-] /.test(line)) {
-        pushSentences("body", line.slice(2));
-      } else if (/^\d+\. /.test(line)) {
-        pushSentences("body", line.replace(/^\d+\. /, ""));
-      } else {
-        pushSentences("body", line);
+        pushSentences("heading", line.replace(/^#{1,3} /, ""), key);
+        blockIdx++; i++; continue;
       }
+      if (/^> /.test(line)) {
+        // Group consecutive quote lines — same key, matching renderBody's <blockquote>
+        while (i < lines.length && /^> /.test(lines[i].trim())) {
+          pushSentences("quote", lines[i].trim().slice(2), key);
+          i++;
+        }
+        blockIdx++; continue;
+      }
+      if (/^[*-] /.test(line)) {
+        while (i < lines.length && /^[*-] /.test(lines[i].trim())) {
+          pushSentences("body", lines[i].trim().slice(2), key);
+          i++;
+        }
+        blockIdx++; continue;
+      }
+      if (/^\d+\. /.test(line)) {
+        while (i < lines.length && /^\d+\. /.test(lines[i].trim())) {
+          pushSentences("body", lines[i].trim().replace(/^\d+\. /, ""), key);
+          i++;
+        }
+        blockIdx++; continue;
+      }
+      pushSentences("body", line, key);
+      blockIdx++; i++;
     }
   };
 
-  // Chapter title gets a lead-in breath (pauseBeforeMs handled in speakSegment)
-  pushSentences("chapter-title", `Chapter ${chapter.number}. ${chapter.title}.`);
-  if (chapter.epigraph)    pushSentences("quote", chapter.epigraph);
-  if (chapter.premiseLine) pushSentences("body",  chapter.premiseLine);
+  pushSentences("chapter-title", `Chapter ${chapter.number}. ${chapter.title}.`, "title");
+  if (chapter.epigraph)    pushSentences("quote", chapter.epigraph, "epigraph");
+  if (chapter.premiseLine) pushSentences("body",  chapter.premiseLine, "premise");
 
-  for (const section of chapter.sections) {
-    if (section.heading) pushSentences("heading", section.heading);
-    processBody(section.body);
+  for (let si = 0; si < chapter.sections.length; si++) {
+    const section = chapter.sections[si];
+    if (section.heading) pushSentences("heading", section.heading, `s${si}_h`);
+    processBody(section.body, `s${si}`);
   }
-  if (chapter.conclusion) processBody(chapter.conclusion);
+  if (chapter.conclusion) processBody(chapter.conclusion, "conc");
 
   return segs.filter(s => s.text.length > 0);
 }
@@ -170,24 +194,32 @@ interface Props {
     bg:           string;
   };
   fontFamily: string;
-  onClose:    () => void;
+  onClose:     () => void;
+  /** Called each time a new segment starts speaking. Used for in-page highlighting. */
+  onProgress?: (segIdx: number, paraKey: string) => void;
+  /** Jump to this segment index (e.g. from a tap-to-start paragraph click). */
+  startFrom?:  number;
 }
 
-export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
+export function AudioReader({ chapter, theme, fontFamily, onClose, onProgress, startFrom }: Props) {
   const [state,        setState]       = useState<AudioState>("idle");
   const [rateIdx,      setRateIdx]     = useState(1);
   const [voices,       setVoices]      = useState<SpeechSynthesisVoice[]>([]);
   const [currentSeg,   setCurrentSeg]  = useState<Segment | null>(null);
   const [currentWord,  setCurrentWord] = useState(-1);
+  const [segIdx,       setSegIdx]       = useState(0);
 
-  const segsRef     = useRef<Segment[]>([]);
-  const segIdxRef   = useRef(0);
-  const rateIdxRef  = useRef(1);
-  const voicesRef   = useRef<SpeechSynthesisVoice[]>([]);
-  const stoppedRef  = useRef(false);
+  const segsRef         = useRef<Segment[]>([]);
+  const segIdxRef       = useRef(0);
+  const rateIdxRef      = useRef(1);
+  const voicesRef       = useRef<SpeechSynthesisVoice[]>([]);
+  const stoppedRef      = useRef(false);
+  const onProgressRef   = useRef(onProgress);
+  const prevStartFrom   = useRef<number | undefined>(undefined);
 
-  useEffect(() => { rateIdxRef.current = rateIdx; }, [rateIdx]);
-  useEffect(() => { voicesRef.current  = voices;  }, [voices]);
+  useEffect(() => { rateIdxRef.current   = rateIdx;     }, [rateIdx]);
+  useEffect(() => { voicesRef.current    = voices;      }, [voices]);
+  useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
 
   useEffect(() => {
     const load = () => setVoices(window.speechSynthesis.getVoices());
@@ -204,6 +236,7 @@ export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
     setState("idle");
     setCurrentSeg(null);
     setCurrentWord(-1);
+    setSegIdx(0);
   }, [chapter]);
 
   useEffect(() => () => { window.speechSynthesis?.cancel(); }, []);
@@ -225,6 +258,8 @@ export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
       segIdxRef.current = idx;
       setCurrentSeg(seg);
       setCurrentWord(-1);
+      setSegIdx(idx);
+      onProgressRef.current?.(idx, seg.paraKey);
 
       const utt    = new SpeechSynthesisUtterance(seg.text);
       utt.rate     = treatment.rate * userRate;
@@ -265,6 +300,20 @@ export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
     speakSegment(fromIdx);
   }, [speakSegment]);
 
+  // Jump to a specific segment when startFrom prop changes
+  useEffect(() => {
+    if (startFrom === undefined) return;
+    if (startFrom === prevStartFrom.current) return;
+    prevStartFrom.current = startFrom;
+    stoppedRef.current = true;
+    window.speechSynthesis?.cancel();
+    setTimeout(() => {
+      stoppedRef.current = false;
+      setState("playing");
+      speakSegment(startFrom);
+    }, 80);
+  }, [startFrom, speakSegment]);
+
   const stop = useCallback(() => {
     stoppedRef.current = true;
     window.speechSynthesis?.cancel();
@@ -303,39 +352,93 @@ export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
 
   return (
     <div style={{ flexShrink: 0 }}>
-      {/* ── Now-reading strip with word highlighting ── */}
+      {/* ── CSS keyframes for equalizer bars ── */}
+      <style>{`
+        @keyframes nxEqA { 0%,100%{height:3px} 50%{height:11px} }
+        @keyframes nxEqB { 0%,100%{height:8px} 40%{height:3px} 80%{height:13px} }
+        @keyframes nxEqC { 0%,100%{height:5px} 60%{height:12px} }
+      `}</style>
+
+      {/* ── Chapter progress bar ── */}
+      <div style={{ height: "2px", background: `${theme.accent}18`, overflow: "hidden" }}>
+        <div style={{
+          height: "100%",
+          width: segsRef.current.length
+            ? `${Math.round((segIdx / segsRef.current.length) * 100)}%`
+            : "0%",
+          background: `linear-gradient(to right, ${theme.accent}bb, ${theme.accent})`,
+          transition: "width 0.5s ease",
+        }} />
+      </div>
+
+      {/* ── Now-reading strip ── */}
       {currentSeg && state !== "idle" && (
         <div style={{
-          padding:      "0.65rem 1.25rem 0.7rem",
-          background:   theme.chrome,
-          borderTop:    `1px solid ${theme.chromeBorder}`,
+          padding: "0.7rem 1.25rem 0.75rem",
+          background: `${theme.chrome}f8`,
+          borderTop: `1px solid ${theme.chromeBorder}`,
+          backdropFilter: "blur(28px)",
+          WebkitBackdropFilter: "blur(28px)",
         }}>
-          <span style={{
-            display: "inline-block", marginBottom: "0.35rem",
-            fontSize: "0.57rem", letterSpacing: "0.14em",
-            textTransform: "uppercase", fontFamily,
-            color: segBadge[currentSeg.type].color,
-            border: `1px solid ${segBadge[currentSeg.type].color}40`,
-            borderRadius: "0.25rem", padding: "0.08rem 0.45rem",
-          }}>
-            {segBadge[currentSeg.type].label}
-          </span>
 
+          {/* Meta row: EQ bars + segment label + position counter */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.55rem", marginBottom: "0.4rem" }}>
+
+            {/* Animated equalizer */}
+            <div style={{ display: "flex", alignItems: "flex-end", gap: "2px", height: "13px", flexShrink: 0 }}>
+              {[
+                { anim: "nxEqA", dur: "0.75s", delay: "0ms",   h: 4 },
+                { anim: "nxEqB", dur: "0.9s",  delay: "130ms", h: 8 },
+                { anim: "nxEqC", dur: "0.65s", delay: "260ms", h: 5 },
+              ].map((bar, i) => (
+                <div key={i} style={{
+                  width: "3px", height: `${bar.h}px`, borderRadius: "2px",
+                  background: segBadge[currentSeg.type].color,
+                  opacity: state === "playing" ? 1 : 0.4,
+                  animation: state === "playing"
+                    ? `${bar.anim} ${bar.dur} ease-in-out infinite`
+                    : "none",
+                  animationDelay: bar.delay,
+                }} />
+              ))}
+            </div>
+
+            {/* Segment type label */}
+            <span style={{
+              fontSize: "0.575rem", letterSpacing: "0.13em",
+              textTransform: "uppercase", fontFamily, fontWeight: 600,
+              color: segBadge[currentSeg.type].color,
+            }}>
+              {segBadge[currentSeg.type].label}
+            </span>
+
+            <span style={{ flex: 1 }} />
+
+            {/* Position counter */}
+            <span style={{ fontSize: "0.575rem", letterSpacing: "0.04em", fontFamily, color: theme.muted }}>
+              {segIdx + 1}{" "}
+              <span style={{ opacity: 0.4 }}>/</span>{" "}
+              {segsRef.current.length}
+            </span>
+          </div>
+
+          {/* Word-highlighted sentence */}
           <p style={{
-            fontSize:   currentSeg.type === "heading" || currentSeg.type === "chapter-title" ? "0.91rem" : "0.82rem",
+            margin: 0, lineHeight: 1.6,
+            fontSize: currentSeg.type === "heading" || currentSeg.type === "chapter-title" ? "0.91rem" : "0.83rem",
             fontFamily: currentSeg.type === "quote" ? "Georgia, serif" : fontFamily,
             fontStyle:  currentSeg.type === "quote" ? "italic" : "normal",
             fontWeight: currentSeg.type === "heading" || currentSeg.type === "chapter-title" ? 700 : 400,
-            color: theme.text, lineHeight: 1.55, margin: 0,
+            color: theme.text,
           }}>
             {wordTokens.map((word, i) => (
               <span key={i} style={{
-                background:   i === currentWord ? `${theme.accent}38` : "transparent",
+                background:   i === currentWord ? `${theme.accent}32` : "transparent",
                 color:        i === currentWord ? theme.accent : "inherit",
                 fontWeight:   i === currentWord ? 600 : "inherit",
                 borderRadius: "0.2rem",
-                padding:      i === currentWord ? "0 0.1rem" : "0",
-                transition:   "background 0.08s ease, color 0.08s ease",
+                padding:      i === currentWord ? "0.05rem 0.12rem" : "0",
+                transition:   "background 0.09s ease, color 0.09s ease",
               }}>
                 {word}{" "}
               </span>
@@ -344,54 +447,82 @@ export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
         </div>
       )}
 
-      {/* ── Controls ── */}
+      {/* ── Controls bar ── */}
       <div style={{
-        display: "flex", alignItems: "center", gap: "0.5rem",
-        padding: "0 1.25rem", height: "3.25rem",
+        display: "flex", alignItems: "center", gap: "0.35rem",
+        padding: "0 0.85rem 0 1.25rem",
+        height: "3.5rem",
         background: theme.chrome,
         borderTop: `1px solid ${theme.chromeBorder}`,
-        backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
+        backdropFilter: "blur(28px)", WebkitBackdropFilter: "blur(28px)",
       }}>
-        <p style={{
-          flex: 1, fontSize: "0.72rem", fontFamily, color: theme.muted,
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        }}>
-          {state === "playing" ? `Reading · Ch ${chapter.number}`
-            : state === "paused" ? `Paused · Ch ${chapter.number}`
-            : `Ch ${chapter.number} · ${chapter.title}`}
-        </p>
 
+        {/* Track info */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{
+            margin: 0, lineHeight: 1.25,
+            fontSize: "0.72rem", fontFamily, fontWeight: 500,
+            color: theme.text,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            Chapter {chapter.number}
+          </p>
+          <p style={{ margin: "0.12rem 0 0", lineHeight: 1.25, fontSize: "0.62rem", fontFamily, color: theme.muted }}>
+            {state === "playing" ? "Now reading…"
+              : state === "paused" ? "Paused"
+              : chapter.title}
+          </p>
+        </div>
+
+        {/* Speed pill */}
         <button onClick={cycleRate} aria-label="Change speed" style={{
-          fontSize: "0.72rem", fontFamily, color: theme.muted,
-          background: "none", border: `1px solid ${theme.border}`,
-          borderRadius: "0.3rem", padding: "0.2rem 0.55rem",
-          cursor: "pointer", minHeight: "2rem", minWidth: "3.25rem",
+          fontSize: "0.68rem", fontFamily, fontWeight: 700,
+          color: theme.accent,
+          background: `${theme.accent}14`,
+          border: `1px solid ${theme.accent}3a`,
+          borderRadius: "999px", padding: "0.22rem 0.7rem",
+          cursor: "pointer", minHeight: "2rem",
+          transition: "background 0.15s ease",
+          flexShrink: 0,
         }}>
           {RATES[rateIdx]}×
         </button>
 
+        {/* Stop */}
         {state !== "idle" && (
           <button onClick={stop} aria-label="Stop" style={{
-            background: "none", border: "none", cursor: "pointer",
-            color: theme.muted, display: "flex", alignItems: "center",
-            justifyContent: "center", minHeight: "2.75rem", minWidth: "2.75rem",
+            width: "2.25rem", height: "2.25rem",
+            background: "none",
+            border: `1px solid ${theme.border}`,
+            borderRadius: "50%", cursor: "pointer",
+            color: theme.muted,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0,
+            transition: "border-color 0.15s ease",
           }}>
-            <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.95rem", height: "0.95rem" }}>
-              <rect x="5" y="5" width="14" height="14" rx="2" />
+            <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.75rem", height: "0.75rem" }}>
+              <rect x="5" y="5" width="14" height="14" rx="3" />
             </svg>
           </button>
         )}
 
+        {/* Play / Pause */}
         <button onClick={togglePlay} aria-label={state === "playing" ? "Pause" : "Play"} style={{
-          width: "2.25rem", height: "2.25rem", borderRadius: "50%",
-          background: theme.accent, border: "none", cursor: "pointer",
-          color: "#fff", display: "flex", alignItems: "center",
-          justifyContent: "center", flexShrink: 0,
+          width: "2.5rem", height: "2.5rem", borderRadius: "50%",
+          background: theme.accent,
+          boxShadow: state === "playing"
+            ? `0 0 0 4px ${theme.accent}28, 0 2px 10px ${theme.accent}50`
+            : `0 2px 8px ${theme.accent}3a`,
+          border: "none", cursor: "pointer",
+          color: "#fff",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
+          transition: "box-shadow 0.25s ease",
         }}>
           {state === "playing" ? (
             <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.85rem", height: "0.85rem" }}>
-              <rect x="6" y="5" width="4" height="14" rx="1" />
-              <rect x="14" y="5" width="4" height="14" rx="1" />
+              <rect x="6" y="5" width="4" height="14" rx="1.5" />
+              <rect x="14" y="5" width="4" height="14" rx="1.5" />
             </svg>
           ) : (
             <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.85rem", height: "0.85rem" }}>
@@ -400,14 +531,18 @@ export function AudioReader({ chapter, theme, fontFamily, onClose }: Props) {
           )}
         </button>
 
+        {/* Close */}
         <button onClick={() => { stop(); onClose(); }} aria-label="Close audio" style={{
-          background: "none", border: "none", cursor: "pointer",
-          color: theme.muted, display: "flex", alignItems: "center",
-          justifyContent: "center", minHeight: "2.75rem", minWidth: "2.75rem",
+          width: "2.25rem", height: "2.25rem",
+          background: "none", border: "none",
+          borderRadius: "50%", cursor: "pointer",
+          color: theme.muted,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
         }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25}
             style={{ width: "0.85rem", height: "0.85rem" }}>
-            <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+            <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
       </div>
