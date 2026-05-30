@@ -159,22 +159,21 @@ async function reviseSectionBody(
   voiceDNA?: VoiceDNAType | null,
 ): Promise<string> {
   // Compact, human-readable voice block to keep surgical edits in the author's voice
-  const voiceDnaBlock = voiceDNA
-    ? ((): string => {
-        const lines: string[] = ["\nAUTHOR VOICE DNA — maintain throughout:"];
-        if (voiceDNA.toneProfile) lines.push(`- Tone: ${voiceDNA.toneProfile}`);
-        if (voiceDNA.vocabularyLevel) lines.push(`- Register: ${voiceDNA.vocabularyLevel}`);
-        if (voiceDNA.sentencePattern) lines.push(`- Sentence rhythm: ${voiceDNA.sentencePattern}`);
-        if (voiceDNA.pacingFingerprint) lines.push(`- Pacing: ${voiceDNA.pacingFingerprint}`);
-        if ((voiceDNA.avoidWords ?? []).length > 0)
-          lines.push(`- Forbidden words (zero tolerance): ${voiceDNA.avoidWords.slice(0, 15).join(", ")}`);
-        if ((voiceDNA.avoidStructures ?? []).length > 0)
-          lines.push(`- Forbidden structures: ${(voiceDNA.avoidStructures ?? []).join("; ")}`);
-        if ((voiceDNA.signaturePhrases ?? []).length > 0)
-          lines.push(`- Signature phrases (use naturally): ${voiceDNA.signaturePhrases.join(", ")}`);
-        return lines.join("\n");
-      })()
-    : "";
+  let voiceDnaBlock = "";
+  if (voiceDNA) {
+    const lines: string[] = ["\nAUTHOR VOICE DNA — maintain throughout:"];
+    if (voiceDNA.toneProfile) lines.push(`- Tone: ${voiceDNA.toneProfile}`);
+    if (voiceDNA.vocabularyLevel) lines.push(`- Register: ${voiceDNA.vocabularyLevel}`);
+    if (voiceDNA.sentencePattern) lines.push(`- Sentence rhythm: ${voiceDNA.sentencePattern}`);
+    if (voiceDNA.pacingFingerprint) lines.push(`- Pacing: ${voiceDNA.pacingFingerprint}`);
+    if ((voiceDNA.avoidWords ?? []).length > 0)
+      lines.push(`- Forbidden words (zero tolerance): ${voiceDNA.avoidWords.slice(0, 15).join(", ")}`);
+    if ((voiceDNA.avoidStructures ?? []).length > 0)
+      lines.push(`- Forbidden structures: ${(voiceDNA.avoidStructures ?? []).join("; ")}`);
+    if ((voiceDNA.signaturePhrases ?? []).length > 0)
+      lines.push(`- Signature phrases (use naturally): ${voiceDNA.signaturePhrases.join(", ")}`);
+    voiceDnaBlock = lines.join("\n");
+  }
 
   let text = "";
   try {
@@ -215,12 +214,12 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let index = 0;
-  async function worker() {
+  const worker = async () => {
     while (index < items.length) {
       const i = index++;
       results[i] = await fn(items[i]);
     }
-  }
+  };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
 }
