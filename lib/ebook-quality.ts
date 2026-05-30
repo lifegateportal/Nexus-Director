@@ -2,7 +2,7 @@ import type { ChapterDraft, ContentMap, FrontBackMatter } from "@/lib/schemas/eb
 import { NON_BOOK_CUE_RE } from "@/lib/editorial-style-bible";
 
 export type QualityIssue = {
-  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP" | "EM_DASH_FOUND" | "AI_SIGNATURE_WORD" | "PASSIVE_VOICE_HIGH" | "THEMATIC_DRIFT";
+  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP" | "EM_DASH_FOUND" | "AI_SIGNATURE_WORD" | "PASSIVE_VOICE_HIGH" | "THEMATIC_DRIFT" | "ORPHAN_PARAGRAPH" | "SAME_OPENER_RUN";
   severity: "warn" | "error";
   message: string;
 };
@@ -38,6 +38,33 @@ const SERIES_RECAP_RE = /\b(this\s+month'?s\s+theme|our\s+monthly\s+theme|series
 const EM_DASH_RE = /\u2014/g;
 const AI_SIGNATURE_RE = /\b(delv(?:e|ing|ed)|tapestry|transformative|vibrant|foster(?:ing|s|ed|er)|synergy|furthermore|moreover|paradigm\s+shift|profoundly|at\s+its\s+core|in\s+essence|simply\s+put|in\s+conclusion)\b/gi;
 const PASSIVE_RE = /\b(?:is|are|was|were|be|been|being)\s+\w+(?:ed|en)\b/g;
+
+// ── A6: S1 — orphaned long-sentence paragraph detector ───────────────────────
+// Counts paragraphs that are a single sentence of >12 words (not a valid fragment).
+function countOrphanParagraphs(text: string): number {
+  const paragraphs = text.split(/\n\n+/).filter((p) => p.trim().length > 0);
+  let count = 0;
+  for (const para of paragraphs) {
+    const sentences = para.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+    const wordCount = para.trim().split(/\s+/).filter(Boolean).length;
+    if (sentences.length === 1 && wordCount > 12) count++;
+  }
+  return count;
+}
+
+// ── A6: S3 — same sentence-opener run detector ───────────────────────────────
+// Counts runs of 3+ consecutive sentences beginning with the same word.
+function countSameOpenerRuns(text: string): number {
+  const sentences = text.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 0);
+  let violations = 0;
+  for (let i = 0; i <= sentences.length - 3; i++) {
+    const w0 = sentences[i].trim().split(/\s+/)[0]?.toLowerCase();
+    const w1 = sentences[i + 1].trim().split(/\s+/)[0]?.toLowerCase();
+    const w2 = sentences[i + 2].trim().split(/\s+/)[0]?.toLowerCase();
+    if (w0 && w0 === w1 && w1 === w2) violations++;
+  }
+  return violations;
+}
 
 function passiveVoiceDensity(text: string): number {
   const sentences = text.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 10);
@@ -154,6 +181,28 @@ export function evaluateBookQuality(input: {
           message: `Chapter ${chapter.number} section ${section.sectionNumber} has high passive voice density (${(density * 100).toFixed(0)}% of sentences).`,
         });
         score -= 3;
+      }
+
+      // ── A6-S1: Orphaned long-sentence paragraphs ──────────────────────────
+      const orphanCount = countOrphanParagraphs(body);
+      if (orphanCount > 2) {
+        issues.push({
+          code: "ORPHAN_PARAGRAPH",
+          severity: "warn",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} has ${orphanCount} single-sentence paragraphs >12 words (orphaned thoughts).`,
+        });
+        score -= Math.min(6, orphanCount * 2);
+      }
+
+      // ── A6-S3: Same sentence-opener runs ─────────────────────────────────
+      const openerRuns = countSameOpenerRuns(body);
+      if (openerRuns > 0) {
+        issues.push({
+          code: "SAME_OPENER_RUN",
+          severity: "warn",
+          message: `Chapter ${chapter.number} section ${section.sectionNumber} has ${openerRuns} run(s) of 3+ consecutive sentences with the same opening word.`,
+        });
+        score -= Math.min(6, openerRuns * 3);
       }
     }
 

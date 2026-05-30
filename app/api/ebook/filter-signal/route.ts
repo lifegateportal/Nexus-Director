@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
-import { pruneRedundantSeriesRecaps, stripNonBookLanguage } from "@/lib/editorial-style-bible";
+import { cleanTranscriptForBook } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -129,7 +129,7 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
       }
     }
 
-    const cleanedTranscript = pruneRedundantSeriesRecaps(stripNonBookLanguage(cleaned || transcript));
+    const cleanedTranscript = cleanTranscriptForBook(cleaned || transcript);
     const removedSegments = object.removedCategories.map((reason) => ({ reason, excerpt: "" }));
 
     return NextResponse.json({

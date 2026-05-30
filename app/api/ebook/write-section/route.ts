@@ -40,6 +40,45 @@ function normalizeReaderFacingProse(text: string): string {
     .trim();
 }
 
+// ── S5: Post-write paragraph length validation ────────────────────────────
+// Detects orphaned long sentences that are not deliberate fragments (≤12 words).
+// Merges them with the following paragraph when the next para starts with a
+// conjunction-like opener, otherwise logs for visibility.
+function repairOrphanParagraphs(paragraphs: string[]): { paragraphs: string[]; orphansFixed: number } {
+  const CONJUNCTION_OPENERS = /^(and|but|so|because|which|who|whose|although|since|while|however|therefore|thus)\b/i;
+  const result: string[] = [];
+  let orphansFixed = 0;
+  let i = 0;
+  while (i < paragraphs.length) {
+    const para = paragraphs[i].trim();
+    const sentences = para.split(/(?<=[.!?])\s+/).filter(Boolean);
+    const wordCount = para.split(/\s+/).filter(Boolean).length;
+    // A paragraph is an orphaned long sentence if it has exactly 1 sentence and >12 words
+    const isOrphan = sentences.length === 1 && wordCount > 12;
+    if (isOrphan && i + 1 < paragraphs.length) {
+      const next = paragraphs[i + 1].trim();
+      if (CONJUNCTION_OPENERS.test(next)) {
+        // Merge forward: orphan sentence flows directly into the next paragraph
+        result.push(`${para} ${next}`);
+        i += 2;
+        orphansFixed++;
+        continue;
+      }
+    }
+    // A4: Merge upward when forward merge isn't possible (last paragraph or no conjunction opener)
+    // Appending to the preceding paragraph keeps the thought in context rather than leaving it dangling.
+    if (isOrphan && result.length > 0) {
+      result[result.length - 1] = `${result[result.length - 1]} ${para}`;
+      i++;
+      orphansFixed++;
+      continue;
+    }
+    result.push(para);
+    i++;
+  }
+  return { paragraphs: result, orphansFixed };
+}
+
 // ── Upgrade 2: Server-side n-gram excerpt dedup ────────────────────────────
 // Strips excerpts whose content is substantially covered by already-covered points
 // before the LLM ever receives them, removing the root-cause material.
@@ -113,11 +152,24 @@ You will receive transcribed audio text. Expect the following flaws:
    - Never close a paragraph with "This is what it means to..." or "This is why..." followed by a restatement.
    - Banned AI-signature words in this output: "indeed," "certainly," "ultimately," "at its core," "in essence," "simply put," "profoundly," "transformative," "vibrant," "fostering," "crucial," "vital" (overused), "journey" (metaphorical use).
 7. FORMATTING: Output strictly in Markdown. Use hierarchical headings (## for main sections, ### for subsections) to visually break up the text. Never use HTML or \`<br>\` tags.
-6. SECTION BOUNDARY — ABSOLUTE RULE: Each section is a sealed unit. You MUST NOT preview, introduce, foreshadow, or summarize content that belongs to a future section. This includes any sentence that:
+8. SECTION BOUNDARY — ABSOLUTE RULE: Each section is a sealed unit. You MUST NOT preview, introduce, foreshadow, or summarize content that belongs to a future section. This includes any sentence that:
    - Names or paraphrases a point the next section will make
    - Begins developing an argument that has no transcript support in THIS section's excerpts
    - Uses phrases like "We will see…", "As we explore next…", "This leads us to examine…", "In the coming pages…", or any forward reference.
    Closing sentences may create forward momentum ONLY through an unresolved question, a tension, or a logical implication drawn entirely from the current section's own content. They must not disclose what the following section contains.
+
+# SENTENCE STRUCTURE — INDUSTRY EDITORIAL STANDARDS
+Apply all of these on every paragraph before finalizing output:
+
+S1 — FRAGMENT DISCIPLINE: A one-sentence paragraph is a deliberate rhetorical fragment ONLY if the sentence is 12 words or fewer. Any paragraph with a single sentence of 13+ words must be followed by at least one additional sentence that develops, illustrates, or applies the idea. Isolated long sentences read as orphaned thoughts, not emphasis.
+
+S2 — SYNTACTIC DEPTH (complex sentence requirement): Every paragraph of three or more sentences must contain at least one sentence joined by a subordinating conjunction: "although," "because," "while," "since," "which," "who," "whose," "even though," "as long as," "whenever." All-simple-sentence paragraphs score at a 5th-grade reading level regardless of vocabulary.
+
+S3 — SAME-OPENER BAN: No three consecutive sentences in the same paragraph may begin with the same word. This is an absolute structural error. Anaphora is intentional repetition; accidental opener repetition is monotony.
+
+S4 — SENTENCE-LENGTH RATIO: In any paragraph of three or more sentences, the longest sentence must contain at least 2× the words of the shortest sentence. Uniformly medium-length sentences produce a flat, metronomic rhythm that signals machine generation. Deliberate contrast — a short punch after a long explanation — is what makes prose feel alive.
+
+S6 — PARAGRAPH OPENER VARIATION: The opening word of a paragraph must differ from the opening word of the immediately preceding paragraph. Back-to-back paragraphs that both start with "The," "This," "God," or any proper noun are a structural tell — they reveal that the writer generated a list, not flowing prose. Vary grammatical form at the opening: start one paragraph with a participial phrase, the next with a subordinate clause, the next with a concrete noun.
 
 # EXECUTION SEQUENCE
 Before generating the final output, follow this internal sequence:
@@ -316,6 +368,13 @@ HARD RULES for this section's close:
     ? `\nCHAPTER OPENER REQUIREMENT: This is the FIRST section of the chapter. The very first sentence must be a compelling hook — a bold provocative claim, a pointed question, or an immersive specific detail drawn directly from the transcript. Do not open with a general context-setting statement. Drop the reader immediately into the argument.`
     : "";
 
+  // ── S7: Chapter premise anchor ──────────────────────────────────────────
+  // First paragraph's opening sentence should echo (not quote) the chapter premise
+  // so the reader feels immediate orientation within the chapter's thesis.
+  const chapterPremiseBlock = assignment.chapterPremise
+    ? `\n\nCHAPTER PREMISE (north star for this chapter):\n"${assignment.chapterPremise}"\nThe opening sentence of the FIRST paragraph of this section should echo the spirit of this premise — not quote it verbatim, but orient the reader toward the same central tension or claim. Subsequent paragraphs should build from it.`
+    : "";
+
   const prompt = `Write the prose for this section of the ebook. Transform the transcript excerpts into polished written prose.
 
 CHAPTER ${assignment.chapterNumber}: ${assignment.chapterTitle}
@@ -332,6 +391,7 @@ ${nextSectionBlock}
 ${chapterClosingBlock}
 ${hookBlock}
 ${conceptOwnershipBlock}
+${chapterPremiseBlock}
 
 TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
@@ -474,7 +534,12 @@ ${READER_NORMALIZATION_RULES}`,
       system: deduplicatedSystem,
       prompt: `${prompt}\n\nPARAGRAPH PLAN (must follow if provided):\n${JSON.stringify(paragraphPlan)}`,
     });
-    const rawBody = (object.paragraphs ?? []).map((p) => p.trim()).filter(Boolean).join("\n\n") || fallbackSectionBody(assignment);
+    const rawParagraphs = (object.paragraphs ?? []).map((p) => p.trim()).filter(Boolean);
+    const { paragraphs: repairedParagraphs, orphansFixed } = repairOrphanParagraphs(rawParagraphs);
+    if (orphansFixed > 0) {
+      console.log(`[write-section] S5: merged ${orphansFixed} orphan paragraph(s) in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
+    }
+    const rawBody = repairedParagraphs.join("\n\n") || fallbackSectionBody(assignment);
     const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
     return NextResponse.json({ body, claimLedger: object.claimLedger ?? [] }, { status: 200 });
   } catch (err) {

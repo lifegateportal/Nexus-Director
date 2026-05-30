@@ -102,6 +102,12 @@ const NON_BOOK_PATTERNS = [
 	/\blet\s+me\s+start\s+with\s+the\s+big\s+one\s+first\b/gi,
 	/\bwell,?\s+we\s+never\s+have\s+enough\s+time\s+to\s+share\b/gi,
 	/\bi\s+advance\s+in\s+love\b/gi,
+	// F3 — oral padding prefixes (strip the filler prefix, keep the content clause)
+	/\bi\s+want\s+you\s+to\s+understand\s+that\s*/gi,
+	/\bi\s+need\s+you\s+to\s+hear\s+this[,.]?\s*/gi,
+	/\blet\s+me\s+say\s+this\s+again[,.]?\s*/gi,
+	/\byou\s+know\s+what\s+i('m|\s+am)\s+saying[,?]?\s*/gi,
+	/\bdo\s+you\s+understand\s+what\s+i('m|\s+am)\s+saying[?.]?\s*/gi,
 ];
 
 const NON_BOOK_SENTENCE_PATTERNS = [
@@ -109,11 +115,121 @@ const NON_BOOK_SENTENCE_PATTERNS = [
 	/\b(father,?\s+we\s+thank\s+you|thank\s+you,?\s+holy\s+spirit|blessed\s+be\s+the\s+name\s+of\s+the\s+lord|you\s+deserve\s+all\s+glory|you\s+deserve\s+all\s+adoration|we\s+bless\s+your\s+holy\s+name|great\s+is\s+your\s+faithfulness)\b/i,
 	/\b(the\s+spirit\s+of\s+god\s+was\s+ministering\s+to\s+me|god\s+is\s+healing\s+you\s+today|that\s+issue\s+will\s+not\s+repeat\s+itself|he'?s\s+touching\s+you)\b/i,
 	/\b(some\s+of\s+you\b|someone\s+here\b|the\s+lord\s+is\s+touching\s+someone\b)\b/i,
+	// F3 — standalone oral padding sentences
+	/^\s*are\s+you\s+following\s+me\??\s*$/i,
+	/^\s*can\s+i\s+tell\s+you\s+something\??\s*$/i,
+	/^\s*if\s+you\s+can\s+hear\s+me\s+(say|type)\s+amen\b.*$/i,
+	/^\s*say\s+amen\s+if\s+you\s+(hear|receive|believe)\b.*$/i,
+	/^\s*somebody\s+shout\b.*$/i,
+	/^\s*give\s+god\s+a\s+(praise|shout|hand)\b.*$/i,
+];
+
+// F6 — altar call and salvation appeal sentences (mid-sermon or tail)
+const ALTAR_CALL_PATTERNS: RegExp[] = [
+	/\bif\s+you\s+want\s+to\s+accept\s+(jesus|christ|the\s+lord)\b/i,
+	/\braise\s+your\s+hand\s+(right\s+now|if\s+you\b)/i,
+	/\brepeat\s+after\s+me\b/i,
+	/\bcome\s+to\s+the\s+(front|altar)\b/i,
+	/\bsinner'?s\s+prayer\b/i,
+	/\bgive\s+your\s+(life|heart)\s+to\s+(jesus|god|christ|the\s+lord)\b/i,
+	/\baccept\s+(jesus|christ|the\s+lord)\s+(as\s+your|today)\b/i,
+	/\byou\s+can\s+be\s+saved\s+today\b/i,
+	/\bprayer\s+of\s+salvation\b/i,
+	/\bif\s+you\s+(prayed|said)\s+that\s+prayer\b/i,
+	/\bwelcome\s+(you\s+)?to\s+the\s+(family\s+of\s+god|kingdom)\b/i,
 ];
 
 const RECAP_CUE_RE = /\b(this\s+month'?s\s+theme|our\s+monthly\s+theme|series\s+theme|theme\s+for\s+the\s+month|as\s+i\s+said\s+last\s+(week|message|time)|from\s+our\s+last\s+message|in\s+the\s+previous\s+message|continuing\s+this\s+series|part\s+\d+\s+of\s+this\s+series|welcome\s+back\s+to\s+this\s+series)\b/i;
 
 export const NON_BOOK_CUE_RE = /\b(say amen|look at your neighbor|clap your hands|lift your hands|as you sit here today|in this room today|right here in this place|the person next to you|your neighbor|this audience|good\s+(morning|afternoon|evening),?\s+(church|everyone|family|saints)|welcome\s+(to\s+church|everyone|family)|i\s+(just\s+)?want\s+to\s+thank\s+(you|everyone|all\s+of\s+you)|thank\s+you\s+(everyone|all|so\s+much|for\s+coming|for\s+joining|for\s+being\s+here)|let\s+us\s+appreciate|put\s+your\s+hands\s+together|give\s+the\s+lord\s+a\s+hand|you\s+may\s+be\s+seated|that\s+hand\s+clap\s+was\s+for\s+me|let'?s\s+do\s+it\s+for\s+jesus\s+christ|what\s+a\s+mighty\s+god\s+we\s+serve|father,?\s+we\s+thank\s+you|thank\s+you,?\s+holy\s+spirit|blessed\s+be\s+the\s+name\s+of\s+the\s+lord|you\s+deserve\s+all\s+glory|you\s+deserve\s+all\s+adoration|we\s+bless\s+your\s+holy\s+name|great\s+is\s+your\s+faithfulness|the\s+spirit\s+of\s+god\s+was\s+ministering\s+to\s+me|god\s+is\s+healing\s+you\s+today|that\s+issue\s+will\s+not\s+repeat\s+itself|he'?s\s+touching\s+you|some\s+of\s+you|someone\s+here|today,?\s+we\s+are\s+looking\s+at|well,?\s+we\s+never\s+have\s+enough\s+time\s+to\s+share|i\s+advance\s+in\s+love)\b/gi;
+
+// ── F7: Strip ASR/transcript artifacts before any other pass ─────────────────
+function stripTranscriptArtifacts(input: string): string {
+	return input
+		// Timestamps: [00:12:34], (0:12), bare 0:12:34 at line start or standalone
+		.replace(/\[?\(?\d{1,2}:\d{2}(?::\d{2})?\)?\]?\s*/g, "")
+		// Speaker diarization labels: SPEAKER_01:  Speaker 1:  Host:  Pastor John:
+		.replace(/^[A-Z][A-Za-z0-9 _-]{0,28}:\s*/gm, "")
+		// ASR confidence/event tags: [inaudible] [crosstalk] [music] [applause] etc.
+		.replace(/\[(inaudible|crosstalk|noise|laughter|music|applause|unclear|indistinct)\]/gi, "")
+		// Numeric confidence scores: (0.92)
+		.replace(/\(\d+\.\d+\)/g, "")
+		.replace(/[ \t]{2,}/g, " ")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+}
+
+// ── F2: Strip ASR filler words, stutters, and false-start repetitions ─────────
+function stripASRNoise(input: string): string {
+	return input
+		// Standalone filler tokens: um, uh, er, hmm, erm (with optional comma)
+		.replace(/\b(um|uh|er|hmm|hm|erm),?\s*/gi, "")
+		// Word stutters: "the the the" → "the", "so so" → "so" (2–4 consecutive repeats)
+		.replace(/\b(\w{2,})\s+(\1\s*){1,3}/gi, "$1 ")
+		// False-start phrase repetitions: "what I mean is, what I mean is" → keep once
+		.replace(/([^,.!?]{15,55}),\s*\1[,.]?/gi, "$1")
+		.replace(/[ \t]{2,}/g, " ")
+		.trim();
+}
+
+// ── F5: Collapse consecutive near-duplicate sentences (>80% token overlap) ───
+function collapseNearDuplicateSentences(input: string): string {
+	const paragraphs = input.split(/\n{2,}/);
+	const result = paragraphs.map((para) => {
+		const sentences = para.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+		if (sentences.length <= 1) return para;
+		const kept: string[] = [sentences[0]];
+		for (let i = 1; i < sentences.length; i++) {
+			const prev = kept[kept.length - 1];
+			const curr = sentences[i];
+			const prevTokens = new Set(
+				prev.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter((w) => w.length > 2)
+			);
+			const currTokens = curr.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter((w) => w.length > 2);
+			if (prevTokens.size === 0 || currTokens.length === 0) { kept.push(curr); continue; }
+			let shared = 0;
+			for (const w of currTokens) { if (prevTokens.has(w)) shared++; }
+			const overlap = shared / Math.min(prevTokens.size, currTokens.length);
+			if (overlap < 0.8) kept.push(curr);
+			// else: ≥80% duplicate of the previous sentence — drop it
+		}
+		return kept.join(" ");
+	});
+	return result.filter(Boolean).join("\n\n");
+}
+
+// ── F6: Excise mid-sermon altar calls and salvation appeals ──────────────────
+function exciseMidSermonAltarCalls(input: string): string {
+	const paragraphs = input.split(/\n{2,}/);
+	const result = paragraphs.map((para) => {
+		const sentences = para.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+		const kept = sentences.filter((s) => !ALTAR_CALL_PATTERNS.some((p) => p.test(s)));
+		return kept.join(" ");
+	});
+	return result.filter(Boolean).join("\n\n");
+}
+
+// ── F4: Tag slots where >70% of sentences are non-book language ───────────────
+function tagNonTeachingSlots(input: string): string {
+	// Split on [Slot-N] boundaries, keeping the header at the front of each block
+	const blocks = input.split(/(?=\[Slot-\d+\])/);
+	return blocks.map((block) => {
+		if (!/^\[Slot-\d+\]/.test(block)) return block;
+		const body = block.replace(/^\[Slot-\d+\]\s*/, "");
+		const sentences = body.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+		if (sentences.length < 3) return block; // too short to classify reliably
+		const nonBookCount = sentences.filter((s) =>
+			NON_BOOK_SENTENCE_PATTERNS.some((p) => p.test(s)) ||
+			AUDIENCE_PATTERNS.some((p) => p.test(s)) ||
+			NON_BOOK_PATTERNS.some((p) => p.test(s)) ||
+			ALTAR_CALL_PATTERNS.some((p) => p.test(s))
+		).length;
+		if (nonBookCount / sentences.length > 0.7) {
+			return block.replace(/\[Slot-(\d+)\]/, "[NON-TEACHING-SLOT-$1]");
+		}
+		return block;
+	}).join("");
+}
 
 function cleanBookText(input: string): string {
 	return input
@@ -209,6 +325,32 @@ export function stripNonBookLanguage(input: string): string {
 
 export function stripAudienceLanguage(input: string): string {
 	return stripNonBookLanguage(input);
+}
+
+/**
+ * cleanTranscriptForBook — full 7-pass deterministic filter pipeline.
+ * Run on each raw slot transcript before LLM stages touch the text.
+ *
+ * Pass order:
+ *   F7 → strip ASR/timestamp artifacts
+ *   F2 → strip filler words, stutters, false-start repetitions
+ *   F6 → excise mid-sermon altar calls and salvation appeals
+ *   F1/F3 → sentence-level and phrase-level non-book language removal
+ *   F5 → collapse consecutive near-duplicate sentences
+ *   F4 → tag slots where >70% of sentences are non-book
+ *       (content-map skips [NON-TEACHING-SLOT-N] blocks automatically)
+ *   existing → prune redundant series recaps + clean typography
+ */
+export function cleanTranscriptForBook(input: string): string {
+	let text = input;
+	text = stripTranscriptArtifacts(text);
+	text = stripASRNoise(text);
+	text = exciseMidSermonAltarCalls(text);
+	text = stripNonBookLanguage(text);
+	text = collapseNearDuplicateSentences(text);
+	text = tagNonTeachingSlots(text);
+	text = pruneRedundantSeriesRecaps(text);
+	return cleanBookText(text);
 }
 
 type HarmonizeManifestInput = {

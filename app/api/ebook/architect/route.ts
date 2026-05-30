@@ -7,6 +7,100 @@ import { ArchitectRequestSchema } from "@/lib/schemas/ebook";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+// ── Upgrade helpers ───────────────────────────────────────────────────────────
+
+type ArcRole = "hook" | "context" | "mechanism" | "application" | "untagged";
+
+// U1 — Arc scoring: classify a section heading + keyPoints into an arc role
+const ARC_KEYWORDS: Record<ArcRole, string[]> = {
+  hook:        ["problem", "question", "why", "challenge", "crisis", "struggle", "pain", "trap", "lie", "broken", "need", "call", "open", "begin", "what if"],
+  context:     ["because", "reason", "background", "history", "context", "understand", "foundation", "basis", "root", "origin", "means", "definition", "explains"],
+  mechanism:   ["how", "principle", "law", "process", "method", "key", "secret", "truth", "power", "strategy", "framework", "step", "way", "work", "operate"],
+  application: ["apply", "response", "action", "do", "practice", "live", "walk", "obey", "commit", "decide", "choose", "result", "fruit", "outcome", "change", "now"],
+  untagged:    [],
+};
+
+function scoreArcRole(heading: string, keyPoints: string[]): ArcRole {
+  const text = [heading, ...keyPoints].join(" ").toLowerCase();
+  const scores: Record<ArcRole, number> = { hook: 0, context: 0, mechanism: 0, application: 0, untagged: 0 };
+  for (const [role, keywords] of Object.entries(ARC_KEYWORDS) as [ArcRole, string[]][]) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) scores[role]++;
+    }
+  }
+  const best = (Object.entries(scores) as [ArcRole, number][])
+    .filter(([role]) => role !== "untagged")
+    .sort((a, b) => b[1] - a[1])[0];
+  return best && best[1] > 0 ? best[0] : "untagged";
+}
+
+function buildArcFlags(sections: { arcRole: ArcRole }[], chapterTitle: string): string[] {
+  const flags: string[] = [];
+  const roles = sections.map((s) => s.arcRole);
+  if (!roles.includes("hook")) flags.push(`Ch "${chapterTitle}": no hook section — consider making the opening section more provocative`);
+  if (!roles.includes("application")) flags.push(`Ch "${chapterTitle}": no application section — readers need a landing point`);
+  const mechanismCount = roles.filter((r) => r === "mechanism").length;
+  if (mechanismCount >= 3) flags.push(`Ch "${chapterTitle}": ${mechanismCount} consecutive mechanism sections — consider consolidating or adding application`);
+  return flags;
+}
+
+// U2 — Cross-chapter section overlap: keyword token overlap between section headings
+function keywordTokens(text: string): Set<string> {
+  const stopWords = new Set(["a","an","the","and","or","of","in","to","for","with","by","is","are","was","were","be","it","its","this","that","these","those","on","at","as","from","up","about","how","what","which","who"]);
+  return new Set(
+    text.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter((w) => w.length > 3 && !stopWords.has(w))
+  );
+}
+
+function sectionKeywordOverlap(a: string, b: string): number {
+  const setA = keywordTokens(a);
+  const setB = keywordTokens(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let shared = 0;
+  for (const w of setA) { if (setB.has(w)) shared++; }
+  return shared / Math.min(setA.size, setB.size);
+}
+
+// U3 — Word budget calibration: quality multiplier from segment density
+function segmentQualityMultiplier(keyPointsCount: number, quotesCount: number): number {
+  const density = keyPointsCount + quotesCount * 0.5;
+  if (density >= 5) return 1.2;
+  if (density <= 1) return 0.7;
+  return 1.0;
+}
+
+// U5 — Chapter premise line: derive from keyTheme + first section heading
+function deriveChapterPremise(
+  chapterTitle: string,
+  keyTheme: string,
+  coreThesis: string,
+  firstSectionHeading: string
+): string {
+  // Use the most specific available signal in priority order
+  const theme = keyTheme.trim() || coreThesis.trim() || chapterTitle.trim();
+  const hook = firstSectionHeading.trim();
+  if (theme && hook && theme.toLowerCase() !== hook.toLowerCase()) {
+    return `${theme}: ${hook.replace(/[.!?]+$/, "").trim()}.`;
+  }
+  return theme ? `${theme}.` : `${chapterTitle}.`;
+}
+
+// U7 — Series arc: find shared keyword thread between adjacent chapter conclusions and openings
+function deriveBridgeConcept(
+  fromLastSection: { heading: string; keyPoints: string[] },
+  toFirstSection: { heading: string; keyPoints: string[] }
+): string {
+  const fromText = [fromLastSection.heading, ...fromLastSection.keyPoints].join(" ");
+  const toText = [toFirstSection.heading, ...toFirstSection.keyPoints].join(" ");
+  const fromTokens = keywordTokens(fromText);
+  const toTokens = keywordTokens(toText);
+  const shared: string[] = [];
+  for (const w of fromTokens) { if (toTokens.has(w)) shared.push(w); }
+  if (shared.length > 0) return shared.slice(0, 3).join(", ");
+  // Fall back to stating the thematic direction
+  return `${fromLastSection.heading.split(/\s+/).slice(0, 4).join(" ")} → ${toFirstSection.heading.split(/\s+/).slice(0, 4).join(" ")}`;
+}
+
 // ── Absolute minimum schema — no keyPoints, no quotes, no nested arrays ──────
 // Everything gets rehydrated server-side from the contentMap after generation.
 const MinimalSectionSchema = z.object({
@@ -207,7 +301,180 @@ This content is a sermon series. The author's preaching sequence IS the book's s
 
     const normalized = normalizeArchitecture(minimal, input);
 
+    // ── Upgrade 6: Orphan segment recovery ──────────────────────────────────
+    // Find segments not assigned to any section. Segments >150 words get assigned
+    // to the most keyword-similar section. Thinner ones are logged as dropped.
+    const assignedSegIds = new Set(
+      normalized.chapters.flatMap((ch) => ch.sections.flatMap((s) => s.sourceSegmentIds))
+    );
+    const orphans = input.contentMap.segments.filter(
+      (s) => !assignedSegIds.has(s.id) && !s.topic.includes("[NON-TEACHING")
+    );
+    const droppedSegments: string[] = [];
+
+    if (orphans.length > 0) {
+      // Build a flat list of all sections with their text for similarity scoring
+      const allSectionEntries = normalized.chapters.flatMap((ch) =>
+        ch.sections.map((sec) => ({
+          chapterIdx: ch.number - 1,
+          sectionIdx: sec.sectionNumber - 1,
+          text: [sec.heading, ...sec.sourceSegmentIds.map((id) => segmentMap[id]?.topic ?? "")].join(" "),
+        }))
+      );
+
+      for (const orphan of orphans) {
+        if (orphan.estimatedWordCount < 150) {
+          droppedSegments.push(orphan.id);
+          continue;
+        }
+        // Find most similar section by keyword overlap with orphan topic + keyPoints
+        const orphanText = [orphan.topic, ...(orphan.keyPoints ?? [])].join(" ");
+        let bestScore = 0;
+        let bestEntry: (typeof allSectionEntries)[0] | null = null;
+        for (const entry of allSectionEntries) {
+          const score = sectionKeywordOverlap(orphanText, entry.text);
+          if (score > bestScore) { bestScore = score; bestEntry = entry; }
+        }
+        if (bestEntry && bestScore > 0.1) {
+          normalized.chapters[bestEntry.chapterIdx].sections[bestEntry.sectionIdx].sourceSegmentIds.push(orphan.id);
+          assignedSegIds.add(orphan.id);
+        } else {
+          droppedSegments.push(orphan.id);
+        }
+      }
+    }
+
     // ── Rehydrate full BookArchitecture from minimal output ───────────────
+    const hydratedChapters = normalized.chapters.map((ch) => {
+      const chapterSegIds = [...new Set(ch.sections.flatMap((s) => s.sourceSegmentIds))];
+      const chapterQuotes = chapterSegIds
+        .flatMap((sid) => segmentMap[sid]?.quotes ?? [])
+        .map((q) => quoteMap[q.id] ?? q)
+        .filter((q, i, arr) => arr.findIndex((x) => x.id === q.id) === i);
+
+      const rawSections = ch.sections.map((sec, secIdx) => {
+        const safeSourceSegmentIds = sec.sourceSegmentIds.filter((id) => validSegmentIds.has(id));
+        const secSegments = safeSourceSegmentIds.map((id) => segmentMap[id]).filter(Boolean);
+        const secKeyPoints = secSegments.flatMap((s) => s?.keyPoints ?? []);
+        const secQuotes = secSegments
+          .flatMap((s) => s?.quotes ?? [])
+          .map((q) => quoteMap[q.id] ?? q)
+          .filter((q, i, arr) => arr.findIndex((x) => x.id === q.id) === i);
+
+        // ── Upgrade 3: Word budget calibration ──────────────────────────
+        const baseWordCount = sec.targetWordCount ||
+          secSegments.reduce((sum, seg) => sum + (seg?.estimatedWordCount ?? 0), 0);
+        const quotesCount = secQuotes.length;
+        const multiplier = segmentQualityMultiplier(secKeyPoints.length, quotesCount);
+        const calibratedWordCount = Math.max(250, Math.round(baseWordCount * multiplier));
+
+        // ── Upgrade 1: Arc role scoring ──────────────────────────────────
+        const arcRole = scoreArcRole(sec.heading, secKeyPoints);
+
+        return {
+          sectionNumber: sec.sectionNumber,
+          heading: sec.heading,
+          sourceSegmentIds: safeSourceSegmentIds,
+          targetWordCount: calibratedWordCount,
+          keyPoints: secKeyPoints,
+          quotesInSection: secQuotes,
+          arcRole,
+          _contentDensity: secKeyPoints.length + quotesCount, // internal — used for U4
+          _originalIdx: secIdx,                               // internal — used for U4
+        };
+      });
+
+      // ── Upgrade 4: Climax section placement ─────────────────────────────
+      // Move the most content-dense section to position 3 or 4 (0-indexed: 2 or 3)
+      // if it's currently at position 0 (hook slot) or last slot.
+      const sections = [...rawSections];
+      if (sections.length >= 4) {
+        const densities = sections.map((s) => s._contentDensity);
+        const maxDensity = Math.max(...densities);
+        const climaxIdx = densities.indexOf(maxDensity);
+        const targetPos = sections.length >= 5 ? 3 : 2; // 4th of 5, or 3rd of 4
+        if (climaxIdx === 0 || climaxIdx === sections.length - 1) {
+          const [climax] = sections.splice(climaxIdx, 1);
+          sections.splice(targetPos, 0, climax);
+          // Renumber after reorder
+          sections.forEach((s, i) => { s.sectionNumber = i + 1; });
+        }
+      }
+
+      // ── Upgrade 1: Arc flags ─────────────────────────────────────────────
+      const arcFlags = buildArcFlags(sections, ch.title);
+
+      // ── Upgrade 5: Chapter premise line ─────────────────────────────────
+      const chapterPremise = deriveChapterPremise(
+        ch.title,
+        ch.keyTheme,
+        input.contentMap.coreThesis,
+        sections[0]?.heading ?? ""
+      );
+
+      // Strip internal fields before returning
+      const cleanSections = sections.map(({ _contentDensity: _d, _originalIdx: _o, ...rest }) => rest);
+
+      return {
+        number: ch.number,
+        title: ch.title,
+        keyTheme: ch.keyTheme,
+        sourceSegmentIds: chapterSegIds,
+        quotesInChapter: chapterQuotes,
+        chapterPremise,
+        arcFlags,
+        sections: cleanSections,
+      };
+    });
+
+    // ── Upgrade 2: Cross-chapter section overlap check ───────────────────
+    // Flag pairs of sections from different chapters with >60% keyword overlap
+    const overlapWarnings: string[] = [];
+    const allSectionFlat = hydratedChapters.flatMap((ch) =>
+      ch.sections.map((s) => ({ chapterNum: ch.number, heading: s.heading, keyPoints: s.keyPoints }))
+    );
+    for (let i = 0; i < allSectionFlat.length; i++) {
+      for (let j = i + 1; j < allSectionFlat.length; j++) {
+        const a = allSectionFlat[i];
+        const b = allSectionFlat[j];
+        if (a.chapterNum === b.chapterNum) continue;
+        const aText = [a.heading, ...a.keyPoints].join(" ");
+        const bText = [b.heading, ...b.keyPoints].join(" ");
+        const overlap = sectionKeywordOverlap(aText, bText);
+        if (overlap >= 0.60) {
+          overlapWarnings.push(
+            `Ch ${a.chapterNum} §"${a.heading}" ↔ Ch ${b.chapterNum} §"${b.heading}" (${Math.round(overlap * 100)}% overlap)`
+          );
+        }
+      }
+    }
+    // Attach overlap warnings as arcFlags on the affected chapters
+    if (overlapWarnings.length > 0) {
+      for (const warning of overlapWarnings) {
+        const chNumMatch = warning.match(/^Ch (\d+)/);
+        if (chNumMatch) {
+          const chNum = parseInt(chNumMatch[1], 10);
+          const ch = hydratedChapters.find((c) => c.number === chNum);
+          if (ch) ch.arcFlags.push(`[OVERLAP] ${warning}`);
+        }
+      }
+    }
+
+    // ── Upgrade 7: Series arc connective tissue map ──────────────────────
+    const seriesArc = hydratedChapters.slice(0, -1).map((ch, idx) => {
+      const nextCh = hydratedChapters[idx + 1];
+      const fromLastSection = ch.sections[ch.sections.length - 1];
+      const toFirstSection = nextCh.sections[0];
+      return {
+        fromChapter: ch.number,
+        toChapter: nextCh.number,
+        bridgeConcept: deriveBridgeConcept(
+          { heading: fromLastSection?.heading ?? "", keyPoints: fromLastSection?.keyPoints ?? [] },
+          { heading: toFirstSection?.heading ?? "", keyPoints: toFirstSection?.keyPoints ?? [] }
+        ),
+      };
+    });
+
     const hydrated = {
       bookTitle: normalized.bookTitle,
       subtitle: normalized.subtitle,
@@ -215,39 +482,9 @@ This content is a sermon series. The author's preaching sequence IS the book's s
       estimatedTotalWords: normalized.estimatedTotalWords,
       frontMatterNotes: normalized.frontMatterNotes,
       backMatterNotes: normalized.backMatterNotes,
-      chapters: normalized.chapters.map((ch) => {
-        const chapterSegIds = [...new Set(ch.sections.flatMap((s) => s.sourceSegmentIds))];
-        const chapterQuotes = chapterSegIds
-          .flatMap((sid) => segmentMap[sid]?.quotes ?? [])
-          .map((q) => quoteMap[q.id] ?? q)
-          .filter((q, i, arr) => arr.findIndex((x) => x.id === q.id) === i); // dedupe
-
-        return {
-          number: ch.number,
-          title: ch.title,
-          keyTheme: ch.keyTheme,
-          sourceSegmentIds: chapterSegIds,
-          quotesInChapter: chapterQuotes,
-          sections: ch.sections.map((sec) => {
-            const safeSourceSegmentIds = sec.sourceSegmentIds.filter((id) => validSegmentIds.has(id));
-            const secSegments = safeSourceSegmentIds.map((id) => segmentMap[id]).filter(Boolean);
-            const secKeyPoints = secSegments.flatMap((s) => s?.keyPoints ?? []);
-            const secQuotes = secSegments
-              .flatMap((s) => s?.quotes ?? [])
-              .map((q) => quoteMap[q.id] ?? q)
-              .filter((q, i, arr) => arr.findIndex((x) => x.id === q.id) === i);
-
-            return {
-              sectionNumber: sec.sectionNumber,
-              heading: sec.heading,
-              sourceSegmentIds: safeSourceSegmentIds,
-              targetWordCount: sec.targetWordCount || secSegments.reduce((sum, seg) => sum + (seg?.estimatedWordCount ?? 0), 0),
-              keyPoints: secKeyPoints,
-              quotesInSection: secQuotes,
-            };
-          }),
-        };
-      }),
+      chapters: hydratedChapters,
+      seriesArc,
+      droppedSegments,
     };
 
     return NextResponse.json(hydrated, { status: 200 });

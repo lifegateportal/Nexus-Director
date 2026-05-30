@@ -76,6 +76,8 @@ export const SectionBlueprintSchema = z.object({
   keyPoints: z.array(z.string()).default([]),               // from the actual content
   quotesInSection: z.array(QuoteSchema).default([]),
   targetWordCount: z.number(),                  // determined by available content
+  // ── Upgrade 1: Arc role tag ────────────────────────────────────────────
+  arcRole: z.enum(["hook", "context", "mechanism", "application", "untagged"]).default("untagged"),
 });
 
 // ─── Chapter Blueprint ────────────────────────────────────────────────────────
@@ -87,6 +89,18 @@ export const ChapterBlueprintSchema = z.object({
   sections: z.array(SectionBlueprintSchema),
   keyTheme: z.string(),
   quotesInChapter: z.array(QuoteSchema).default([]),
+  // ── Upgrade 5: Chapter premise line ───────────────────────────────────
+  chapterPremise: z.string().default(""),       // one-sentence north star written at blueprint time
+  // ── Upgrade 1: Arc balance flags ──────────────────────────────────────
+  arcFlags: z.array(z.string()).default([]),    // warnings when arc roles are missing or imbalanced
+});
+
+// ─── Series Arc Entry ─────────────────────────────────────────────────────────
+
+export const SeriesArcEntrySchema = z.object({
+  fromChapter: z.number(),
+  toChapter: z.number(),
+  bridgeConcept: z.string(),                   // the thematic thread that connects the two chapters
 });
 
 // ─── Book Architecture ────────────────────────────────────────────────────────
@@ -99,6 +113,10 @@ export const BookArchitectureSchema = z.object({
   chapters: z.array(ChapterBlueprintSchema),
   frontMatterNotes: z.string(),                 // what the author said in opening
   backMatterNotes: z.string(),                  // what the author said in closing
+  // ── Upgrade 7: Series arc connective tissue map ────────────────────────
+  seriesArc: z.array(SeriesArcEntrySchema).default([]),
+  // ── Upgrade 6: Orphan segment log ─────────────────────────────────────
+  droppedSegments: z.array(z.string()).default([]), // segment IDs too thin to assign (<150 words)
 });
 
 // ─── Section Assignment (input to write-section) ─────────────────────────────
@@ -127,6 +145,8 @@ export const SectionAssignmentSchema = z.object({
   // ── Upgrade 7: Tiered quote dedup ────────────────────────────────────────
   forbiddenVerseTexts: z.array(z.string()).default([]), // exact verse texts already quoted in full — hard ban on re-printing
   allowedInlineOnly: z.array(z.string()).default([]),   // refs where only a brief inline mention is allowed (no full re-quote)
+  // ── S7: Chapter premise anchor ───────────────────────────────────────────
+  chapterPremise: z.string().optional(),                // one-sentence north star; first paragraph should echo it
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────
@@ -150,6 +170,10 @@ export const ChapterPolishInputSchema = z.object({
   voiceDNA: VoiceDNASchema,
   quotesInChapter: z.array(QuoteSchema).default([]),
   previousChapterConclusion: z.string().optional(), // closing prose of preceding chapter for connective tissue
+  // ── Upgrade 5: Chapter premise line from architect ────────────────────────
+  chapterPremise: z.string().optional(),         // one-sentence north star for this chapter's intro/conclusion
+  // ── Upgrade 7: Series arc bridge concept ─────────────────────────────────
+  seriesArcBridge: z.string().optional(),        // keyword thread this chapter picks up from the previous
 });
 
 // ─── Chapter Draft (output of polish) ────────────────────────────────────────

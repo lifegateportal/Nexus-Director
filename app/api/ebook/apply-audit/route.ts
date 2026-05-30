@@ -9,7 +9,7 @@ type VoiceDNAType = z.infer<typeof VoiceDNASchema>;
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-// --- Strategy -----------------------------------------------------------------
+// ─── Strategy ─────────────────────────────────────────────────────────────────
 // Tier 1 (no LLM) — pure string manipulation, zero risk of unintended rewrites:
 //   r-N  repeated phrases  → replace 2nd+ occurrences with alternatives
 //   w-N  overused words    → replace every other occurrence with alternatives
@@ -21,7 +21,7 @@ export const maxDuration = 120;
 //
 // Sections that have NO applied findings are NEVER touched.
 
-// --- Input Schemas ------------------------------------------------------------
+// ─── Input Schemas ────────────────────────────────────────────────────────────
 
 const SectionSchema = z.object({
   sectionNumber: z.number(),
@@ -83,154 +83,8 @@ const RequestSchema = z.object({
 
 type ChapterInput = z.infer<typeof ChapterSchema>;
 type ReportInput = z.infer<typeof RequestSchema>["report"];
-type SectionFieldRef = "intro" | "conclusion" | { sectionNumber: number };
 
-type LLMTask = {
-  chapterIndex: number;
-  field: SectionFieldRef;
-  task: string;
-  heading: string;
-  body: string;
-  voiceDNA?: VoiceDNAType | null;
-};
-
-type RewrittenLocation = {
-  chapterIndex: number;
-  field: SectionFieldRef;
-};
-
-type TransitionTask = {
-  chapterIndex: number;
-  field: SectionFieldRef;
-  role: "preceding" | "following";
-  headingContext: string;
-  bodyToFix: string;
-  adjacentEdge: string;
-};
-
-// --- Location parser ----------------------------------------------------------
-
-export async function POST(req: NextRequest) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const parsed = RequestSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
-  }
-
-  const { manifest, report, appliedKeys, voiceDNA } = parsed.data;
-
-  if (appliedKeys.length === 0) {
-    return NextResponse.json({ chapters: manifest.chapters }, { status: 200 });
-  }
-
-  let chapters: ChapterInput[] = manifest.chapters.map((c) => ({
-    ...c,
-    sections: c.sections.map((s) => ({ ...s })),
-  }));
-
-  for (const key of appliedKeys) {
-    if (key.startsWith("r-")) {
-      const idx = parseInt(key.slice(2));
-      const rep = report.repetitions[idx];
-      if (!rep || !rep.alternatives.length) continue;
-      chapters = chapters.map((ch) =>
-        mapChapterText(ch, (text) => applyPhraseVariation(text, rep.phrase, rep.alternatives)),
-      );
-    }
-    if (key.startsWith("w-")) {
-      const idx = parseInt(key.slice(2));
-      const ow = report.overusedWords[idx];
-      if (!ow || !ow.alternatives.length) continue;
-      chapters = chapters.map((ch) =>
-        mapChapterText(ch, (text) => applyWordVariation(text, ow.word, ow.alternatives)),
-      );
-    }
-  }
-
-  const llmTasks: LLMTask[] = [];
-
-  for (const key of appliedKeys) {
-    if (key.startsWith("c-")) {
-      const idx = parseInt(key.slice(2));
-      const dup = report.conceptDuplicates[idx];
-      if (!dup) continue;
-      for (const loc of dup.locations) {
-        const { chapterNum, sectionNum } = parseLocation(loc.location);
-        if (chapterNum === null) continue;
-        const chIdx = chapters.findIndex((c) => c.number === chapterNum);
-        if (chIdx === -1) continue;
-        const ch = chapters[chIdx];
-        if (sectionNum !== null) {
-          const sec = ch.sections.find((s) => s.sectionNumber === sectionNum);
-          if (!sec) continue;
-          llmTasks.push({ chapterIndex: chIdx, field: { sectionNumber: sectionNum }, task: `This section contains a concept duplicate: "${dup.title}". ${dup.recommendation}`, heading: sec.heading, body: sec.body, voiceDNA: voiceDNA ?? null });
-        } else if (loc.location.toLowerCase().includes("intro")) {
-          llmTasks.push({ chapterIndex: chIdx, field: "intro", task: `This intro contains a concept duplicate: "${dup.title}". ${dup.recommendation}`, heading: `Chapter ${ch.number} Introduction`, body: ch.intro, voiceDNA: voiceDNA ?? null });
-        } else if (loc.location.toLowerCase().includes("conclusion")) {
-          llmTasks.push({ chapterIndex: chIdx, field: "conclusion", task: `This conclusion contains a concept duplicate: "${dup.title}". ${dup.recommendation}`, heading: `Chapter ${ch.number} Conclusion`, body: ch.conclusion, voiceDNA: voiceDNA ?? null });
-        }
-      }
-    }
-    if (key.startsWith("p-")) {
-      const idx = parseInt(key.slice(2));
-      const pair = report.similarPairs[idx];
-      if (!pair) continue;
-      const locB = parseLocation(pair.locationB);
-      const locA = parseLocation(pair.locationA);
-      const targetLoc = locB.chapterNum !== null ? locB : locA;
-      const otherLoc = targetLoc === locB ? pair.locationA : pair.locationB;
-      if (targetLoc.chapterNum === null) continue;
-      const chIdx = chapters.findIndex((c) => c.number === targetLoc.chapterNum);
-      if (chIdx === -1) continue;
-      const ch = chapters[chIdx];
-      if (targetLoc.sectionNum !== null) {
-        const sec = ch.sections.find((s) => s.sectionNumber === targetLoc.sectionNum);
-        if (!sec) continue;
-        llmTasks.push({ chapterIndex: chIdx, field: { sectionNumber: targetLoc.sectionNum }, task: `This section has ${Math.round(pair.similarity * 100)}% content overlap with ${otherLoc}. Rewrite it to present a more distinct angle while preserving its core teaching point.`, heading: sec.heading, body: sec.body, voiceDNA: voiceDNA ?? null });
-      }
-    }
-  }
-
-  if (llmTasks.length > 0) {
-    const results = await mapWithConcurrency(llmTasks, 4, async (task) => ({
-      task,
-      revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
-    }));
-    for (const { task, revisedBody } of results) {
-      const ch = chapters[task.chapterIndex];
-      if (task.field === "intro") {
-        chapters[task.chapterIndex] = { ...ch, intro: revisedBody };
-      } else if (task.field === "conclusion") {
-        chapters[task.chapterIndex] = { ...ch, conclusion: revisedBody };
-      } else {
-        const secNum = (task.field as { sectionNumber: number }).sectionNumber;
-        chapters[task.chapterIndex] = {
-          ...ch,
-          sections: ch.sections.map((s) =>
-            s.sectionNumber === secNum
-              ? { ...s, body: revisedBody, wordCount: revisedBody.split(/\s+/).filter(Boolean).length }
-              : s,
-          ),
-        };
-      }
-    }
-    const rewrittenLocations: RewrittenLocation[] = results.map(({ task }) => ({
-      chapterIndex: task.chapterIndex,
-      field: task.field,
-    }));
-    chapters = await repairTransitions(chapters, rewrittenLocations, voiceDNA);
-  }
-
-  return NextResponse.json({ chapters }, { status: 200 });
-}
-
-// --- Helper functions (all hoisted - POST above can call them) -----------------
+// ─── Location parser ──────────────────────────────────────────────────────────
 
 function parseLocation(loc: string): { chapterNum: number | null; sectionNum: number | null } {
   // Matches: "Chapter N", "Ch N", "Ch. N" (audit emits "Ch N § M: Heading")
@@ -243,7 +97,7 @@ function parseLocation(loc: string): { chapterNum: number | null; sectionNum: nu
   };
 }
 
-// --- Tier 1 helpers — deterministic string fixes ------------------------------
+// ─── Tier 1 helpers — deterministic string fixes ──────────────────────────────
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -296,7 +150,7 @@ function mapChapterText(
   };
 }
 
-// --- Tier 2 helper — targeted single-section LLM rewrite ---------------------
+// ─── Tier 2 helper — targeted single-section LLM rewrite ─────────────────────
 
 async function reviseSectionBody(
   heading: string,
@@ -305,21 +159,22 @@ async function reviseSectionBody(
   voiceDNA?: VoiceDNAType | null,
 ): Promise<string> {
   // Compact, human-readable voice block to keep surgical edits in the author's voice
-  let voiceDnaBlock = "";
-  if (voiceDNA) {
-    const lines: string[] = ["\nAUTHOR VOICE DNA — maintain throughout:"];
-    if (voiceDNA.toneProfile) lines.push(`- Tone: ${voiceDNA.toneProfile}`);
-    if (voiceDNA.vocabularyLevel) lines.push(`- Register: ${voiceDNA.vocabularyLevel}`);
-    if (voiceDNA.sentencePattern) lines.push(`- Sentence rhythm: ${voiceDNA.sentencePattern}`);
-    if (voiceDNA.pacingFingerprint) lines.push(`- Pacing: ${voiceDNA.pacingFingerprint}`);
-    if ((voiceDNA.avoidWords ?? []).length > 0)
-      lines.push(`- Forbidden words (zero tolerance): ${voiceDNA.avoidWords.slice(0, 15).join(", ")}`);
-    if ((voiceDNA.avoidStructures ?? []).length > 0)
-      lines.push(`- Forbidden structures: ${(voiceDNA.avoidStructures ?? []).join("; ")}`);
-    if ((voiceDNA.signaturePhrases ?? []).length > 0)
-      lines.push(`- Signature phrases (use naturally): ${voiceDNA.signaturePhrases.join(", ")}`);
-    voiceDnaBlock = lines.join("\n");
-  }
+  const voiceDnaBlock = voiceDNA
+    ? ((): string => {
+        const lines: string[] = ["\nAUTHOR VOICE DNA — maintain throughout:"];
+        if (voiceDNA.toneProfile) lines.push(`- Tone: ${voiceDNA.toneProfile}`);
+        if (voiceDNA.vocabularyLevel) lines.push(`- Register: ${voiceDNA.vocabularyLevel}`);
+        if (voiceDNA.sentencePattern) lines.push(`- Sentence rhythm: ${voiceDNA.sentencePattern}`);
+        if (voiceDNA.pacingFingerprint) lines.push(`- Pacing: ${voiceDNA.pacingFingerprint}`);
+        if ((voiceDNA.avoidWords ?? []).length > 0)
+          lines.push(`- Forbidden words (zero tolerance): ${voiceDNA.avoidWords.slice(0, 15).join(", ")}`);
+        if ((voiceDNA.avoidStructures ?? []).length > 0)
+          lines.push(`- Forbidden structures: ${(voiceDNA.avoidStructures ?? []).join("; ")}`);
+        if ((voiceDNA.signaturePhrases ?? []).length > 0)
+          lines.push(`- Signature phrases (use naturally): ${voiceDNA.signaturePhrases.join(", ")}`);
+        return lines.join("\n");
+      })()
+    : "";
 
   let text = "";
   try {
@@ -353,23 +208,24 @@ RULES:
 }
 
 // Concurrency-limited parallel runner
-async function mapWithConcurrency<T, R>(
-  items: T[],
+// Note: uses `any` instead of generics — SWC in Next.js 15 can mis-parse generic
+// async function declarations (`async function f<T, R>(...)`) and corrupt downstream
+// parsing. `any` is stripped identically by SWC without the ambiguous `<T, R>` tokens.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function mapWithConcurrency(
+  items: any[],
   limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+  fn: (item: any) => Promise<any>,
+): Promise<any[]> {
+  const results: any[] = new Array(items.length);
   let index = 0;
-  const runWorker = async (): Promise<void> => {
+  const worker = async (): Promise<void> => {
     while (index < items.length) {
       const i = index++;
       results[i] = await fn(items[i]);
     }
   };
-  const slots = Math.min(limit, items.length);
-  const workers: Promise<void>[] = [];
-  for (let i = 0; i < slots; i++) workers.push(runWorker());
-  await Promise.all(workers);
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
   return results;
 }
 
@@ -377,6 +233,29 @@ async function mapWithConcurrency<T, R>(
 // After concept-duplicate removal, auto-patches the opening paragraph of the
 // immediately following section and closing paragraph of the preceding one so
 // the seam reads naturally without manual intervention.
+
+type LLMTask = {
+  chapterIndex: number;
+  field: "intro" | "conclusion" | { sectionNumber: number };
+  task: string;
+  heading: string;
+  body: string;
+  voiceDNA?: VoiceDNAType | null;
+};
+
+type RewrittenLocation = {
+  chapterIndex: number;
+  field: "intro" | "conclusion" | { sectionNumber: number };
+};
+
+type TransitionTask = {
+  chapterIndex: number;
+  field: "intro" | "conclusion" | { sectionNumber: number };
+  role: "preceding" | "following";
+  headingContext: string;
+  bodyToFix: string;
+  adjacentEdge: string;
+};
 
 async function repairTransitions(
   chapters: ChapterInput[],
@@ -512,4 +391,180 @@ async function repairTransitions(
   }
 
   return updated;
+}
+
+// \u2500\u2500\u2500 Route Handler \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n// Exported as const arrow to avoid a Next.js 15.5 SWC parser bug where
+// `async function POST` declarations after complex generic/IIFE helpers
+// have their returns flagged as module-level. Arrow form parses correctly.
+export const POST = async (req: NextRequest): Promise<Response> => {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const parsed = RequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const { manifest, report, appliedKeys, voiceDNA } = parsed.data;
+
+  if (appliedKeys.length === 0) {
+    return NextResponse.json({ chapters: manifest.chapters }, { status: 200 });
+  }
+
+  // Deep clone chapters so we can mutate them safely
+  let chapters: ChapterInput[] = manifest.chapters.map((c) => ({
+    ...c,
+    sections: c.sections.map((s) => ({ ...s })),
+  }));
+
+  // ── Tier 1: Algorithmic fixes (no LLM, no risk of extra rewrites) ───────────
+
+  for (const key of appliedKeys) {
+    if (key.startsWith("r-")) {
+      const idx = parseInt(key.slice(2));
+      const rep = report.repetitions[idx];
+      if (!rep || !rep.alternatives.length) continue;
+      // Apply globally across ALL chapters (repetition is a manuscript-wide stat)
+      chapters = chapters.map((ch) =>
+        mapChapterText(ch, (text) => applyPhraseVariation(text, rep.phrase, rep.alternatives)),
+      );
+    }
+
+    if (key.startsWith("w-")) {
+      const idx = parseInt(key.slice(2));
+      const ow = report.overusedWords[idx];
+      if (!ow || !ow.alternatives.length) continue;
+      chapters = chapters.map((ch) =>
+        mapChapterText(ch, (text) => applyWordVariation(text, ow.word, ow.alternatives)),
+      );
+    }
+  }
+
+  // ── Tier 2: Targeted LLM fixes — only the affected section is sent ───────────
+
+  // Collect all LLM work items before running them
+  const llmTasks: LLMTask[] = [];
+
+  for (const key of appliedKeys) {
+    // ── Concept duplicates ───────────────────────────────────────────────────
+    if (key.startsWith("c-")) {
+      const idx = parseInt(key.slice(2));
+      const dup = report.conceptDuplicates[idx];
+      if (!dup) continue;
+
+      for (const loc of dup.locations) {
+        const { chapterNum, sectionNum } = parseLocation(loc.location);
+        if (chapterNum === null) continue;
+
+        const chIdx = chapters.findIndex((c) => c.number === chapterNum);
+        if (chIdx === -1) continue;
+        const ch = chapters[chIdx];
+
+        if (sectionNum !== null) {
+          const sec = ch.sections.find((s) => s.sectionNumber === sectionNum);
+          if (!sec) continue;
+          llmTasks.push({
+            chapterIndex: chIdx,
+            field: { sectionNumber: sectionNum },
+            task: `This section contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
+            heading: sec.heading,
+            body: sec.body,
+            voiceDNA: voiceDNA ?? null,
+          });
+        } else if (loc.location.toLowerCase().includes("intro")) {
+          llmTasks.push({
+            chapterIndex: chIdx,
+            field: "intro",
+            task: `This intro contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
+            heading: `Chapter ${ch.number} Introduction`,
+            body: ch.intro,
+            voiceDNA: voiceDNA ?? null,
+          });
+        } else if (loc.location.toLowerCase().includes("conclusion")) {
+          llmTasks.push({
+            chapterIndex: chIdx,
+            field: "conclusion",
+            task: `This conclusion contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
+            heading: `Chapter ${ch.number} Conclusion`,
+            body: ch.conclusion,
+            voiceDNA: voiceDNA ?? null,
+          });
+        }
+      }
+    }
+
+    // ── Similar pairs ────────────────────────────────────────────────────────
+    if (key.startsWith("p-")) {
+      const idx = parseInt(key.slice(2));
+      const pair = report.similarPairs[idx];
+      if (!pair) continue;
+
+      // Rewrite the LATER location (B) to differentiate it from A
+      // If we can't parse B, fall back to A
+      const locB = parseLocation(pair.locationB);
+      const locA = parseLocation(pair.locationA);
+
+      const targetLoc = locB.chapterNum !== null ? locB : locA;
+      const otherLoc = targetLoc === locB ? pair.locationA : pair.locationB;
+
+      if (targetLoc.chapterNum === null) continue;
+      const chIdx = chapters.findIndex((c) => c.number === targetLoc.chapterNum);
+      if (chIdx === -1) continue;
+      const ch = chapters[chIdx];
+
+      if (targetLoc.sectionNum !== null) {
+        const sec = ch.sections.find((s) => s.sectionNumber === targetLoc.sectionNum);
+        if (!sec) continue;
+        llmTasks.push({
+          chapterIndex: chIdx,
+          field: { sectionNumber: targetLoc.sectionNum },
+          task: `This section has ${Math.round(pair.similarity * 100)}% content overlap with ${otherLoc}. Rewrite it to present a more distinct angle while preserving its core teaching point.`,
+          heading: sec.heading,
+          body: sec.body,
+          voiceDNA: voiceDNA ?? null,
+        });
+      }
+    }
+  }
+
+  // Run LLM tasks with concurrency limit (max 4 at a time)
+  if (llmTasks.length > 0) {
+    const results = await mapWithConcurrency(llmTasks, 4, async (task) => ({
+      task,
+      revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
+    }));
+
+    // Apply results back into the chapters array
+    for (const { task, revisedBody } of results) {
+      const ch = chapters[task.chapterIndex];
+      if (task.field === "intro") {
+        chapters[task.chapterIndex] = { ...ch, intro: revisedBody };
+      } else if (task.field === "conclusion") {
+        chapters[task.chapterIndex] = { ...ch, conclusion: revisedBody };
+      } else {
+        const secNum = (task.field as { sectionNumber: number }).sectionNumber;
+        chapters[task.chapterIndex] = {
+          ...ch,
+          sections: ch.sections.map((s) =>
+            s.sectionNumber === secNum
+              ? { ...s, body: revisedBody, wordCount: revisedBody.split(/\s+/).filter(Boolean).length }
+              : s,
+          ),
+        };
+      }
+    }
+
+    // Upgrade 7: patch transition seams in sections adjacent to any rewritten section
+    const rewrittenLocations: RewrittenLocation[] = results.map(({ task }) => ({
+      chapterIndex: task.chapterIndex,
+      field: task.field,
+    }));
+    chapters = await repairTransitions(chapters, rewrittenLocations, voiceDNA);
+  }
+
+  return NextResponse.json({ chapters }, { status: 200 });
 }

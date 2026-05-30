@@ -110,6 +110,8 @@ export async function POST(req: NextRequest) {
     const parts = input.masterTranscript.split(/═{3,}/);
     let nextSlotFallback = 1; // used when [Slot-N] header was stripped by filter-signal
     for (const part of parts) {
+      // A1: Skip slots tagged as non-teaching by the signal filter (tagNonTeachingSlots pass)
+      if (/^\s*\[NON-TEACHING-SLOT-\d+\]/i.test(part)) continue;
       const m = part.match(/^\s*\[Slot-(\d+)\]\s*([\s\S]+)/);
       if (!m) {
         // The [Slot-1] label may have been removed by the signal filter when it
@@ -142,45 +144,51 @@ export async function POST(req: NextRequest) {
 
     const slotResults: DedupedSlotResult[] = await Promise.all(
       slotChunks.map(async (chunk): Promise<DedupedSlotResult> => {
-        const slotWords = chunk.text.split(/\s+/);
-        const OVERLAP = 200;
-        const chunkRanges: Array<{ start: number; end: number }> = [];
-        let start = 0;
-        while (start < slotWords.length) {
-          const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
-          chunkRanges.push({ start, end });
-          if (end === slotWords.length) break;
-          start = end - OVERLAP;
+        // A8: Isolate per-slot failures — a single bad LLM call must not abort the whole map
+        try {
+          const slotWords = chunk.text.split(/\s+/);
+          const OVERLAP = 200;
+          const chunkRanges: Array<{ start: number; end: number }> = [];
+          let start = 0;
+          while (start < slotWords.length) {
+            const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
+            chunkRanges.push({ start, end });
+            if (end === slotWords.length) break;
+            start = end - OVERLAP;
+          }
+
+          // Process all chunk ranges within this slot in parallel too.
+          const chunkSegments = await Promise.all(
+            chunkRanges.map(async (range) => {
+              const chunkText = slotWords.slice(range.start, range.end).join(" ");
+              const { object } = await generateObject({
+                model: deepSeekModel,
+                schema: SlotSegmentsSchema,
+                mode: "tool",
+                temperature: 0.2,
+                system: SEGMENT_SYSTEM,
+                prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
+              });
+              return object.segments;
+            })
+          );
+
+          const rawSegmentsForSlot = chunkSegments.flat();
+
+          // Deduplicate segments that appeared in overlapping chunk windows.
+          const seenSegTopics = new Set<string>();
+          const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
+            const key = seg.topic.toLowerCase().trim().slice(0, 60);
+            if (seenSegTopics.has(key)) return false;
+            seenSegTopics.add(key);
+            return true;
+          });
+
+          return { chunk, slotWords, dedupedSegs };
+        } catch (slotErr) {
+          console.error(`[content-map] Slot ${chunk.sourceAudio} failed — returning empty segments:`, slotErr);
+          return { chunk, slotWords: chunk.text.split(/\s+/), dedupedSegs: [] };
         }
-
-        // Process all chunk ranges within this slot in parallel too.
-        const chunkSegments = await Promise.all(
-          chunkRanges.map(async (range) => {
-            const chunkText = slotWords.slice(range.start, range.end).join(" ");
-            const { object } = await generateObject({
-              model: deepSeekModel,
-              schema: SlotSegmentsSchema,
-              mode: "tool",
-              temperature: 0.2,
-              system: SEGMENT_SYSTEM,
-              prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
-            });
-            return object.segments;
-          })
-        );
-
-        const rawSegmentsForSlot = chunkSegments.flat();
-
-        // Deduplicate segments that appeared in overlapping chunk windows.
-        const seenSegTopics = new Set<string>();
-        const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
-          const key = seg.topic.toLowerCase().trim().slice(0, 60);
-          if (seenSegTopics.has(key)) return false;
-          seenSegTopics.add(key);
-          return true;
-        });
-
-        return { chunk, slotWords, dedupedSegs };
       })
     );
 

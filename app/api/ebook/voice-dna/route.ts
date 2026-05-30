@@ -15,14 +15,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
-  // Distributed 900-word sample: start + middle + end captures voice range without
-  // overwhelming DeepSeek's context and risking a truncated/empty JSON response.
+  // A7: Distributed 1800-word sample (600 × start/middle/end) — tripled from 900 words
+  // to improve voice coverage across 6-slot projects where the old "middle" landed near
+  // a structural break rather than a peak teaching section.
   const words = input.masterTranscript.split(/\s+/);
   const total = words.length;
-  const startSample = words.slice(0, 300).join(" ");
-  const midStart = Math.max(300, Math.floor(total / 2) - 150);
-  const midSample = words.slice(midStart, midStart + 300).join(" ");
-  const endSample = words.slice(Math.max(0, total - 300)).join(" ");
+  const startSample = words.slice(0, 600).join(" ");
+  const midStart = Math.max(600, Math.floor(total / 2) - 300);
+  const midSample = words.slice(midStart, midStart + 600).join(" ");
+  const endSample = words.slice(Math.max(0, total - 600)).join(" ");
   const sampleTranscript = [
     "[START]\n" + startSample,
     "[MIDDLE]\n" + midSample,

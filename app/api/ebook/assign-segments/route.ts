@@ -43,6 +43,8 @@ export async function POST(req: NextRequest) {
           targetWordCount: section.targetWordCount,
           // Upgrade 1: carry stable segment IDs so the pipeline can track consumption
           sourceSegmentIds: section.sourceSegmentIds,
+          // A2: carry chapter premise so standalone callers get the north-star anchor
+          chapterPremise: chapter.chapterPremise || undefined,
         };
       })
     );

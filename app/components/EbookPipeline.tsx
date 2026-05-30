@@ -1835,17 +1835,39 @@ export function EbookPipeline({
       // ── Stage 1: Transcribe (skip if resuming with existing transcript) ────
       let masterTranscript = acc.masterTranscript;
       if (!masterTranscript) {
+        type FilterResult = { cleanedTranscript: string; removedSegments: { reason: string; excerpt: string }[]; summary: string };
         const transcriptResults: { label: string; text: string }[] = [];
+        setStage("filtering");
         for (let i = 0; i < 6; i++) {
           if (!audioFiles[i] && !transcriptFiles[i]) continue;
           const label = `Slot-${i + 1}`;
-          const text = await resolveSlot(audioFiles[i], transcriptFiles[i], label);
-          transcriptResults.push({ label, text });
+          const rawText = await resolveSlot(audioFiles[i], transcriptFiles[i], label);
+
+          // ── Per-slot signal filter — catches opening prayers, closings, altar
+          //    calls and announcements specific to each audio/transcript file ──
+          let slotText = rawText;
+          try {
+            addLog(`  Filtering ${label} signal…`);
+            const slotFilter = await postJson<FilterResult>("/api/ebook/filter-signal", { masterTranscript: rawText });
+            slotText = slotFilter.cleanedTranscript || rawText;
+            const rawWords = countWords(rawText);
+            const cleanWords = countWords(slotText);
+            const trimmed = rawWords - cleanWords;
+            if (trimmed > 0) {
+              addLog(`  ✓ ${label} filtered — ${trimmed.toLocaleString()} non-teaching words removed (${slotFilter.summary})`);
+            } else {
+              addLog(`  ✓ ${label} — no non-teaching content found`);
+            }
+          } catch {
+            addLog(`  ⚠ ${label} signal filter skipped — using raw text`);
+          }
+
+          transcriptResults.push({ label, text: slotText });
         }
         masterTranscript = transcriptResults
           .map((t) => `[${t.label}]\n${t.text}`)
           .join("\n\n═══════════════════════════════════════\n\n");
-        addLog(`Master transcript assembled — ${countWords(masterTranscript).toLocaleString()} raw words`);
+        addLog(`Master transcript assembled — ${countWords(masterTranscript).toLocaleString()} words after per-slot filtering`);
 
         // ── Stage 1b: Glossary sanitization — zero-cost regex ASR correction ─
         try {
@@ -1869,32 +1891,34 @@ export function EbookPipeline({
         addLog(`↩ Resuming — transcript available (${countWords(masterTranscript).toLocaleString()} words)`);
       }
 
-      // ── Stage 2: Signal Filter — strip prayers, announcements, housekeeping ─
+      // ── Stage 2: Signal Filter — final safety pass on the combined transcript
+      //    Catches any non-teaching content that spans a slot boundary or was
+      //    missed by the per-slot pass (e.g. a multi-slot altar call finale). ─
       let filteredTranscript = (acc as EbookJobState & { filteredTranscript?: string }).filteredTranscript ?? "";
       if (!filteredTranscript) {
         setStage("filtering");
-        addLog("Filtering signal — removing non-teaching content…");
+        addLog("Running final combined signal filter pass…");
         try {
           type FilterResult = { cleanedTranscript: string; removedSegments: { reason: string; excerpt: string }[]; summary: string };
           const filterResult = await postJson<FilterResult>("/api/ebook/filter-signal", { masterTranscript });
           filteredTranscript = filterResult.cleanedTranscript || masterTranscript;
           const removedCount = filterResult.removedSegments.length;
           if (removedCount > 0) {
-            addLog(`✓ Signal filtered — removed ${removedCount} non-teaching block${removedCount !== 1 ? "s" : ""}: ${filterResult.summary}`);
+            addLog(`✓ Final filter — removed ${removedCount} additional block${removedCount !== 1 ? "s" : ""}: ${filterResult.summary}`);
           } else {
-            addLog("✓ Signal filter complete — no non-teaching content found");
+            addLog("✓ Final filter pass — no additional non-teaching content found");
           }
           setSignalFilterState("applied");
           setSignalFilterDetail(filterResult.summary || null);
           (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = filteredTranscript;
           (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filterRemovedCount = removedCount;
         } catch (filterErr) {
-          // Non-fatal: if filtering fails, proceed with the raw transcript
+          // Non-fatal: if filtering fails, proceed with the per-slot-filtered transcript
           filteredTranscript = masterTranscript;
           const detail = filterErr instanceof Error ? filterErr.message : "unknown error";
           setSignalFilterState("skipped");
           setSignalFilterDetail(detail);
-          addLog(`⚠ Signal filter unavailable — using raw transcript (${detail})`);
+          addLog(`⚠ Final signal filter unavailable — using per-slot filtered transcript (${detail})`);
         }
         await checkpoint("analyzing");
       } else {
@@ -2135,6 +2159,8 @@ export function EbookPipeline({
           // Upgrade 7: tiered quote dedup
           forbiddenVerseTexts,
           allowedInlineOnly,
+          // S7: chapter premise anchor
+          chapterPremise: (architecture.chapters.find((ch) => ch.number === assignment.chapterNumber) as { chapterPremise?: string } | undefined)?.chapterPremise ?? undefined,
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2290,6 +2316,13 @@ export function EbookPipeline({
             previousChapterConclusion: polishedChapters.length > 0
               ? polishedChapters[polishedChapters.length - 1].conclusion
               : undefined,
+            // U5: chapter premise line from architect — north-star for intro/conclusion
+            chapterPremise: (chapterBlueprint as { chapterPremise?: string }).chapterPremise ?? undefined,
+            // U7: series arc bridge concept — tells polish what thread this chapter picks up
+            seriesArcBridge: (() => {
+              const arc = (architecture as { seriesArc?: Array<{ fromChapter: number; toChapter: number; bridgeConcept: string }> }).seriesArc ?? [];
+              return arc.find((e) => e.toChapter === chapterBlueprint.number)?.bridgeConcept ?? undefined;
+            })(),
           },
           ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
         });
@@ -2317,8 +2350,10 @@ export function EbookPipeline({
       if (!frontMatter) {
         setStage("frontmatter");
         addLog("Writing preface, introduction, and conclusion…");
-        const frontMatterTranscript = typeof masterTranscript === "string" && masterTranscript
-          ? masterTranscript
+        // A3: Use the filtered (teaching-only) transcript for front matter so
+        // prayers, announcements, and altar calls don't bleed into the preface/introduction.
+        const frontMatterTranscript = typeof teachingTranscript === "string" && teachingTranscript
+          ? teachingTranscript
           : acc.transcripts
               .map((t) => `[${t.label}]\n${t.text}`)
               .join("\n\n═══════════════════════════════════════\n\n");

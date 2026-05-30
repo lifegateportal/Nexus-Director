@@ -101,6 +101,16 @@ export async function POST(req: NextRequest) {
       ? `\n\nPREVIOUS CHAPTER CLOSING (connective tissue — do NOT repeat, only continue the arc):\n${chapter.previousChapterConclusion.slice(0, 350)}`
       : "";
 
+    // U5: Chapter premise from architect — constrains the intro and premise line
+    const chapterPremiseBlock = chapter.chapterPremise
+      ? `\n\nCHAPTER PREMISE (from blueprint — your intro and premise line must serve this north star):\n${chapter.chapterPremise}`
+      : "";
+
+    // U7: Series arc bridge — tells the intro what conceptual thread to pick up from the previous chapter
+    const seriesArcBlock = chapter.seriesArcBridge
+      ? `\n\nSERIES ARC BRIDGE: The previous chapter's closing thread was: "${chapter.seriesArcBridge}". The intro of this chapter should feel like a natural continuation of that thread — not a restatement, but a forward step.`
+      : "";
+
     let object: z.infer<typeof PolishOutputSchema>;
     try {
       const { text } = await generateText({
@@ -146,7 +156,7 @@ ${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}
 
 Respond with ONLY a valid JSON object — no markdown, no code blocks, no explanation:
 {"intro":"...","conclusion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."],"epigraph":"...","premiseLine":"..."}`,
-        prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}${epigraphCandidates ? `\n\nSCRIPTURE CANDIDATES FOR EPIGRAPH (pick the most resonant ONE, or return empty string if none fits):\n${epigraphCandidates}` : ""}${prevChapterBlock}`,
+        prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}${epigraphCandidates ? `\n\nSCRIPTURE CANDIDATES FOR EPIGRAPH (pick the most resonant ONE, or return empty string if none fits):\n${epigraphCandidates}` : ""}${prevChapterBlock}${chapterPremiseBlock}${seriesArcBlock}`,
       });
       const _jsonMatch = text.match(/\{[\s\S]*\}/);
       object = PolishOutputSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
