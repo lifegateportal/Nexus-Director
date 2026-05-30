@@ -147,6 +147,10 @@ export const SectionAssignmentSchema = z.object({
   allowedInlineOnly: z.array(z.string()).default([]),   // refs where only a brief inline mention is allowed (no full re-quote)
   // ── S7: Chapter premise anchor ───────────────────────────────────────────
   chapterPremise: z.string().optional(),                // one-sentence north star; first paragraph should echo it
+  // ── Upgrade 3: Book thesis threading ─────────────────────────────────────
+  coreThesis: z.string().optional(),                    // book's central thesis from content map — thread through every section
+  // ── Upgrade 4: Illustration / story dedup ────────────────────────────────
+  usedIllustrations: z.array(z.string()).default([]),   // story/illustration titles already used in earlier sections
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────
@@ -169,7 +173,7 @@ export const ChapterPolishInputSchema = z.object({
   chapterSegmentTexts: z.array(z.string()),     // raw transcript for this chapter
   voiceDNA: VoiceDNASchema,
   quotesInChapter: z.array(QuoteSchema).default([]),
-  previousChapterConclusion: z.string().optional(), // closing prose of preceding chapter for connective tissue
+  previousChapterForwardQuestion: z.string().optional(), // forward question from the preceding chapter for arc connective tissue
   // ── Upgrade 5: Chapter premise line from architect ────────────────────────
   chapterPremise: z.string().optional(),         // one-sentence north star for this chapter's intro/conclusion
   // ── Upgrade 7: Series arc bridge concept ─────────────────────────────────
@@ -185,7 +189,7 @@ export const ChapterDraftSchema = z.object({
   epigraph: z.string().default(""),        // opening scripture/quote set before body text
   premiseLine: z.string().default(""),    // one-sentence chapter hook between title and body
   sections: z.array(SectionDraftSchema),
-  conclusion: z.string().default(""),
+  forwardQuestion: z.string().default(""),  // one-sentence preemptive question pointing to the next chapter
   keyTakeaways: z.array(z.string()).default([]),
   reflectionQuestions: z.array(z.string()).default([]),
   totalWordCount: z.number().default(0),

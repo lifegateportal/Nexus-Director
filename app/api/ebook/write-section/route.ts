@@ -40,6 +40,75 @@ function normalizeReaderFacingProse(text: string): string {
     .trim();
 }
 
+// ── Upgrade 8: Passive voice detector ────────────────────────────────────────
+// Scans finalized prose and returns sentences containing passive constructions
+// so they can be logged for visibility (full rewrite is handled by the LLM prompt).
+const PASSIVE_PATTERNS = [
+  /\b(is|are|was|were|be|been|being)\s+(being\s+)?\w+ed\b/gi,
+  /\bthere\s+(is|are|was|were)\s+a?\s*\w/gi,
+  /\bit\s+(is|was)\s+(important|necessary|worth|noted|believed|said|known|thought|understood)/gi,
+  /\b(we|believers|christians|people)\s+are\s+(called|meant|told|asked|invited|expected)\s+to\b/gi,
+  /\b(can|should|must|may|might)\s+be\s+(seen|found|noted|observed|understood|considered)/gi,
+  /\b(god|jesus|paul|peter|david)\s+(is|was)\s+(known|referred|considered|seen|understood)\s+as\b/gi,
+];
+
+function detectPassiveVoice(text: string): string[] {
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const hits: string[] = [];
+  for (const sentence of sentences) {
+    if (PASSIVE_PATTERNS.some((re) => { re.lastIndex = 0; return re.test(sentence); })) {
+      hits.push(sentence.slice(0, 120).trim());
+    }
+  }
+  return hits;
+}
+
+// ── Upgrade 12: False promise / unfulfilled hook detector ────────────────────
+// Extracts the opening hook/question from the first paragraph and checks whether
+// the body actually addresses it (n-gram overlap heuristic). Returns the hook
+// string when it appears unfulfilled so it can be logged for editorial review.
+
+const HOOK_PATTERNS = [
+  /^(what|why|how|when|who|where|is|are|was|were|do|does|did|can|could|should|would|will|have|has|had)\b.{10,}[?]/i,
+  /\b(the question is|here is the thing|consider this|think about|imagine|what if|suppose|ask yourself)\b/i,
+  /\b(the answer|the key|the secret|the truth|the reason)\s+(is|lies|comes)\b/i,
+];
+
+function extractOpeningHook(body: string): string | null {
+  const firstPara = body.split(/\n\n+/)[0]?.trim() ?? "";
+  const firstSentences = firstPara.split(/(?<=[.!?])\s+/).slice(0, 3);
+  for (const sentence of firstSentences) {
+    if (HOOK_PATTERNS.some((re) => re.test(sentence))) {
+      return sentence.slice(0, 200).trim();
+    }
+  }
+  return null;
+}
+
+function ngramTokens(text: string, n: number): Set<string> {
+  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 3);
+  const grams = new Set<string>();
+  for (let i = 0; i <= words.length - n; i++) {
+    grams.add(words.slice(i, i + n).join(" "));
+  }
+  return grams;
+}
+
+function hookFulfilled(hook: string, body: string): boolean {
+  // The body past the first paragraph is where the hook should be addressed
+  const remainingBody = body.split(/\n\n+/).slice(1).join(" ");
+  if (!remainingBody || remainingBody.split(/\s+/).length < 20) return true; // too short to judge
+  const hookGrams = ngramTokens(hook, 3);
+  if (hookGrams.size === 0) return true;
+  const bodyGrams = ngramTokens(remainingBody, 3);
+  let overlap = 0;
+  for (const g of hookGrams) {
+    if (bodyGrams.has(g)) overlap++;
+  }
+  // At least 15% n-gram overlap means the hook topic appears in the body
+  return overlap / hookGrams.size >= 0.15;
+}
+
 // ── S5: Post-write paragraph length validation ────────────────────────────
 // Detects orphaned long sentences that are not deliberate fragments (≤12 words).
 // Merges them with the following paragraph when the next para starts with a
@@ -270,9 +339,35 @@ AUTHOR BOOK CONFIGURATION (highest priority)
 ════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}`
     : "";
 
-  // ── Upgrade 2: Server-side excerpt dedup ────────────────────────────────
-  // Strip excerpts that are substantially covered by alreadyCoveredPoints before
-  // the LLM sees them. This removes root-cause material — not just an instruction.
+  // ── Upgrade 2: Readability grade target ─────────────────────────────────
+  const readabilityBlock = `\n\n════════════════════════════════════════════
+READABILITY TARGET — ENFORCE BEFORE RETURNING
+════════════════════════════════════════════
+Target Flesch-Kincaid Grade Level: 9–11. This means:
+• Average sentence length of 18–22 words across the section.
+• Vocabulary is precise and elevated, but not academic or dense.
+• Deliberate length variation: some sentences under 10 words (punch), some over 30 (explanation). Never five consecutive medium-length sentences.
+• After drafting, scan for any paragraph where all sentences are approximately the same length — break it with a short punch or a long explanatory sentence.`;
+
+  // ── Upgrade 3: Book thesis threading ────────────────────────────────────
+  const coreThesisBlock = assignment.coreThesis
+    ? `\n\n════════════════════════════════════════════
+BOOK'S CORE THESIS — THREAD THROUGH THIS SECTION
+════════════════════════════════════════════
+"${assignment.coreThesis}"
+Every section you write must feel like it advances this thesis. Not by repeating it verbatim, but by adding a new dimension, a new piece of evidence, or a new application of it. If a paragraph has no traceable connection to this thesis, it is filler. Readers feel thesis-less sections as "padding" even if they can't name why.`
+    : "";
+
+  // ── Upgrade 4: Illustration / story dedup block ──────────────────────────
+  const usedIllustrationsBlock = (assignment.usedIllustrations ?? []).length > 0
+    ? `\n\n════════════════════════════════════════════
+USED STORIES & ILLUSTRATIONS — DO NOT REPEAT
+════════════════════════════════════════════
+The following personal stories, illustrations, parables, and named examples have ALREADY appeared in earlier sections of this book. Do NOT retell, re-describe, paraphrase, or re-introduce them as illustrations. If the transcript mentions them, extract ONLY the principle they illustrate — never the narrative wrapper:
+${(assignment.usedIllustrations ?? []).map((s) => `• "${s}"`).join("\n")}`
+    : "";
+
+  // ── Server-side excerpt dedup (existing Upgrade 2) ─────────────────────
   const { filtered: dedupedExcerpts, removedCount: excerptRemovedCount } = filterConsumedExcerpts(
     assignment.transcriptExcerpts,
     assignment.alreadyCoveredPoints ?? []
@@ -523,8 +618,8 @@ ${READER_NORMALIZATION_RULES}`,
 
     const deduplicatedSystem =
       (assignment.alreadyCoveredPoints ?? []).length > 0
-        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
-        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${alreadyQuotedBlock}`;
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${alreadyQuotedBlock}`;
 
     const { object } = await generateObject({
       model: deepSeekModel,
@@ -541,7 +636,24 @@ ${READER_NORMALIZATION_RULES}`,
     }
     const rawBody = repairedParagraphs.join("\n\n") || fallbackSectionBody(assignment);
     const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
-    return NextResponse.json({ body, claimLedger: object.claimLedger ?? [] }, { status: 200 });
+    // ── Upgrade 8: Passive voice detection ───────────────────────────────
+    const passiveHits = detectPassiveVoice(body);
+    if (passiveHits.length > 0) {
+      console.warn(`[write-section] Passive voice: ${passiveHits.length} hit(s) in Ch${assignment.chapterNumber} §${assignment.sectionNumber}:`, passiveHits.slice(0, 3));
+    }
+    // ── Upgrade 12: False promise detector ───────────────────────────────
+    const openingHook = extractOpeningHook(body);
+    let unfullfilledHook: string | null = null;
+    if (openingHook && !hookFulfilled(openingHook, body)) {
+      unfullfilledHook = openingHook;
+      console.warn(`[write-section] Unfulfilled hook in Ch${assignment.chapterNumber} §${assignment.sectionNumber}: "${openingHook.slice(0, 80)}"`);
+    }
+    return NextResponse.json({
+      body,
+      claimLedger: object.claimLedger ?? [],
+      passiveVoiceCount: passiveHits.length,
+      unfullfilledHook,
+    }, { status: 200 });
   } catch (err) {
     const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(fallbackSectionBody(assignment)));
     return NextResponse.json({

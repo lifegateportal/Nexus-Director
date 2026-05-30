@@ -45,6 +45,8 @@ export async function POST(req: NextRequest) {
           sourceSegmentIds: section.sourceSegmentIds,
           // A2: carry chapter premise so standalone callers get the north-star anchor
           chapterPremise: chapter.chapterPremise || undefined,
+          // Upgrade 3: book thesis threaded from content map
+          coreThesis: input.contentMap.coreThesis || undefined,
         };
       })
     );

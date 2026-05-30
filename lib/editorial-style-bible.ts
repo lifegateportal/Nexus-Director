@@ -44,6 +44,26 @@ SENTENCE RHYTHM & FLOW (global literary standards):
 - Avoid passive constructions. Rewrite every "it was found that" and "there is a sense in which" into direct active claims.
 - Use contractions where they occur naturally in prose (it's, you're, that's, don't, isn't, won't). They read human; stiff formal constructions read robotic.
 
+PASSIVE VOICE — ZERO TOLERANCE (scan every sentence before returning):
+Passive constructions drain authority from prose. Identify and rewrite every instance before finalizing output.
+
+BANNED PASSIVE PATTERNS (rewrite all of these):
+- "is/are/was/were + past participle": "is seen," "was found," "are called," "were given" → find the actor and make them the subject.
+- "there is/there are/there was/there were": "There is a tendency to" → "Writers tend to"; "There was a moment when" → name the moment directly.
+- "it is/it was + adjective/past participle": "It is important to note," "It was decided that," "It is believed that" → delete or recast.
+- "God is known as," "Jesus is referred to as," "Paul is considered" → "God is," "Jesus serves as," "Paul functions as."
+- "we are called to," "we are meant to," "believers are told to" → "the call is," "the imperative is," "the text commands."
+- "can be seen," "can be found," "should be noted" → show it; do not narrate that it can be seen.
+
+ACTIVE REWRITE METHOD: Ask "Who is doing what?" and make the doer the subject. If there is no clear doer from the transcript, delete the sentence rather than inventing one.
+
+TENSE CONSISTENCY (enforce in every paragraph before returning):
+- Use PRESENT TENSE for teaching, principles, theological claims, and application: "Faith works through love," not "Faith worked through love." "Paul argues," not "Paul argued."
+- Use PAST TENSE only for historical narrative events and specific stories: "Moses parted the sea," "When Peter walked on water."
+- Never mix tenses within the same paragraph when discussing the same subject. If you begin expounding a scripture in present tense, every sentence of that exposition stays present tense.
+- Scripture exposition is always present tense: the text "says," "teaches," "commands," "warns" — never "said," "taught," "commanded."
+- Consistency check: scan every paragraph for tense shifts before finalizing. A drift from present to past in the same paragraph is an error.
+
 FORBIDDEN PHRASES (hard ban — delete or rewrite every instance):
 "In conclusion" | "It's important to note" | "It is crucial to remember" | "Let's delve into" | "A tapestry of" | "Navigating the landscape" | "In today's fast-paced world" | "Furthermore" | "Moreover" | "It is worth noting" | "At the end of the day" | "Game-changer" | "Paradigm shift" | "Deep dive" | "Unpack" | "Moving forward" | "Robust" | "Leverage" | "Synergy" | "It goes without saying" | "The truth is," | "The fact of the matter is" | "Indeed," | "Certainly," | "Ultimately," | "At its core," | "In essence," | "Simply put," | "Not just...but" | "Not merely...but" | "This is not merely" | "profoundly" | "deeply meaningful" | "transformative" | "journey" (used metaphorically) | "vibrant" | "fostering" | "crucial" | "vital" (overused)
 
@@ -72,6 +92,15 @@ KEY TERM CONSISTENCY:
 - Identify the author's preferred term for key concepts from the Voice DNA preferredTerminology. Use that exact term throughout — never swap in a synonym for variety.
 - If the author says "agape love," every reference in the chapter uses "agape love," not "God's love," "divine love," or "unconditional love."
 - Inconsistent terminology is a mark of unpolished writing. Standardize on the author's own words.
+
+DIALOGUE AND CONVERSATION FORMATTING:
+When the author recounts a conversation, exchange, or paraphrased dialogue (including conversations with God, prayers, or interpersonal exchanges from the transcript), apply these formatting rules:
+
+- PARAPHRASED CONVERSATIONS: Keep them in flowing prose. Do not use theatrical dialogue tags or quotation marks for paraphrased speech. Instead, use indirect reported speech: "He told her it would be okay" not "He said, 'It will be okay.'"
+- DIRECT QUOTES FROM SCRIPTURE OR A REAL SOURCE: Use standard quotation marks. Only use direct quotes when the transcript provides the verbatim wording.
+- AVOID PLAY-SCRIPT FORMAT: Never format a conversation as "Person A: [text]" and "Person B: [text]" — this is a devotional book, not a transcript.
+- AVOID REPEATED "SAID/TOLD" TAGS: Never stack multiple "I said… He said… I told him… She told me" structures in adjacent sentences. Vary with action beats, indirect speech, and narrative transitions.
+- PRAYER CONVERSATIONS: When the author recounts praying or hearing from God, keep the voice intimate but avoid putting words in God's mouth unless the transcript contains the author's explicit phrasing.
 `;
 
 const AUDIENCE_PATTERNS = [

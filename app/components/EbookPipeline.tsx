@@ -138,15 +138,36 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
 async function streamSection(
   assignment: SectionAssignment,
   authorConfig?: { instructions: string; targetAudience: string }
-): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }> }> {
-  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }> }>(
+): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount: number; unfullfilledHook: string | null }> {
+  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount?: number; unfullfilledHook?: string | null }>(
     "/api/ebook/write-section", { assignment, ...(authorConfig ? { authorConfig } : {}) }
   );
-  return { body: (result.body ?? "").trim(), claimLedger: result.claimLedger ?? [] };
+  return {
+    body: (result.body ?? "").trim(),
+    claimLedger: result.claimLedger ?? [],
+    passiveVoiceCount: result.passiveVoiceCount ?? 0,
+    unfullfilledHook: result.unfullfilledHook ?? null,
+  };
 }
 
 function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+// ─── Upgrade 4 (writer): Illustration / story label extractor ────────────────
+// Scans written prose for story-opening sentences and returns short labels
+// (first 100 chars) so later sections can be told not to retell the same story.
+const STORY_OPENERS = /\b(when i was|i remember|there was a|let me tell you|i once|one day|a man named|a woman named|i met a|i spoke to|i was in|years ago|i had a|the story of|he told me|she told me|they told me|i saw a|i witnessed)\b/i;
+
+function extractIllustrationLabels(body: string): string[] {
+  const labels: string[] = [];
+  const sentences = body.replace(/^#{1,3} .+$/gm, "").split(/(?<=[.!?])\s+/).filter(Boolean);
+  for (const sentence of sentences) {
+    if (STORY_OPENERS.test(sentence)) {
+      labels.push(sentence.replace(/[#>*_]/g, "").trim().slice(0, 100));
+    }
+  }
+  return labels;
 }
 
 // ─── Upgrade 6: N-gram overlap dedup gate ────────────────────────────────────
@@ -588,10 +609,10 @@ function ChapterCard({
 
           {editable && (
             <div>
-              <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Chapter Conclusion</label>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Forward Question</label>
               <textarea
-                value={chapter.conclusion ?? ""}
-                onChange={(e) => patchChapter({ conclusion: e.target.value })}
+                value={chapter.forwardQuestion ?? ""}
+                onChange={(e) => patchChapter({ forwardQuestion: e.target.value })}
                 rows={4}
                 className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
               />
@@ -1296,7 +1317,7 @@ export function EbookPipeline({
     const chapterWords = manifest.chapters.reduce((sum, chapter) => {
       const chapterText = [
         chapter.intro ?? "",
-        chapter.conclusion ?? "",
+        chapter.forwardQuestion ?? "",
         ...(chapter.keyTakeaways ?? []),
         ...(chapter.reflectionQuestions ?? []),
       ].join(" ");
@@ -1576,7 +1597,7 @@ export function EbookPipeline({
     const chapters = fixArrays<Record<string, unknown>>(raw.chapters as unknown).map((c) => ({
       ...c,
       intro:               fixStr(c.intro),
-      conclusion:          fixStr(c.conclusion),
+      forwardQuestion:     fixStr(c.forwardQuestion),
       keyTakeaways:        fixArrays(c.keyTakeaways),
       reflectionQuestions: fixArrays(c.reflectionQuestions),
       sections: fixArrays<Record<string, unknown>>(c.sections).map((s) => ({
@@ -1985,7 +2006,7 @@ export function EbookPipeline({
             wordCount: 0,
             status: "pending" as const,
           })),
-          conclusion: "",
+          forwardQuestion: "",
           keyTakeaways: [],
           reflectionQuestions: [],
           totalWordCount: 0,
@@ -2098,6 +2119,15 @@ export function EbookPipeline({
       // reference rather than re-quote them.
       const usedQuoteRefs = new Set<string>(quotedVerseTextsByRef.keys());
 
+      // ── Upgrade 4 (writer): Illustration / story dedup tracker ───────────
+      // After each section is written, extract story-opening sentences and add
+      // them as dedup labels so later sections can't retell the same narrative.
+      const usedIllustrations = new Set<string>(
+        allSections
+          .map((s) => s.body ?? "")
+          .flatMap(extractIllustrationLabels)
+      );
+
       // ── Upgrade 6: Corpus of all written text for similarity gating ──────
       let writtenCorpus = allSections.map((s) => s.body ?? "").join("\n\n");
 
@@ -2161,6 +2191,10 @@ export function EbookPipeline({
           allowedInlineOnly,
           // S7: chapter premise anchor
           chapterPremise: (architecture.chapters.find((ch) => ch.number === assignment.chapterNumber) as { chapterPremise?: string } | undefined)?.chapterPremise ?? undefined,
+          // Upgrade 3: book thesis threading
+          coreThesis: contentMap.coreThesis || undefined,
+          // Upgrade 4: illustration dedup
+          usedIllustrations: Array.from(usedIllustrations),
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2178,7 +2212,7 @@ export function EbookPipeline({
           )
         );
 
-        let { body, claimLedger } = await streamSection(
+        let { body, claimLedger, passiveVoiceCount, unfullfilledHook } = await streamSection(
           augmented,
           (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
         );
@@ -2188,7 +2222,7 @@ export function EbookPipeline({
         if (wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
           addLog(`  ↺ Section too short (${wc} words) — retrying with expansion prompt…`);
           const expanded = { ...augmented, targetWordCount: Math.max(assignment.targetWordCount, 600) };
-          ({ body, claimLedger } = await streamSection(
+          ({ body, claimLedger, passiveVoiceCount, unfullfilledHook } = await streamSection(
             expanded,
             (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
           ));
@@ -2207,11 +2241,20 @@ export function EbookPipeline({
                   slice(0, 10),
               ],
             };
-            ({ body, claimLedger } = await streamSection(
+            ({ body, claimLedger, passiveVoiceCount, unfullfilledHook } = await streamSection(
               redraftExclusion,
               (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
             ));
           }
+        }
+
+        // ── Upgrade 8: Log passive voice hits ────────────────────────────
+        if (passiveVoiceCount > 0) {
+          addLog(`  ⚠ ${passiveVoiceCount} passive voice hit(s) in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
+        }
+        // ── Upgrade 12: Log unfulfilled hook ─────────────────────────────
+        if (unfullfilledHook) {
+          addLog(`  ⚠ Unfulfilled hook in Ch${assignment.chapterNumber} §${assignment.sectionNumber}: "${unfullfilledHook.slice(0, 80)}…"`);
         }
 
         const finalWc = countWords(body);
@@ -2229,6 +2272,11 @@ export function EbookPipeline({
 
         // ── Upgrade 6: Extend corpus for future similarity checks ─────────
         writtenCorpus += "\n\n" + body;
+
+        // ── Upgrade 4 (writer): Register new illustration labels ──────────
+        for (const label of extractIllustrationLabels(body ?? "")) {
+          usedIllustrations.add(label);
+        }
 
         // ── Upgrade 4: Register in current-chapter bucket ─────────────────
         // First sentence of every paragraph is the most reliable dedup signal.
@@ -2282,6 +2330,26 @@ export function EbookPipeline({
         await checkpoint("writing");
       }
 
+      // ── Upgrade 10: Chapter word-count normalization check ───────────────
+      // Flag chapters that are drastically shorter or longer than the mean —
+      // this is a pipeline signal only; the user is informed via the log.
+      {
+        const chapterWordCounts = acc.chapters.map((ch) => ({
+          number: ch.number,
+          title: ch.title,
+          wordCount: ch.sections.reduce((sum, s) => sum + countWords(s.body ?? ""), 0),
+        }));
+        const meanWords = chapterWordCounts.reduce((s, c) => s + c.wordCount, 0) / (chapterWordCounts.length || 1);
+        for (const ch of chapterWordCounts) {
+          const ratio = ch.wordCount / (meanWords || 1);
+          if (ratio < 0.4) {
+            addLog(`⚠ Chapter ${ch.number} "${ch.title}" is very short (${ch.wordCount.toLocaleString()} wds — ${Math.round(ratio * 100)}% of mean). Consider expanding.`);
+          } else if (ratio > 2.5) {
+            addLog(`⚠ Chapter ${ch.number} "${ch.title}" is very long (${ch.wordCount.toLocaleString()} wds — ${Math.round(ratio * 100)}% of mean). Consider splitting or trimming.`);
+          }
+        }
+      }
+
       // ── Stage 7: Polish chapters ─────────────────────────────────────────
       setStage("polishing");
       const completedChapterNums = new Set(
@@ -2313,8 +2381,8 @@ export function EbookPipeline({
             chapterSegmentTexts: [], // not used by the route; omit to reduce payload
             voiceDNA,
             quotesInChapter: (chapterBlueprint.quotesInChapter ?? []).slice(0, 8),
-            previousChapterConclusion: polishedChapters.length > 0
-              ? polishedChapters[polishedChapters.length - 1].conclusion
+            previousChapterForwardQuestion: polishedChapters.length > 0
+              ? polishedChapters[polishedChapters.length - 1].forwardQuestion
               : undefined,
             // U5: chapter premise line from architect — north-star for intro/conclusion
             chapterPremise: (chapterBlueprint as { chapterPremise?: string }).chapterPremise ?? undefined,
@@ -2341,6 +2409,11 @@ export function EbookPipeline({
           prev.map((ch) => (ch.number === chapterBlueprint.number ? fullPolished : ch))
         );
         addLog(`  ✓ Chapter ${chapterBlueprint.number} polished`);
+        // ── Upgrade 14: Log epigraph credibility warning ─────────────────
+        const polishedWithWarning = polished as ChapterDraft & { epigraphCredibilityWarning?: string };
+        if (polishedWithWarning.epigraphCredibilityWarning) {
+          addLog(`  ⚠ Epigraph Ch${chapterBlueprint.number}: ${polishedWithWarning.epigraphCredibilityWarning}`);
+        }
         acc.chapters = [...polishedChapters];
         await checkpoint("polishing");
       }
