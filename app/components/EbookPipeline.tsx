@@ -2862,6 +2862,72 @@ export function EbookPipeline({
               </div>
             </div>
 
+            {/* Back Matter — only shown when the back matter generation stage has completed */}
+            {completedManifest.backMatter && (
+              <div className="border-t border-slate-700/40 pt-4 space-y-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Back Matter</p>
+
+                {/* Glossary */}
+                {(completedManifest.backMatter.glossary?.length ?? 0) > 0 && (
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Glossary ({completedManifest.backMatter.glossary.length} terms)
+                    </label>
+                    <div className="space-y-2 max-h-56 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2">
+                      {completedManifest.backMatter.glossary.map((entry, i) => (
+                        <div key={i} className="border-b border-slate-800/60 pb-2 last:border-0 last:pb-0">
+                          <p className="text-xs font-semibold text-slate-200">{entry.term}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">{entry.definition}</p>
+                          <p className="text-[10px] text-slate-600 mt-0.5 italic">{entry.firstAppearance}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Reading Group Guide */}
+                {(completedManifest.backMatter.readingGroupGuide?.length ?? 0) > 0 && (
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Reading Group Guide ({completedManifest.backMatter.readingGroupGuide.length} chapters)
+                    </label>
+                    <div className="space-y-3 max-h-64 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2">
+                      {completedManifest.backMatter.readingGroupGuide.map((chapter, i) => (
+                        <div key={i} className="border-b border-slate-800/60 pb-3 last:border-0 last:pb-0">
+                          <p className="text-xs font-semibold text-slate-300 mb-1">
+                            Ch {chapter.chapterNumber}: {chapter.chapterTitle}
+                          </p>
+                          <ol className="list-decimal list-inside space-y-1">
+                            {chapter.questions.map((q, qi) => (
+                              <li key={qi} className="text-xs text-slate-400">{q}</li>
+                            ))}
+                          </ol>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Scripture Index */}
+                {(completedManifest.backMatter.scriptureIndex?.length ?? 0) > 0 && (
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Scripture Index ({completedManifest.backMatter.scriptureIndex.length} references)
+                    </label>
+                    <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 space-y-1">
+                      {completedManifest.backMatter.scriptureIndex.map((entry, i) => (
+                        <div key={i} className="flex items-start gap-2 text-xs">
+                          <span className="font-semibold text-slate-300 shrink-0">{entry.reference}</span>
+                          <span className="text-slate-500">({entry.translation})</span>
+                          <span className="text-slate-600 ml-auto shrink-0">Ch. {entry.chapters.join(", ")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Audit Results */}
             {(auditReport || auditRunning) && (
               <div className="border-t border-slate-700/40 pt-4 space-y-3">
