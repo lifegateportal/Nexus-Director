@@ -83,6 +83,30 @@ const RequestSchema = z.object({
 
 type ChapterInput = z.infer<typeof ChapterSchema>;
 type ReportInput = z.infer<typeof RequestSchema>["report"];
+type SectionFieldRef = "intro" | "conclusion" | { sectionNumber: number };
+
+type LLMTask = {
+  chapterIndex: number;
+  field: SectionFieldRef;
+  task: string;
+  heading: string;
+  body: string;
+  voiceDNA?: VoiceDNAType | null;
+};
+
+type RewrittenLocation = {
+  chapterIndex: number;
+  field: SectionFieldRef;
+};
+
+type TransitionTask = {
+  chapterIndex: number;
+  field: SectionFieldRef;
+  role: "preceding" | "following";
+  headingContext: string;
+  bodyToFix: string;
+  adjacentEdge: string;
+};
 
 // ─── Location parser ──────────────────────────────────────────────────────────
 
@@ -214,13 +238,16 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let index = 0;
-  const worker = async () => {
+  const runWorker = async (): Promise<void> => {
     while (index < items.length) {
       const i = index++;
       results[i] = await fn(items[i]);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  const slots = Math.min(limit, items.length);
+  const workers: Promise<void>[] = [];
+  for (let i = 0; i < slots; i++) workers.push(runWorker());
+  await Promise.all(workers);
   return results;
 }
 
@@ -228,29 +255,6 @@ async function mapWithConcurrency<T, R>(
 // After concept-duplicate removal, auto-patches the opening paragraph of the
 // immediately following section and closing paragraph of the preceding one so
 // the seam reads naturally without manual intervention.
-
-type LLMTask = {
-  chapterIndex: number;
-  field: "intro" | "conclusion" | { sectionNumber: number };
-  task: string;
-  heading: string;
-  body: string;
-  voiceDNA?: VoiceDNAType | null;
-};
-
-type RewrittenLocation = {
-  chapterIndex: number;
-  field: "intro" | "conclusion" | { sectionNumber: number };
-};
-
-type TransitionTask = {
-  chapterIndex: number;
-  field: "intro" | "conclusion" | { sectionNumber: number };
-  role: "preceding" | "following";
-  headingContext: string;
-  bodyToFix: string;
-  adjacentEdge: string;
-};
 
 async function repairTransitions(
   chapters: ChapterInput[],
