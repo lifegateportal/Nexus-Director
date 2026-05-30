@@ -9,7 +9,7 @@ type VoiceDNAType = z.infer<typeof VoiceDNASchema>;
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-// ─── Strategy ─────────────────────────────────────────────────────────────────
+// --- Strategy -----------------------------------------------------------------
 // Tier 1 (no LLM) — pure string manipulation, zero risk of unintended rewrites:
 //   r-N  repeated phrases  → replace 2nd+ occurrences with alternatives
 //   w-N  overused words    → replace every other occurrence with alternatives
@@ -21,7 +21,7 @@ export const maxDuration = 120;
 //
 // Sections that have NO applied findings are NEVER touched.
 
-// ─── Input Schemas ────────────────────────────────────────────────────────────
+// --- Input Schemas ------------------------------------------------------------
 
 const SectionSchema = z.object({
   sectionNumber: z.number(),
@@ -108,7 +108,7 @@ type TransitionTask = {
   adjacentEdge: string;
 };
 
-// ─── Location parser ──────────────────────────────────────────────────────────
+// --- Location parser ----------------------------------------------------------
 
 function parseLocation(loc: string): { chapterNum: number | null; sectionNum: number | null } {
   // Matches: "Chapter N", "Ch N", "Ch. N" (audit emits "Ch N § M: Heading")
@@ -121,7 +121,7 @@ function parseLocation(loc: string): { chapterNum: number | null; sectionNum: nu
   };
 }
 
-// ─── Tier 1 helpers — deterministic string fixes ──────────────────────────────
+// --- Tier 1 helpers — deterministic string fixes ------------------------------
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -174,7 +174,7 @@ function mapChapterText(
   };
 }
 
-// ─── Tier 2 helper — targeted single-section LLM rewrite ─────────────────────
+// --- Tier 2 helper — targeted single-section LLM rewrite ---------------------
 
 async function reviseSectionBody(
   heading: string,
@@ -392,7 +392,7 @@ async function repairTransitions(
   return updated;
 }
 
-// \u2500\u2500\u2500 Route Handler \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nexport async function POST(req: NextRequest) {
+// \u2500\u2500\u2500 Route Handler \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nexport const POST = async (req: NextRequest): Promise<Response> => {
   let body: unknown;
   try {
     body = await req.json();
@@ -417,7 +417,7 @@ async function repairTransitions(
     sections: c.sections.map((s) => ({ ...s })),
   }));
 
-  // ── Tier 1: Algorithmic fixes (no LLM, no risk of extra rewrites) ───────────
+  // -- Tier 1: Algorithmic fixes (no LLM, no risk of extra rewrites) -----------
 
   for (const key of appliedKeys) {
     if (key.startsWith("r-")) {
@@ -440,13 +440,13 @@ async function repairTransitions(
     }
   }
 
-  // ── Tier 2: Targeted LLM fixes — only the affected section is sent ───────────
+  // -- Tier 2: Targeted LLM fixes — only the affected section is sent -----------
 
   // Collect all LLM work items before running them
   const llmTasks: LLMTask[] = [];
 
   for (const key of appliedKeys) {
-    // ── Concept duplicates ───────────────────────────────────────────────────
+    // -- Concept duplicates ---------------------------------------------------
     if (key.startsWith("c-")) {
       const idx = parseInt(key.slice(2));
       const dup = report.conceptDuplicates[idx];
@@ -493,7 +493,7 @@ async function repairTransitions(
       }
     }
 
-    // ── Similar pairs ────────────────────────────────────────────────────────
+    // -- Similar pairs --------------------------------------------------------
     if (key.startsWith("p-")) {
       const idx = parseInt(key.slice(2));
       const pair = report.similarPairs[idx];
@@ -563,4 +563,4 @@ async function repairTransitions(
   }
 
   return NextResponse.json({ chapters }, { status: 200 });
-}
+};
