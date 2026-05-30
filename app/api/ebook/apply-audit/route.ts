@@ -110,6 +110,128 @@ type TransitionTask = {
 
 // --- Location parser ----------------------------------------------------------
 
+export async function POST(req: NextRequest) {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const parsed = RequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const { manifest, report, appliedKeys, voiceDNA } = parsed.data;
+
+  if (appliedKeys.length === 0) {
+    return NextResponse.json({ chapters: manifest.chapters }, { status: 200 });
+  }
+
+  let chapters: ChapterInput[] = manifest.chapters.map((c) => ({
+    ...c,
+    sections: c.sections.map((s) => ({ ...s })),
+  }));
+
+  for (const key of appliedKeys) {
+    if (key.startsWith("r-")) {
+      const idx = parseInt(key.slice(2));
+      const rep = report.repetitions[idx];
+      if (!rep || !rep.alternatives.length) continue;
+      chapters = chapters.map((ch) =>
+        mapChapterText(ch, (text) => applyPhraseVariation(text, rep.phrase, rep.alternatives)),
+      );
+    }
+    if (key.startsWith("w-")) {
+      const idx = parseInt(key.slice(2));
+      const ow = report.overusedWords[idx];
+      if (!ow || !ow.alternatives.length) continue;
+      chapters = chapters.map((ch) =>
+        mapChapterText(ch, (text) => applyWordVariation(text, ow.word, ow.alternatives)),
+      );
+    }
+  }
+
+  const llmTasks: LLMTask[] = [];
+
+  for (const key of appliedKeys) {
+    if (key.startsWith("c-")) {
+      const idx = parseInt(key.slice(2));
+      const dup = report.conceptDuplicates[idx];
+      if (!dup) continue;
+      for (const loc of dup.locations) {
+        const { chapterNum, sectionNum } = parseLocation(loc.location);
+        if (chapterNum === null) continue;
+        const chIdx = chapters.findIndex((c) => c.number === chapterNum);
+        if (chIdx === -1) continue;
+        const ch = chapters[chIdx];
+        if (sectionNum !== null) {
+          const sec = ch.sections.find((s) => s.sectionNumber === sectionNum);
+          if (!sec) continue;
+          llmTasks.push({ chapterIndex: chIdx, field: { sectionNumber: sectionNum }, task: `This section contains a concept duplicate: "${dup.title}". ${dup.recommendation}`, heading: sec.heading, body: sec.body, voiceDNA: voiceDNA ?? null });
+        } else if (loc.location.toLowerCase().includes("intro")) {
+          llmTasks.push({ chapterIndex: chIdx, field: "intro", task: `This intro contains a concept duplicate: "${dup.title}". ${dup.recommendation}`, heading: `Chapter ${ch.number} Introduction`, body: ch.intro, voiceDNA: voiceDNA ?? null });
+        } else if (loc.location.toLowerCase().includes("conclusion")) {
+          llmTasks.push({ chapterIndex: chIdx, field: "conclusion", task: `This conclusion contains a concept duplicate: "${dup.title}". ${dup.recommendation}`, heading: `Chapter ${ch.number} Conclusion`, body: ch.conclusion, voiceDNA: voiceDNA ?? null });
+        }
+      }
+    }
+    if (key.startsWith("p-")) {
+      const idx = parseInt(key.slice(2));
+      const pair = report.similarPairs[idx];
+      if (!pair) continue;
+      const locB = parseLocation(pair.locationB);
+      const locA = parseLocation(pair.locationA);
+      const targetLoc = locB.chapterNum !== null ? locB : locA;
+      const otherLoc = targetLoc === locB ? pair.locationA : pair.locationB;
+      if (targetLoc.chapterNum === null) continue;
+      const chIdx = chapters.findIndex((c) => c.number === targetLoc.chapterNum);
+      if (chIdx === -1) continue;
+      const ch = chapters[chIdx];
+      if (targetLoc.sectionNum !== null) {
+        const sec = ch.sections.find((s) => s.sectionNumber === targetLoc.sectionNum);
+        if (!sec) continue;
+        llmTasks.push({ chapterIndex: chIdx, field: { sectionNumber: targetLoc.sectionNum }, task: `This section has ${Math.round(pair.similarity * 100)}% content overlap with ${otherLoc}. Rewrite it to present a more distinct angle while preserving its core teaching point.`, heading: sec.heading, body: sec.body, voiceDNA: voiceDNA ?? null });
+      }
+    }
+  }
+
+  if (llmTasks.length > 0) {
+    const results = await mapWithConcurrency(llmTasks, 4, async (task) => ({
+      task,
+      revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
+    }));
+    for (const { task, revisedBody } of results) {
+      const ch = chapters[task.chapterIndex];
+      if (task.field === "intro") {
+        chapters[task.chapterIndex] = { ...ch, intro: revisedBody };
+      } else if (task.field === "conclusion") {
+        chapters[task.chapterIndex] = { ...ch, conclusion: revisedBody };
+      } else {
+        const secNum = (task.field as { sectionNumber: number }).sectionNumber;
+        chapters[task.chapterIndex] = {
+          ...ch,
+          sections: ch.sections.map((s) =>
+            s.sectionNumber === secNum
+              ? { ...s, body: revisedBody, wordCount: revisedBody.split(/\s+/).filter(Boolean).length }
+              : s,
+          ),
+        };
+      }
+    }
+    const rewrittenLocations: RewrittenLocation[] = results.map(({ task }) => ({
+      chapterIndex: task.chapterIndex,
+      field: task.field,
+    }));
+    chapters = await repairTransitions(chapters, rewrittenLocations, voiceDNA);
+  }
+
+  return NextResponse.json({ chapters }, { status: 200 });
+}
+
+// --- Helper functions (all hoisted - POST above can call them) -----------------
+
 function parseLocation(loc: string): { chapterNum: number | null; sectionNum: number | null } {
   // Matches: "Chapter N", "Ch N", "Ch. N" (audit emits "Ch N § M: Heading")
   const ch = /\bch(?:apter)?\.?\s+(\d+)/i.exec(loc);
@@ -391,176 +513,3 @@ async function repairTransitions(
 
   return updated;
 }
-
-// \u2500\u2500\u2500 Route Handler \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nexport const POST = async (req: NextRequest): Promise<Response> => {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const parsed = RequestSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
-  }
-
-  const { manifest, report, appliedKeys, voiceDNA } = parsed.data;
-
-  if (appliedKeys.length === 0) {
-    return NextResponse.json({ chapters: manifest.chapters }, { status: 200 });
-  }
-
-  // Deep clone chapters so we can mutate them safely
-  let chapters: ChapterInput[] = manifest.chapters.map((c) => ({
-    ...c,
-    sections: c.sections.map((s) => ({ ...s })),
-  }));
-
-  // -- Tier 1: Algorithmic fixes (no LLM, no risk of extra rewrites) -----------
-
-  for (const key of appliedKeys) {
-    if (key.startsWith("r-")) {
-      const idx = parseInt(key.slice(2));
-      const rep = report.repetitions[idx];
-      if (!rep || !rep.alternatives.length) continue;
-      // Apply globally across ALL chapters (repetition is a manuscript-wide stat)
-      chapters = chapters.map((ch) =>
-        mapChapterText(ch, (text) => applyPhraseVariation(text, rep.phrase, rep.alternatives)),
-      );
-    }
-
-    if (key.startsWith("w-")) {
-      const idx = parseInt(key.slice(2));
-      const ow = report.overusedWords[idx];
-      if (!ow || !ow.alternatives.length) continue;
-      chapters = chapters.map((ch) =>
-        mapChapterText(ch, (text) => applyWordVariation(text, ow.word, ow.alternatives)),
-      );
-    }
-  }
-
-  // -- Tier 2: Targeted LLM fixes — only the affected section is sent -----------
-
-  // Collect all LLM work items before running them
-  const llmTasks: LLMTask[] = [];
-
-  for (const key of appliedKeys) {
-    // -- Concept duplicates ---------------------------------------------------
-    if (key.startsWith("c-")) {
-      const idx = parseInt(key.slice(2));
-      const dup = report.conceptDuplicates[idx];
-      if (!dup) continue;
-
-      for (const loc of dup.locations) {
-        const { chapterNum, sectionNum } = parseLocation(loc.location);
-        if (chapterNum === null) continue;
-
-        const chIdx = chapters.findIndex((c) => c.number === chapterNum);
-        if (chIdx === -1) continue;
-        const ch = chapters[chIdx];
-
-        if (sectionNum !== null) {
-          const sec = ch.sections.find((s) => s.sectionNumber === sectionNum);
-          if (!sec) continue;
-          llmTasks.push({
-            chapterIndex: chIdx,
-            field: { sectionNumber: sectionNum },
-            task: `This section contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
-            heading: sec.heading,
-            body: sec.body,
-            voiceDNA: voiceDNA ?? null,
-          });
-        } else if (loc.location.toLowerCase().includes("intro")) {
-          llmTasks.push({
-            chapterIndex: chIdx,
-            field: "intro",
-            task: `This intro contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
-            heading: `Chapter ${ch.number} Introduction`,
-            body: ch.intro,
-            voiceDNA: voiceDNA ?? null,
-          });
-        } else if (loc.location.toLowerCase().includes("conclusion")) {
-          llmTasks.push({
-            chapterIndex: chIdx,
-            field: "conclusion",
-            task: `This conclusion contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
-            heading: `Chapter ${ch.number} Conclusion`,
-            body: ch.conclusion,
-            voiceDNA: voiceDNA ?? null,
-          });
-        }
-      }
-    }
-
-    // -- Similar pairs --------------------------------------------------------
-    if (key.startsWith("p-")) {
-      const idx = parseInt(key.slice(2));
-      const pair = report.similarPairs[idx];
-      if (!pair) continue;
-
-      // Rewrite the LATER location (B) to differentiate it from A
-      // If we can't parse B, fall back to A
-      const locB = parseLocation(pair.locationB);
-      const locA = parseLocation(pair.locationA);
-
-      const targetLoc = locB.chapterNum !== null ? locB : locA;
-      const otherLoc = targetLoc === locB ? pair.locationA : pair.locationB;
-
-      if (targetLoc.chapterNum === null) continue;
-      const chIdx = chapters.findIndex((c) => c.number === targetLoc.chapterNum);
-      if (chIdx === -1) continue;
-      const ch = chapters[chIdx];
-
-      if (targetLoc.sectionNum !== null) {
-        const sec = ch.sections.find((s) => s.sectionNumber === targetLoc.sectionNum);
-        if (!sec) continue;
-        llmTasks.push({
-          chapterIndex: chIdx,
-          field: { sectionNumber: targetLoc.sectionNum },
-          task: `This section has ${Math.round(pair.similarity * 100)}% content overlap with ${otherLoc}. Rewrite it to present a more distinct angle while preserving its core teaching point.`,
-          heading: sec.heading,
-          body: sec.body,
-          voiceDNA: voiceDNA ?? null,
-        });
-      }
-    }
-  }
-
-  // Run LLM tasks with concurrency limit (max 4 at a time)
-  if (llmTasks.length > 0) {
-    const results = await mapWithConcurrency(llmTasks, 4, async (task) => ({
-      task,
-      revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
-    }));
-
-    // Apply results back into the chapters array
-    for (const { task, revisedBody } of results) {
-      const ch = chapters[task.chapterIndex];
-      if (task.field === "intro") {
-        chapters[task.chapterIndex] = { ...ch, intro: revisedBody };
-      } else if (task.field === "conclusion") {
-        chapters[task.chapterIndex] = { ...ch, conclusion: revisedBody };
-      } else {
-        const secNum = (task.field as { sectionNumber: number }).sectionNumber;
-        chapters[task.chapterIndex] = {
-          ...ch,
-          sections: ch.sections.map((s) =>
-            s.sectionNumber === secNum
-              ? { ...s, body: revisedBody, wordCount: revisedBody.split(/\s+/).filter(Boolean).length }
-              : s,
-          ),
-        };
-      }
-    }
-
-    // Upgrade 7: patch transition seams in sections adjacent to any rewritten section
-    const rewrittenLocations: RewrittenLocation[] = results.map(({ task }) => ({
-      chapterIndex: task.chapterIndex,
-      field: task.field,
-    }));
-    chapters = await repairTransitions(chapters, rewrittenLocations, voiceDNA);
-  }
-
-  return NextResponse.json({ chapters }, { status: 200 });
-};
