@@ -460,34 +460,17 @@ function ChapterView({
         </blockquote>
       )}
 
-      {/* Premise line */}
-      {chapter.premiseLine && (
-        <p
-          data-pkey="premise"
-          style={{
-            ...hlBg("premise"),
-            textAlign:   "center",
-            fontStyle:   "italic",
-            fontWeight:  600,
-            color:       theme.heading,
-            fontSize:    "1.06em",
-            marginBottom: "3em",
-            cursor:       audioOpen ? "pointer" : undefined,
-          } as React.CSSProperties}
-        >
-          {chapter.premiseLine}
-        </p>
-      )}
-
-      {/* Chapter intro — italic hook paragraph(s) before body sections */}
+      {/* Chapter opener — consolidated premise + question, centered italic */}
       {chapter.intro && (
         <div
           data-pkey="intro"
           style={{
             ...hlBg("intro"),
+            textAlign:    "center",
             fontStyle:    "italic",
-            color:        theme.muted,
-            fontSize:     "1.03em",
+            fontWeight:   600,
+            color:        theme.heading,
+            fontSize:     "1.05em",
             lineHeight:   1.8,
             marginBottom: "3em",
             cursor:       audioOpen ? "pointer" : undefined,
@@ -525,13 +508,15 @@ function ChapterView({
         </section>
       ))}
 
-      {/* Conclusion */}
-      {chapter.conclusion && (
+      {/* Forward question — teaser pointing to next chapter */}
+      {chapter.forwardQuestion && (
         <section style={{ marginTop: "3em" }}>
           <div style={{ textAlign: "center", margin: "2.5em 0", color: theme.accent, letterSpacing: "0.5em", fontSize: "0.85em" }}>
             ✦ ✦ ✦
           </div>
-          {renderBody(chapter.conclusion, theme, false, annotations, "conc", audioParaKey, audioOpen)}
+          <p style={{ textAlign: "center", fontStyle: "italic", color: theme.muted, fontSize: "1.02em" }}>
+            {chapter.forwardQuestion}
+          </p>
         </section>
       )}
 

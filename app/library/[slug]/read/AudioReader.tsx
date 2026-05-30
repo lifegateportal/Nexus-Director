@@ -124,15 +124,15 @@ export function parseChapter(chapter: ChapterDraft): Segment[] {
   };
 
   pushSentences("chapter-title", `Chapter ${chapter.number}. ${chapter.title}.`, "title");
-  if (chapter.epigraph)    pushSentences("quote", chapter.epigraph, "epigraph");
-  if (chapter.premiseLine) pushSentences("body",  chapter.premiseLine, "premise");
+  if (chapter.epigraph)      pushSentences("quote", chapter.epigraph, "epigraph");
+  if (chapter.intro)         pushSentences("body",  chapter.intro,    "intro");
 
   for (let si = 0; si < chapter.sections.length; si++) {
     const section = chapter.sections[si];
     if (section.heading) pushSentences("heading", section.heading, `s${si}_h`);
     processBody(section.body, `s${si}`);
   }
-  if (chapter.conclusion) processBody(chapter.conclusion, "conc");
+  if (chapter.forwardQuestion) pushSentences("body", chapter.forwardQuestion, "fwd");
 
   return segs.filter(s => s.text.length > 0);
 }

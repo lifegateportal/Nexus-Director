@@ -16,7 +16,6 @@ const PolishOutputSchema = z.object({
   keyTakeaways: z.array(z.string()).default([]),
   reflectionQuestions: z.array(z.string()).default([]),
   epigraph: z.string().default(""),
-  premiseLine: z.string().default(""),
   // Upgrade 5: section boundary transitions
   sectionTransitions: z.array(z.object({
     sectionNumber: z.number(),
@@ -145,26 +144,25 @@ HUMANIZATION: Use contractions naturally. Avoid "not just...but", "not merely...
 
 Your tasks:
 1. EPIGRAPH: From the provided scripture candidates, pick the ONE most resonant opening quote for this chapter. Return it formatted as: "Quote text." — Reference (Translation). If no candidate strongly fits or none are provided, return an empty string. Never invent a quote.
-2. PREMISE LINE: Write ONE bold declarative sentence (not a question, not a list preview) stating what is at stake in this chapter. Read like a thesis, not a table of contents. Max 25 words. Drawn entirely from the chapter content.
-3. INTRO: ONE provocative question — the single north-star question this chapter answers. 1–2 sentences maximum.
-   The question must be sharp, specific to this chapter's content, and make the reader feel the stakes immediately.
-   WHAT IT IS: A short, pointed question (or question + one tight follow-on sentence) that makes the reader feel they must read this chapter to find the answer.
-   WHAT IT IS NOT: A summary. A framing paragraph. A list of topics. A restatement of the section content. A generic opener.
-   EXAMPLES OF WRONG: "In this chapter, we'll explore what it means to walk in faith and trust God with your future."
-   EXAMPLES OF RIGHT: "What do you do when God gives you a promise and then goes completely silent?" OR "Why do so many people pray and yet never seem to receive what they ask for?"
-   CRITICAL: Do NOT copy, quote, or paraphrase the opening sentences of Section 1.
-   CONNECTIVE TISSUE: If a "PREVIOUS CHAPTER FORWARD QUESTION" is provided, the intro question should feel like the answer beginning to form — as if the reader's unresolved tension from the last page is finally being addressed.
-4. FORWARD QUESTION: ONE sentence — a preemptive question that plants anticipation for where the book goes next.
+2. INTRO (CONSOLIDATED CHAPTER OPENER): Two sentences — no more, no less.
+   Sentence 1: ONE bold declarative statement — the north star thesis of this chapter. States what is at stake, what will be proven, or what the reader will discover. Present tense. Direct. Max 20 words.
+   Sentence 2: ONE provocative question that makes the reader feel the personal stakes and need to read on. Sharp, specific to this chapter's content — not generic.
+   The two sentences must work as a unit: the first declares, the second destabilizes. Together they are the door into the chapter.
+   WRONG: "In this chapter, we'll explore what it means to walk in faith. This is an important topic."
+   RIGHT: "Faith is not the absence of doubt — it is action taken despite it. So why do so many of us pray for more faith instead of just moving?"
+   CRITICAL: Do NOT copy the opening sentences of Section 1. Do NOT summarize the chapter contents.
+   CONNECTIVE TISSUE: If a "PREVIOUS CHAPTER FORWARD QUESTION" is provided, sentence 1 should feel like the answer beginning to form.
+3. FORWARD QUESTION: ONE sentence — a preemptive question that plants anticipation for where the book goes next.
    This is the last thing the reader sees before turning the page. It should feel like an open door, not a closed summary.
    It must point forward, not backward. Never restate what the chapter covered.
    WRONG: "We've seen how faith requires action." RIGHT: "But what happens when you've done everything right and nothing moves?"
    If this is the final chapter, write a question that sends the reader back into life with something unresolved and worth carrying.
-5. KEY TAKEAWAYS: 3–6 bullet statements taken VERBATIM or near-verbatim from the chapter content.
-6. REFLECTION QUESTIONS: 3–4 questions that are SPECIFIC, PERSONAL, and ACTIONABLE.
+4. KEY TAKEAWAYS: 3–6 bullet statements taken VERBATIM or near-verbatim from the chapter content.
+5. REFLECTION QUESTIONS: 3–4 questions that are SPECIFIC, PERSONAL, and ACTIONABLE.
    REQUIRED: Each question must reference a concrete claim, story, or scripture from this chapter.
    FORBIDDEN generic forms: "How does X shape the message?", "What is the main message?", "What should the reader carry forward?", "How can you apply this?".
    REQUIRED: Name the specific idea, then ask about its implication in the reader's real life. Example: "Peter says diligence is required, not passive waiting — where in your life are you waiting for God to act when He has already told you to move?"
-7. SECTION TRANSITIONS: Review the SECTION BOUNDARY data provided. For each boundary, evaluate whether the current ending sentence of section N creates genuine forward momentum into section N+1. If the handoff feels abrupt, mechanical, or summarizing, write a replacement last sentence for that section. Rules:
+6. SECTION TRANSITIONS: Review the SECTION BOUNDARY data provided. For each boundary, evaluate whether the current ending sentence of section N creates genuine forward momentum into section N+1. If the handoff feels abrupt, mechanical, or summarizing, write a replacement last sentence for that section. Rules:
    • The revised sentence must be drawn from section N's OWN content — never preview section N+1's ideas.
    • It must create forward tension via an unresolved question, an open implication, or a logical pull — not a summary.
    • If the existing ending is already strong (creates pull, avoids summarizing), return an empty string for that section — do NOT change it.
@@ -183,7 +181,7 @@ ${READER_NORMALIZATION_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}
 
 Respond with ONLY a valid JSON object — no markdown, no code blocks, no explanation:
-{"intro":"...","forwardQuestion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."],"epigraph":"...","premiseLine":"...","sectionTransitions":[{"sectionNumber":1,"revisedLastSentence":"..."}]}`,
+{"intro":"...","forwardQuestion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."],"epigraph":"...","sectionTransitions":[{"sectionNumber":1,"revisedLastSentence":"..."}]}`,
         prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}${epigraphCandidates ? `\n\nSCRIPTURE CANDIDATES FOR EPIGRAPH (pick the most resonant ONE, or return empty string if none fits):\n${epigraphCandidates}` : ""}${prevChapterBlock}${chapterPremiseBlock}${seriesArcBlock}${sectionBoundariesBlock}`,
       });
       const _jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -192,7 +190,7 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
       try {
         object = fallbackPolishOutput(chapter);
       } catch {
-        object = { intro: "", conclusion: "", keyTakeaways: [], reflectionQuestions: [] };
+        object = { intro: "", forwardQuestion: "", keyTakeaways: [], reflectionQuestions: [] };
       }
     }
 
@@ -233,7 +231,6 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
       keyTakeaways: (object.keyTakeaways ?? []).map((t) => stripAudienceLanguage(t)),
       reflectionQuestions: (object.reflectionQuestions ?? []).map((q) => stripAudienceLanguage(q)),
       epigraph: object.epigraph ?? "",
-      premiseLine: object.premiseLine ?? "",
       number: chapter.number,
       title: chapter.title,
       sections: patchedSections,

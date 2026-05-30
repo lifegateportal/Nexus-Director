@@ -185,9 +185,8 @@ export const ChapterPolishInputSchema = z.object({
 export const ChapterDraftSchema = z.object({
   number: z.number(),
   title: z.string().default(""),
-  intro: z.string().default(""),
+  intro: z.string().default(""),          // consolidated opener: bold premise + provocative question (2 sentences)
   epigraph: z.string().default(""),        // opening scripture/quote set before body text
-  premiseLine: z.string().default(""),    // one-sentence chapter hook between title and body
   sections: z.array(SectionDraftSchema),
   forwardQuestion: z.string().default(""),  // one-sentence preemptive question pointing to the next chapter
   keyTakeaways: z.array(z.string()).default([]),

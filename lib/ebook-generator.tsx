@@ -946,14 +946,10 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
     doc.moveDown(0.2);
   }
 
-  // Premise line (if present)
-  if (chapter.premiseLine) {
-    writeRichBody(doc, chapter.premiseLine, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true, align: "center" }, bodyFontSize);
-    doc.moveDown(0.2);
-  }
-
+  // Consolidated chapter opener: bold premise + provocative question
   if (chapter.intro) {
-    writeRichBody(doc, chapter.intro, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true }, bodyFontSize);
+    writeRichBody(doc, chapter.intro, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true, align: "center" }, bodyFontSize);
+    doc.moveDown(0.5);
   }
 
   let _firstSectionDone = false;
@@ -970,9 +966,9 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
     _firstSectionDone = true;
   }
 
-  if (chapter.conclusion) {
+  if (chapter.forwardQuestion) {
     writeDivider(doc, tpl);
-    writeRichBody(doc, chapter.conclusion, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
+    writeRichBody(doc, chapter.forwardQuestion, quotes, fonts, tpl, { italicFirstParagraph: true, noIndentFirstParagraph: true, align: "center" }, bodyFontSize);
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
@@ -1171,9 +1167,9 @@ function chapterToHtml(chapter: ChapterDraft, quotes: Quote[]): string {
     parts.push(quoteParagraphsToHtml(section.body ?? "", quotes));
   }
 
-  if (chapter.conclusion) {
+  if (chapter.forwardQuestion) {
     parts.push("<hr />");
-    parts.push(quoteParagraphsToHtml(chapter.conclusion, quotes));
+    parts.push(`<p class="chapter-forward-question">${escapeHtml(chapter.forwardQuestion)}</p>`);
   }
 
   if ((chapter.keyTakeaways ?? []).length > 0) {
@@ -1598,18 +1594,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       );
     }
 
-    // Premise line (if present)
-    if (chapter.premiseLine?.trim()) {
-      children.push(
-        new Paragraph({
-          children: parseRunsForDocx(applySmartTypography(chapter.premiseLine), bodyHalfPt, true),
-          alignment: AlignmentType.CENTER,
-          spacing: { after: paraSpacingAfter },
-        })
-      );
-    }
-
-    // Chapter intro — italic, scripture-aware
+    // Chapter intro — consolidated opener (premise + question), centered italic
     if (chapter.intro?.trim()) {
       normalizeParagraphBreaks(chapter.intro)
         .split(/\n{2,}/)
@@ -1619,7 +1604,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           children.push(
             new Paragraph({
               children: parseRunsForDocx(markInlineScriptureRefs(applySmartTypography(introPara)), bodyHalfPt, true),
-              alignment: bodyAlign,
+              alignment: AlignmentType.CENTER,
               spacing: { after: paraSpacingAfter },
             })
           );
@@ -1640,9 +1625,11 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       children.push(...textToStyledParagraphs(section.body, true));
     }
 
-    // Chapter conclusion
-    if (chapter.conclusion?.trim()) {
-      children.push(...textToStyledParagraphs(chapter.conclusion, true));
+    // Forward question — centered italic teaser at chapter end
+    if (chapter.forwardQuestion?.trim()) {
+      children.push(...textToStyledParagraphs(chapter.forwardQuestion, true).map((p) =>
+        Object.assign(p, { alignment: AlignmentType.CENTER })
+      ));
     }
 
     // Key Takeaways
