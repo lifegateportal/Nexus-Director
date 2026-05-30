@@ -118,6 +118,23 @@ export type AuditReport = {
   totalOverusedWords: number;
   totalStyleViolations: number;
   totalScriptureIssues: number;
+  // Upgrade 9: cross-chapter contradiction detection
+  contradictions: ContradictionIssue[];
+  totalContradictions: number;
+  // Upgrade 8: passive voice count aggregated across all sections
+  totalPassiveVoiceHits: number;
+};
+
+// ── Upgrade 9: Cross-chapter contradiction type ───────────────────────────────
+export type ContradictionIssue = {
+  type: "factual" | "theological" | "instructional" | "tonal";
+  description: string;       // What specifically contradicts what
+  locationA: string;         // e.g. "Ch 2 §1: Heading"
+  excerptA: string;          // 60-100 word excerpt showing claim A
+  locationB: string;         // e.g. "Ch 7 §3: Heading"
+  excerptB: string;          // 60-100 word excerpt showing claim B
+  severity: "minor" | "major";
+  recommendation: string;    // Concrete editorial fix
 };
 
 // ── Segment extraction ────────────────────────────────────────────────────────
@@ -581,6 +598,77 @@ Respond ONLY with valid JSON (no markdown fences, no commentary outside the JSON
   }
 }
 
+// ── Upgrade 9: Cross-chapter contradiction detection ─────────────────────────
+// Extracts key claims from each chapter and asks the LLM to identify cases where
+// one chapter's assertion directly conflicts with another chapter's assertion.
+
+async function runContradictionAudit(segments: SegmentMeta[]): Promise<ContradictionIssue[]> {
+  // Only cross-chapter — group by chapter and take the most content-rich sections
+  const byChapter = new Map<number, SegmentMeta[]>();
+  for (const seg of segments) {
+    if (!byChapter.has(seg.chapterNumber)) byChapter.set(seg.chapterNumber, []);
+    byChapter.get(seg.chapterNumber)!.push(seg);
+  }
+  if (byChapter.size < 2) return [];
+
+  // Build a compact claim index: chapter number + opening claim sentence from each section
+  const claimIndex = Array.from(byChapter.entries())
+    .map(([chNum, segs]) => {
+      const claims = segs.map((s) => {
+        const firstSentence = s.text.split(/(?<=[.!?])\s+/).filter(Boolean)[0] ?? "";
+        return `  [${s.location}]: "${firstSentence.slice(0, 160).trim()}"`;
+      }).join("\n");
+      return `Chapter ${chNum}:\n${claims}`;
+    })
+    .join("\n\n");
+
+  try {
+    const { text } = await generateText({
+      model: deepSeekReasonerModel,
+      maxTokens: 6000,
+      prompt: `You are a developmental editor checking a multi-chapter book manuscript for logical contradictions across chapters.
+
+A contradiction is when Chapter A asserts X and Chapter B asserts the logical opposite or a significantly incompatible claim about the same topic, scripture, principle, or instruction.
+
+TYPES of contradictions to flag:
+- FACTUAL: Ch 2 says "David wrote all the Psalms" and Ch 7 says "The Psalms were written by multiple authors."
+- THEOLOGICAL: Ch 1 teaches that healing is guaranteed by faith; Ch 4 implies suffering may be God's will.
+- INSTRUCTIONAL: Ch 3 says to pray before making decisions; Ch 8 says to act first and pray after.
+- TONAL: Ch 2 frames a concept with urgency and warning; Ch 6 treats the same concept as optional or casual.
+
+DO NOT flag:
+- Nuance and progression (where Ch 8 builds on and qualifies Ch 2 — this is development, not contradiction).
+- Different aspects of the same topic (talking about grace in Ch 2 and works in Ch 5 is not a contradiction if no direct claim conflicts).
+- Repetition (same idea said twice is not a contradiction).
+
+CHAPTER CLAIM INDEX:
+${claimIndex}
+
+Return ONLY valid JSON — no markdown fences:
+{
+  "contradictions": [
+    {
+      "type": "factual|theological|instructional|tonal",
+      "description": "What specifically contradicts what — name both claims explicitly",
+      "locationA": "exact location label",
+      "excerptA": "40-100 word excerpt showing claim A",
+      "locationB": "exact location label",
+      "excerptB": "40-100 word excerpt showing claim B",
+      "severity": "minor|major",
+      "recommendation": "Concrete editorial fix — e.g. qualify the claim in Ch 2, or add a bridging sentence in Ch 7"
+    }
+  ]
+}`,
+    });
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return [];
+    const parsed = JSON.parse(match[0]) as { contradictions?: ContradictionIssue[] };
+    return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
+  } catch {
+    return [];
+  }
+}
+
 // ── Route ─────────────────────────────────────────────────────────────────────
 
 const AuditRequestSchema = z.object({ manifest: EbookManifestSchema });
@@ -618,10 +706,11 @@ export async function POST(req: NextRequest) {
     // Layer 5: readability + pacing metrics (Upgrade 6)
     const readabilityMetrics = computeReadabilityMetrics(segments);
 
-    // Layer 6 + 7: LLM semantic audit + scripture audit run in parallel (Upgrades 4-orig + 5)
-    const [llm, scriptureIssues] = await Promise.all([
+    // Layer 6 + 7 + 8: LLM semantic audit, scripture audit, contradiction audit run in parallel
+    const [llm, scriptureIssues, contradictions] = await Promise.all([
       runSemanticAudit(segments, similarPairs, lexicalRepetitions, overusedWordsRaw),
       runScriptureAudit(segments),
+      runContradictionAudit(segments),
     ]);
 
     // Merge LLM amendments into lexical repetitions
@@ -643,12 +732,15 @@ export async function POST(req: NextRequest) {
       styleViolations,
       scriptureIssues,
       readabilityMetrics,
+      contradictions,
       totalConceptDuplicates: (llm.conceptDuplicates ?? []).length,
       totalSimilarPairs: similarPairs.length,
       totalRepetitionPhrases: repetitions.length,
       totalOverusedWords: overusedWords.length,
       totalStyleViolations: styleViolations.length,
       totalScriptureIssues: scriptureIssues.length,
+      totalContradictions: contradictions.length,
+      totalPassiveVoiceHits: 0, // populated client-side from write-section passiveVoiceCount aggregate
     };
 
     return NextResponse.json(report, { status: 200 });

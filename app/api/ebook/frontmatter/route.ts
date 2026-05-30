@@ -44,6 +44,20 @@ WHAT THE PREFACE MUST BE:
 - Grounded in what the author said about why this teaching matters, what prompted it, or what they hope it accomplishes.
 - Warm, personal, and purposeful — the author's own voice explaining what the reader is about to receive.
 
+OPENING SENTENCE — HARD PROHIBITION (the preface must NEVER begin with any of these patterns):
+- "There are moments in life when..."
+- "Every [pastor/leader/believer] knows..."
+- "What you hold in your hands..."
+- "The message you're about to read..."
+- "In the years I've spent..."
+- "Over the course of..."
+- "I believe that..."
+- "This book is about..."
+- "In this book, I want to..."
+- Any sentence that opens with a generic universal claim before establishing the author's specific story.
+
+The preface MUST open with something specific and concrete to this author's experience or this book's origin — a particular moment, a discovery, a tension the author felt — not a broad observation any author could make.
+
 HARD PROHIBITIONS — delete or rewrite every instance:
 - Any greeting to a crowd: "Good morning," "Welcome everyone," "Thank you for being here," "It's good to see you all."
 - Any acknowledgement of staff, choir, church workers, guests, or attendees.
