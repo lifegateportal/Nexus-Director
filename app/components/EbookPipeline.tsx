@@ -149,6 +149,43 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+// ─── Upgrade 6: N-gram overlap dedup gate ────────────────────────────────────
+
+function ngramTokens(text: string, n = 4): Set<string> {
+  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+  const grams = new Set<string>();
+  for (let i = 0; i <= words.length - n; i++) {
+    grams.add(words.slice(i, i + n).join(" "));
+  }
+  return grams;
+}
+
+function ngramOverlapRatio(a: string, b: string, n = 4): number {
+  const setA = ngramTokens(a, n);
+  const setB = ngramTokens(b, n);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let shared = 0;
+  for (const gram of setA) { if (setB.has(gram)) shared++; }
+  return shared / Math.min(setA.size, setB.size);
+}
+
+/** Returns sentences from newBody that overlap ≥ threshold with any sentence in corpus */
+function detectDuplicateSentences(
+  newBody: string,
+  corpus: string,
+  threshold = 0.70
+): string[] {
+  const corpusSentences = corpus.match(/[^.!?]+[.!?]+/g) ?? [];
+  const newSentences = newBody.match(/[^.!?]+[.!?]+/g) ?? [];
+  const flagged: string[] = [];
+  for (const ns of newSentences) {
+    if (ns.trim().split(/\s+/).length < 8) continue; // skip fragments
+    const hit = corpusSentences.some((cs) => ngramOverlapRatio(ns, cs) >= threshold);
+    if (hit) flagged.push(ns.trim());
+  }
+  return flagged;
+}
+
 // ─── Audio Upload Card ────────────────────────────────────────────────────────
 
 function AudioCard({
@@ -1974,24 +2011,71 @@ export function EbookPipeline({
         ? getLastSentence(allSections[allSections.length - 1].body ?? "")
         : "";
 
-      // Accumulate key points from already-completed sections so the writer
-      // knows what's already been covered and won't repeat those concepts.
-      // Section headings are the single strongest signal — always register them first.
-      const coveredKeyPoints: string[] = assignments
-        .filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
-        .flatMap((a) => [
-          // Heading first — most concise description of what that section covers
-          `[Section covered] Ch ${a.chapterNumber} §${a.sectionNumber}: ${a.heading}`,
-          ...(a.keyPoints ?? []),
-        ]);
+      // ── Upgrade 4: Chapter-bucketed covered-points ────────────────────────
+      // Current chapter entries are kept in full; completed chapters are compressed
+      // to one summary line each — guaranteeing intra-chapter dedup is perfect while
+      // keeping cross-chapter signal compact regardless of book length.
+      const coveredByChapter = new Map<number, string[]>(); // chapterNum → compressed summary lines
+      let coveredCurrentChapter: string[] = [];  // full entries for the chapter being written
+      let coveredCurrentChapterNum = -1;
+
+      // Seed from already-completed sections on resume
+      for (const a of assignments.filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))) {
+        const bucket = coveredByChapter.get(a.chapterNumber) ?? [];
+        bucket.push(`[Covered] Ch ${a.chapterNumber} §${a.sectionNumber}: ${a.heading}`);
+        coveredByChapter.set(a.chapterNumber, bucket);
+      }
+
+      // Flatten to the array the LLM receives — cross-chapter summaries + current-chapter full entries
+      function buildCoveredKeyPoints(currentChapterNum: number): string[] {
+        const crossChapter: string[] = [];
+        for (const [chNum, entries] of coveredByChapter.entries()) {
+          if (chNum !== currentChapterNum) {
+            crossChapter.push(`[Ch ${chNum} fully covered: ${entries.slice(0, 4).map((e) => e.replace(/^\[Covered\] Ch \d+ §\d+: /, "")).join(", ")}]`);
+          }
+        }
+        return [...crossChapter, ...coveredCurrentChapter];
+      }
+
+      // ── Upgrade 1: Transcript segment consumption registry ───────────────
+      // Once a section's source segments are written, mark them consumed so later
+      // sections receive filtered excerpts that exclude already-used material.
+      const consumedSegmentIds = new Set<string>(
+        assignments
+          .filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
+          .flatMap((a) => a.sourceSegmentIds ?? [])
+      );
+
+      // ── Upgrade 5: Canonical concept ownership map ───────────────────────
+      // Built once from architecture: concept/section heading → owning chapter number.
+      // Sent to write-section so the LLM knows which chapter owns each concept.
+      const conceptOwnershipMap: Record<string, number> = {};
+      for (const ch of architecture.chapters) {
+        for (const sec of ch.sections) {
+          conceptOwnershipMap[sec.heading] = ch.number;
+          for (const kp of sec.keyPoints ?? []) {
+            conceptOwnershipMap[kp] = ch.number;
+          }
+        }
+      }
+
+      // ── Upgrade 7: Tiered quote dedup ────────────────────────────────────
+      // Tier 1: forbiddenVerseTexts — hard ban on re-printing the full verse text.
+      // Tier 2: allowedInlineOnly — ref is allowed in a brief inline mention only.
+      const quotedVerseTextsByRef = new Map<string, string>(); // ref → full verse text
+      // Pre-seed from already-written sections on resume
+      for (const a of assignments.filter((aa) => completedSectionKeys.has(`${aa.chapterNumber}-${aa.sectionNumber}`))) {
+        for (const q of a.quotes ?? []) {
+          if (q.reference) quotedVerseTextsByRef.set(q.reference, q.text);
+        }
+      }
 
       // Track scripture/quote references already reproduced in full so later sections
       // reference rather than re-quote them.
-      const usedQuoteRefs = new Set<string>(
-        assignments
-          .filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
-          .flatMap((a) => (a.quotes ?? []).map((q) => q.reference).filter(Boolean))
-      );
+      const usedQuoteRefs = new Set<string>(quotedVerseTextsByRef.keys());
+
+      // ── Upgrade 6: Corpus of all written text for similarity gating ──────
+      let writtenCorpus = allSections.map((s) => s.body ?? "").join("\n\n");
 
       if (completedCount > 0) {
         addLog(`↩ Resuming — ${completedCount} sections already written, continuing from section ${completedCount + 1}`);
@@ -2007,16 +2091,50 @@ export function EbookPipeline({
         const isLastSectionInChapter = nextAssignment
           ? nextAssignment.chapterNumber !== assignment.chapterNumber
           : true; // last section of the whole book is also a chapter-closer
+
+        // ── Upgrade 4: Rotate chapter bucket when we enter a new chapter ──
+        if (assignment.chapterNumber !== coveredCurrentChapterNum) {
+          if (coveredCurrentChapterNum !== -1 && coveredCurrentChapter.length > 0) {
+            // Compress finished chapter to a summary line
+            const existing = coveredByChapter.get(coveredCurrentChapterNum) ?? [];
+            coveredByChapter.set(coveredCurrentChapterNum, [...existing, ...coveredCurrentChapter.slice(0, 8)]);
+          }
+          coveredCurrentChapter = [];
+          coveredCurrentChapterNum = assignment.chapterNumber;
+        }
+
+        // ── Upgrade 1: Filter excerpts whose source segments are consumed ──
+        const filteredExcerpts = (assignment.transcriptExcerpts ?? []).filter((_, idx) => {
+          const segId = (assignment.sourceSegmentIds ?? [])[idx];
+          return !segId || !consumedSegmentIds.has(segId);
+        });
+        const partiallyConsumed = filteredExcerpts.length < (assignment.transcriptExcerpts ?? []).length;
+        if (partiallyConsumed) {
+          addLog(`  ⚡ Upgrade 1: ${(assignment.transcriptExcerpts ?? []).length - filteredExcerpts.length} consumed excerpts stripped for §${assignment.sectionNumber}`);
+        }
+
+        // ── Upgrade 7: Build tiered quote dedup arrays ───────────────────
+        const forbiddenVerseTexts = Array.from(quotedVerseTextsByRef.values()).filter(Boolean);
+        const allowedInlineOnly = Array.from(usedQuoteRefs);
+
         const augmented: SectionAssignment = {
           ...assignment,
+          transcriptExcerpts: filteredExcerpts.length > 0 ? filteredExcerpts : assignment.transcriptExcerpts,
           previousSectionEnding: previousEnding,
           nextSectionHeading: nextAssignment?.heading,
-          alreadyCoveredPoints: [...coveredKeyPoints],
+          alreadyCoveredPoints: buildCoveredKeyPoints(assignment.chapterNumber),
           alreadyQuotedRefs: [...usedQuoteRefs],
           isLastSectionInChapter,
           nextChapterTitle: isLastSectionInChapter && nextAssignment
             ? nextAssignment.chapterTitle
             : undefined,
+          // Upgrade 1: consumed segment registry
+          consumedSegmentIds: Array.from(consumedSegmentIds),
+          // Upgrade 5: concept ownership map
+          conceptOwnershipMap,
+          // Upgrade 7: tiered quote dedup
+          forbiddenVerseTexts,
+          allowedInlineOnly,
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2050,6 +2168,26 @@ export function EbookPipeline({
           ));
         }
 
+        // ── Upgrade 6: Post-write n-gram similarity gate ──────────────────
+        if (writtenCorpus.length > 200) {
+          const dupSentences = detectDuplicateSentences(body, writtenCorpus, 0.70);
+          if (dupSentences.length > 0) {
+            addLog(`  ↺ Upgrade 6: ${dupSentences.length} duplicate sentence(s) detected — redrafting with explicit exclusion…`);
+            const redraftExclusion: SectionAssignment = {
+              ...augmented,
+              alreadyCoveredPoints: [
+                ...buildCoveredKeyPoints(assignment.chapterNumber),
+                ...dupSentences.map((s) => `[EXACT DUPLICATE — DO NOT REPRODUCE]: "${s.slice(0, 120)}"`).
+                  slice(0, 10),
+              ],
+            };
+            ({ body, claimLedger } = await streamSection(
+              redraftExclusion,
+              (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
+            ));
+          }
+        }
+
         const finalWc = countWords(body);
         const draft: SectionDraft = {
           chapterNumber: assignment.chapterNumber,
@@ -2063,27 +2201,38 @@ export function EbookPipeline({
         completedCount++;
         previousEnding = getLastSentence(body ?? "");
 
-        // Permanent dedup: accumulate the first sentence of EVERY paragraph (not just
-        // the first 3) so middle-of-chapter stories and illustrations are also registered
-        // as covered territory — preventing the same anecdote appearing in later sections.
+        // ── Upgrade 6: Extend corpus for future similarity checks ─────────
+        writtenCorpus += "\n\n" + body;
+
+        // ── Upgrade 4: Register in current-chapter bucket ─────────────────
+        // First sentence of every paragraph is the most reliable dedup signal.
         const allParagraphTopics = (body ?? "")
           .split(/\n{2,}/)
           .map((p) => p.replace(/^[>\s#*\-]+/, "").split(/(?<=[.!?])\s+/)[0]?.trim())
           .filter((s): s is string => Boolean(s) && s.length > 20);
-        coveredKeyPoints.push(
-          // Section heading — always the first and most authoritative signal
+        coveredCurrentChapter.push(
           `[Section covered] Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${assignment.heading}`,
           ...(assignment.keyPoints ?? []),
           ...(claimLedger ?? []).map((c) => c.claim).filter(Boolean),
           ...allParagraphTopics,
         );
-        // Cap at 60 most-recent entries to prevent prompt token bloat across long books
-        if (coveredKeyPoints.length > 60) {
-          coveredKeyPoints.splice(0, coveredKeyPoints.length - 60);
+        // Cap the current-chapter bucket at 80 entries (full fidelity within chapter)
+        if (coveredCurrentChapter.length > 80) {
+          coveredCurrentChapter.splice(0, coveredCurrentChapter.length - 80);
         }
+
+        // ── Upgrade 1: Mark source segments as consumed ───────────────────
+        for (const segId of assignment.sourceSegmentIds ?? []) {
+          consumedSegmentIds.add(segId);
+        }
+
+        // ── Upgrade 7: Register quoted verse texts ────────────────────────
         // Register every quote ref from this section so future sections reference-only
         for (const q of assignment.quotes ?? []) {
-          if (q.reference) usedQuoteRefs.add(q.reference);
+          if (q.reference) {
+            usedQuoteRefs.add(q.reference);
+            if (q.text) quotedVerseTextsByRef.set(q.reference, q.text);
+          }
         }
 
         // Update UI

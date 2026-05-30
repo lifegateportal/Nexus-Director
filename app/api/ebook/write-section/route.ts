@@ -40,6 +40,52 @@ function normalizeReaderFacingProse(text: string): string {
     .trim();
 }
 
+// ── Upgrade 2: Server-side n-gram excerpt dedup ────────────────────────────
+// Strips excerpts whose content is substantially covered by already-covered points
+// before the LLM ever receives them, removing the root-cause material.
+
+function extractNgrams(text: string, n = 4): Set<string> {
+  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+  const grams = new Set<string>();
+  for (let i = 0; i <= words.length - n; i++) {
+    grams.add(words.slice(i, i + n).join(" "));
+  }
+  return grams;
+}
+
+function excerptOverlapWithCoveredContent(excerpt: string, coveredText: string, n = 4): number {
+  const excerptGrams = extractNgrams(excerpt, n);
+  const coveredGrams = extractNgrams(coveredText, n);
+  if (excerptGrams.size === 0) return 0;
+  let shared = 0;
+  for (const g of excerptGrams) { if (coveredGrams.has(g)) shared++; }
+  return shared / excerptGrams.size;
+}
+
+function filterConsumedExcerpts(
+  excerpts: string[],
+  alreadyCoveredPoints: string[],
+  threshold = 0.55
+): { filtered: string[]; removedCount: number } {
+  if (alreadyCoveredPoints.length === 0) return { filtered: excerpts, removedCount: 0 };
+  const coveredText = alreadyCoveredPoints.join(" ");
+  const filtered: string[] = [];
+  let removedCount = 0;
+  for (const excerpt of excerpts) {
+    const wordCount = excerpt.trim().split(/\s+/).length;
+    // Only run dedup on substantial excerpts; short ones pass through
+    if (wordCount < 40) { filtered.push(excerpt); continue; }
+    const overlap = excerptOverlapWithCoveredContent(excerpt, coveredText);
+    if (overlap >= threshold) {
+      removedCount++;
+    } else {
+      filtered.push(excerpt);
+    }
+  }
+  // Always keep at least one excerpt so the section has source material
+  return { filtered: filtered.length > 0 ? filtered : excerpts.slice(0, 1), removedCount };
+}
+
 const EDITORIAL_SYSTEM = `# ROLE AND OBJECTIVE
 You are an elite, New York Times-bestselling ghostwriter and developmental editor. Your task is to synthesize raw, unstructured audio transcripts into a highly polished, premium book chapter.
 
@@ -171,7 +217,17 @@ export async function POST(req: NextRequest) {
 AUTHOR BOOK CONFIGURATION (highest priority)
 ════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}`
     : "";
-  const excerptBlock = assignment.transcriptExcerpts
+
+  // ── Upgrade 2: Server-side excerpt dedup ────────────────────────────────
+  // Strip excerpts that are substantially covered by alreadyCoveredPoints before
+  // the LLM sees them. This removes root-cause material — not just an instruction.
+  const { filtered: dedupedExcerpts, removedCount: excerptRemovedCount } = filterConsumedExcerpts(
+    assignment.transcriptExcerpts,
+    assignment.alreadyCoveredPoints ?? []
+  );
+  const effectiveExcerpts = excerptRemovedCount > 0 ? dedupedExcerpts : assignment.transcriptExcerpts;
+
+  const excerptBlock = effectiveExcerpts
     .map((t, i) => `[EXCERPT ${i + 1}]\n${t}`)
     .join("\n\n---\n\n");
 
@@ -189,13 +245,46 @@ AUTHOR BOOK CONFIGURATION (highest priority)
     ? `\nSECTION BRIDGE: The previous section ended with this sentence: "${assignment.previousSectionEnding}" — if the opening of this section benefits from it, write ONE brief connecting sentence that picks up the thread naturally. Do NOT repeat, recap, paraphrase, or expand on that ending. One sentence maximum — then move immediately into this section's own content.`
     : "";
 
-  const alreadyQuotedBlock = (assignment.alreadyQuotedRefs ?? []).length > 0
-    ? `\n\n════════════════════════════════════════════\nSCRIPTURES ALREADY QUOTED IN FULL — DO NOT REPRODUCE\n════════════════════════════════════════════\nThe following scripture and quote references have ALREADY been reproduced verbatim in earlier sections of this book. You MUST NOT quote them in full again. Instead, reference them briefly inline — e.g. "as Paul wrote in 1 Corinthians 12:31" or "returning to Isaiah 55:8". Never re-print the verse text:\n${(assignment.alreadyQuotedRefs ?? []).map((r) => `• ${r}`).join("\n")}`
+  // ── Upgrade 7: Tiered quote dedup — structured hard-ban blocks ──────────
+  // Tier 1: forbiddenVerseTexts — the EXACT verse texts are listed so the LLM
+  // cannot accidentally re-print them even with different framing.
+  // Tier 2: allowedInlineOnly — refs that may only appear as brief inline mentions.
+  const forbiddenVerseTextsBlock = (assignment.forbiddenVerseTexts ?? []).length > 0
+    ? `\n\n════════════════════════════════════════════
+FORBIDDEN VERSE TEXTS — DO NOT PRINT (HARD BAN)
+════════════════════════════════════════════
+The following verse texts have ALREADY BEEN REPRODUCED IN FULL in an earlier section of this book. You are ABSOLUTELY FORBIDDEN from printing them again — not one word of the verse, not a paraphrase, not a near-quote. If you reference the scripture at all, use ONLY its citation inline (e.g. "as John 3:16 states"). Never reprint the text:
+${(assignment.forbiddenVerseTexts ?? []).map((t) => `• "${t.slice(0, 120)}${t.length > 120 ? "..." : ""}"`).join("\n")}`
     : "";
+
+  const allowedInlineOnlyBlock = (assignment.allowedInlineOnly ?? []).length > 0
+    ? `\n\n════════════════════════════════════════════
+SCRIPTURES ALLOWED INLINE ONLY (NO FULL QUOTE)
+════════════════════════════════════════════
+The following references have already been quoted in full earlier. You may reference them briefly inline ONLY — never re-print the verse text:
+${(assignment.allowedInlineOnly ?? []).map((r) => `• ${r}`).join("\n")}`
+    : "";
+
+  const alreadyQuotedBlock = forbiddenVerseTextsBlock + allowedInlineOnlyBlock;
 
   // coveredBlock is intentionally empty here — the dedup constraint is injected into
   // the system prompt (deduplicatedSystem, below) where it carries maximum LLM weight.
   const coveredBlock = "";
+
+  // ── Upgrade 5: Concept ownership map block ──────────────────────────────
+  // Structured JSON listing which chapter owns each concept so the LLM knows
+  // what belongs here vs. what belongs to a different chapter.
+  const conceptOwnershipMap = assignment.conceptOwnershipMap ?? {};
+  const foreignConcepts = Object.entries(conceptOwnershipMap)
+    .filter(([, chNum]) => chNum !== assignment.chapterNumber)
+    .slice(0, 30); // cap to avoid prompt bloat
+  const conceptOwnershipBlock = foreignConcepts.length > 0
+    ? `\n\n════════════════════════════════════════════
+CONCEPT OWNERSHIP — WRITE ONLY CHAPTER ${assignment.chapterNumber}'S OWN CONTENT
+════════════════════════════════════════════
+The following concepts, section headings, and key points are OWNED BY OTHER CHAPTERS. Do NOT develop, introduce, or reference any of them in this section — not even as context-setting:
+${foreignConcepts.map(([concept, chNum]) => `• Ch ${chNum} owns: "${concept}"`).join("\n")}`
+    : "";
 
   const nextSectionBlock = assignment.nextSectionHeading
     ? `\nFORWARD BRIDGE — STRICT LIMITS: The final sentence of this section may create forward reading momentum, but ONLY through an unresolved question, an open tension, or a logical implication that arises naturally from THIS section's own content. The next section is titled "${assignment.nextSectionHeading}" — use this ONLY as directional context for tone. You MUST NOT:
@@ -232,6 +321,7 @@ HARD RULES for this section's close:
 CHAPTER ${assignment.chapterNumber}: ${assignment.chapterTitle}
 SECTION ${assignment.sectionNumber}: ${assignment.heading}
 TARGET WORD COUNT: ${assignment.targetWordCount} words (determined by available content — write what the transcript provides, no padding)
+${excerptRemovedCount > 0 ? `NOTE: ${excerptRemovedCount} excerpt(s) were pre-filtered as already-covered — write ONLY from the excerpts provided below.` : ""}
 
 KEY POINTS TO COVER (all from the transcript — include every one):
 ${assignment.keyPoints.map((kp) => `• ${kp}`).join("\n")}
@@ -241,6 +331,7 @@ ${coveredBlock}
 ${nextSectionBlock}
 ${chapterClosingBlock}
 ${hookBlock}
+${conceptOwnershipBlock}
 
 TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
@@ -304,7 +395,22 @@ ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}`,
         prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}${assignment.nextSectionHeading ? `\nNEXT SECTION (do NOT plan paragraphs about this): "${assignment.nextSectionHeading}"` : ""}${assignment.isLastSectionInChapter && assignment.nextChapterTitle ? `\nCHAPTER BOUNDARY: This is the LAST section of Chapter ${assignment.chapterNumber}. The next chapter is titled "${assignment.nextChapterTitle}". Do NOT plan any paragraph that introduces or develops content from that next chapter. If an excerpt transitions into the next chapter's opening topic, stop planning before that line.` : ""}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
       });
-      paragraphPlan = plan.paragraphPlan ?? [];
+
+      // ── Upgrade 3: Planner prune pass ────────────────────────────────────
+      // Remove any planned paragraph whose stated purpose n-gram-overlaps heavily
+      // with already-covered content. This is a structural guard — the dedup
+      // constraint is enforced before the writer even sees the plan.
+      const coveredPointsText = (assignment.alreadyCoveredPoints ?? []).join(" ");
+      const prunedPlan = (plan.paragraphPlan ?? []).filter((entry) => {
+        if (!entry.purpose || coveredPointsText.length < 50) return true;
+        const purposeWords = entry.purpose.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+        const coveredWords = new Set(coveredPointsText.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/));
+        if (purposeWords.length < 4) return true;
+        const matchCount = purposeWords.filter((w) => coveredWords.has(w) && w.length > 4).length;
+        const overlap = matchCount / purposeWords.length;
+        return overlap < 0.65; // prune if >65% of meaningful purpose words are in covered content
+      });
+      paragraphPlan = prunedPlan.length > 0 ? prunedPlan : (plan.paragraphPlan ?? []);
     } catch {
       paragraphPlan = [];
     }

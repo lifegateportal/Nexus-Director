@@ -119,6 +119,14 @@ export const SectionAssignmentSchema = z.object({
   alreadyQuotedRefs: z.array(z.string()).default([]),   // scripture/quote references already reproduced in full — reference only, do not quote again
   isLastSectionInChapter: z.boolean().optional(),       // true when this section closes the chapter — enables hard chapter boundary enforcement
   nextChapterTitle: z.string().optional(),              // title of the next chapter — writer must not begin developing its theme
+  // ── Upgrade 1: Transcript segment locking ────────────────────────────────
+  sourceSegmentIds: z.array(z.string()).default([]),    // content segment IDs that feed this section
+  consumedSegmentIds: z.array(z.string()).default([]),  // segment IDs fully consumed by earlier sections — excerpts filtered before reaching LLM
+  // ── Upgrade 5: Canonical concept ownership map ───────────────────────────
+  conceptOwnershipMap: z.record(z.string(), z.number()).default({}), // concept label → chapter number that owns it
+  // ── Upgrade 7: Tiered quote dedup ────────────────────────────────────────
+  forbiddenVerseTexts: z.array(z.string()).default([]), // exact verse texts already quoted in full — hard ban on re-printing
+  allowedInlineOnly: z.array(z.string()).default([]),   // refs where only a brief inline mention is allowed (no full re-quote)
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────

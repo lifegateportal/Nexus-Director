@@ -41,6 +41,8 @@ export async function POST(req: NextRequest) {
           voiceDNA: input.voiceDNA,
           previousSectionEnding: "", // filled in at write time by the pipeline client
           targetWordCount: section.targetWordCount,
+          // Upgrade 1: carry stable segment IDs so the pipeline can track consumption
+          sourceSegmentIds: section.sourceSegmentIds,
         };
       })
     );
