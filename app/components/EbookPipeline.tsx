@@ -18,6 +18,7 @@ import type {
   SectionDraft,
   ChapterDraft,
   FrontBackMatter,
+  BackMatter,
   EbookJobState,
   EbookManifest,
 } from "@/lib/schemas/ebook";
@@ -2465,6 +2466,21 @@ export function EbookPipeline({
       harmonizedManifest.totalWordCount = harmonizedTotal;
       setTotalWords(harmonizedTotal);
       addLog("✓ Harmonization pass complete — removed non-book phrasing and normalized chapter flow");
+
+      // ── Back Matter: glossary, reading group guide, scripture index ─────
+      addLog("Generating back matter (glossary, discussion guide, scripture index)…");
+      try {
+        const backMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: harmonizedManifest });
+        harmonizedManifest.backMatter = backMatter;
+        acc.backMatter = backMatter;
+        await checkpoint("complete");
+        const glossaryCount = backMatter.glossary?.length ?? 0;
+        const guideCount = backMatter.readingGroupGuide?.length ?? 0;
+        const scriptureCount = backMatter.scriptureIndex?.length ?? 0;
+        addLog(`✓ Back matter complete — ${glossaryCount} glossary terms, ${guideCount} chapter guides, ${scriptureCount} scripture references`);
+      } catch (bmErr) {
+        addLog(`⚠ Back matter generation failed — continuing without it: ${bmErr instanceof Error ? bmErr.message : String(bmErr)}`);
+      }
 
       // ── Quality Gate: fidelity + premium presentation checks ───────────
       addLog("Running quality review…");

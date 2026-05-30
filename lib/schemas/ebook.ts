@@ -206,6 +206,29 @@ export const FrontBackMatterSchema = z.object({
   scriptureIndex: z.array(z.string()).default([]), // sorted list of all scripture references used
 });
 
+// ─── Back Matter (generated separately after manuscript is complete) ──────────
+
+export const BackMatterSchema = z.object({
+  scriptureIndex: z.array(z.object({
+    reference: z.string(),
+    translation: z.string(),
+    chapters: z.array(z.number()),
+  })).default([]),
+  glossary: z.array(z.object({
+    term: z.string(),
+    definition: z.string(),
+    firstAppearance: z.string(),
+  })).default([]),
+  readingGroupGuide: z.array(z.object({
+    chapterNumber: z.number(),
+    chapterTitle: z.string(),
+    questions: z.array(z.string()),
+  })).default([]),
+  recommendedResources: z.array(z.string()).default([]),
+});
+
+export type BackMatter = z.infer<typeof BackMatterSchema>;
+
 // ─── Full Ebook Manifest ──────────────────────────────────────────────────────
 
 export const BOOK_TEMPLATE_IDS = [
@@ -247,6 +270,8 @@ export const EbookManifestSchema = z.object({
   authorImageUrl: z.string().url().optional().nullable(),
   /** Voice DNA captured during the pipeline — threaded into audit + apply-audit for voice fidelity */
   voiceDNA: VoiceDNASchema.optional().nullable(),
+  /** Back matter: glossary, reading group guide, scripture index, recommended resources */
+  backMatter: BackMatterSchema.optional().nullable(),
 });
 
 // ─── Job State (IndexedDB persistence) ───────────────────────────────────────
@@ -272,6 +297,7 @@ export const EbookJobStateSchema = z.object({
   sections: z.array(SectionDraftSchema).default([]),
   chapters: z.array(ChapterDraftSchema).default([]),
   frontMatter: FrontBackMatterSchema.nullable().default(null),
+  backMatter: BackMatterSchema.nullable().default(null),
   exportUrls: z.object({ pdfUrl: z.string(), epubUrl: z.string(), docxUrl: z.string() }).partial().nullable().default(null),
   currentStage: z.string().default(""),
   progress: z.object({ total: z.number(), completed: z.number() }).default({ total: 0, completed: 0 }),

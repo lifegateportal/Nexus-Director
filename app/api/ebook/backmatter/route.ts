@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
-import { EbookManifestSchema } from "@/lib/schemas/ebook";
+import { EbookManifestSchema, BackMatterSchema } from "@/lib/schemas/ebook";
+import type { BackMatter } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
@@ -14,40 +15,9 @@ const BackMatterRequestSchema = z.object({
   manifest: EbookManifestSchema,
 });
 
-// ─── Output schemas ───────────────────────────────────────────────────────────
-
-const GlossaryEntrySchema = z.object({
-  term: z.string(),
-  definition: z.string().describe("2–3 sentences. Drawn from how the author uses and defines the term in the book. Never add external theology."),
-  firstAppearance: z.string().describe("Chapter and section where the term first appears, e.g. 'Ch 2, §1'"),
-});
-
-const DiscussionQuestionSchema = z.object({
-  chapterNumber: z.number(),
-  chapterTitle: z.string(),
-  questions: z.array(z.string()).min(3).max(7),
-});
-
-const BackMatterSchema = z.object({
-  // Sorted scripture index — every verse cited anywhere in the book
-  scriptureIndex: z.array(z.object({
-    reference: z.string(),           // e.g. "John 3:16 (NIV)"
-    translation: z.string(),
-    chapters: z.array(z.number()),   // chapter numbers where it appears
-  })).default([]),
-  // Glossary of the author's key terms with author-faithful definitions
-  glossary: z.array(GlossaryEntrySchema).default([]),
-  // Reading group / discussion guide — 3–7 questions per chapter
-  readingGroupGuide: z.array(DiscussionQuestionSchema).default([]),
-  // Recommended resources mentioned in the book (scripture passages, other books, etc.)
-  recommendedResources: z.array(z.string()).default([]),
-});
-
-export type BackMatter = z.infer<typeof BackMatterSchema>;
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function buildScriptureIndex(manifest: z.infer<typeof EbookManifestSchema>): z.infer<typeof BackMatterSchema>["scriptureIndex"] {
+function buildScriptureIndex(manifest: z.infer<typeof EbookManifestSchema>): BackMatter["scriptureIndex"] {
   // Collect all quotes from manifest.allQuotes and chapter sections
   const refMap = new Map<string, { translation: string; chapters: Set<number> }>();
 

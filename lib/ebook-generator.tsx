@@ -5,7 +5,7 @@
  * EPUB: epub-gen-memory
  */
 
-import type { EbookManifest, ChapterDraft, FrontBackMatter, Quote } from "@/lib/schemas/ebook";
+import type { EbookManifest, ChapterDraft, FrontBackMatter, BackMatter, Quote } from "@/lib/schemas/ebook";
 import type { PrintSpec } from "@/lib/schemas/ebook";
 import { getTemplate } from "@/lib/book-templates";
 import { TRIM_SIZE_SPECS } from "@/lib/book-templates";
@@ -339,6 +339,18 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       forceNextRecto();
       currentChapterTitle = "Resources";
       writeResources(doc, manifest.frontMatter, fonts, tpl, adjustedBodyFontSize);
+    }
+
+    if (manifest.backMatter && (manifest.backMatter.glossary ?? []).length > 0) {
+      forceNextRecto();
+      currentChapterTitle = "Glossary";
+      writeGlossary(doc, manifest.backMatter, fonts, tpl, adjustedBodyFontSize);
+    }
+
+    if (manifest.backMatter && (manifest.backMatter.readingGroupGuide ?? []).length > 0) {
+      forceNextRecto();
+      currentChapterTitle = "Reading Group Guide";
+      writeReadingGroupGuide(doc, manifest.backMatter, fonts, tpl, adjustedBodyFontSize);
     }
 
     // ── Second pass ───────────────────────────────────────────────────────────
@@ -1026,6 +1038,36 @@ function writeResources(doc: any, fm: FrontBackMatter, fonts: PdfFontSet, tpl: B
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeGlossary(doc: any, bm: BackMatter, fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
+  doc.addPage();
+  doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Glossary", { align: tpl.matterTitleAlign });
+  writeDivider(doc, tpl);
+  const fs = bodyFontSize ?? tpl.bodyFontSize;
+  for (const entry of (bm.glossary ?? [])) {
+    doc.fontSize(fs).font(fonts.serifBold).fillColor("#1a1a1a").text(entry.term, { lineGap: 2 });
+    doc.fontSize(fs - 1).font(fonts.serif).fillColor("#333333").text(entry.definition, { lineGap: 3 });
+    doc.fontSize(fs - 2).font(fonts.serifItalic ?? fonts.serif).fillColor("#666666").text(entry.firstAppearance, { lineGap: 8 });
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeReadingGroupGuide(doc: any, bm: BackMatter, fonts: PdfFontSet, tpl: BookTemplateConfig, bodyFontSize?: number) {
+  doc.addPage();
+  doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Reading Group Guide", { align: tpl.matterTitleAlign });
+  writeDivider(doc, tpl);
+  const fs = bodyFontSize ?? tpl.bodyFontSize;
+  for (const chapter of (bm.readingGroupGuide ?? [])) {
+    doc.fontSize(fs + 1).font(fonts.serifBold).fillColor(tpl.chapterTitleColor)
+      .text(`Chapter ${chapter.chapterNumber}: ${chapter.chapterTitle}`, { lineGap: 4 });
+    chapter.questions.forEach((q, i) => {
+      doc.fontSize(fs).font(fonts.serif).fillColor("#1a1a1a")
+        .text(`${i + 1}. ${q}`, { lineGap: 5, indent: 8 });
+    });
+    doc.moveDown(0.5);
+  }
+}
+
 // ─── EPUB Helpers ─────────────────────────────────────────────────────────────
 
 function escapeHtml(str: string): string {
@@ -1191,7 +1233,7 @@ function chapterToHtml(chapter: ChapterDraft, quotes: Quote[]): string {
   return parts.join("\n");
 }
 
-function backMatterChapters(fm: FrontBackMatter, quotes: Quote[]): Array<{ title: string; content: string }> {
+function backMatterChapters(fm: FrontBackMatter, quotes: Quote[], bm?: BackMatter | null): Array<{ title: string; content: string }> {
   const chapters: Array<{ title: string; content: string }> = [
     {
       title: "Conclusion",
@@ -1211,6 +1253,30 @@ function backMatterChapters(fm: FrontBackMatter, quotes: Quote[]): Array<{ title
       title: "Resources",
       content: `<ul>${(fm.resourcesList ?? []).map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`,
     });
+  }
+
+  if (bm) {
+    if ((bm.glossary ?? []).length > 0) {
+      const glossaryHtml = (bm.glossary ?? []).map((entry) =>
+        `<dt><strong>${escapeHtml(entry.term)}</strong></dt><dd>${escapeHtml(entry.definition)}<br/><em>${escapeHtml(entry.firstAppearance)}</em></dd>`
+      ).join("");
+      chapters.push({ title: "Glossary", content: `<dl>${glossaryHtml}</dl>` });
+    }
+
+    if ((bm.readingGroupGuide ?? []).length > 0) {
+      const guideHtml = (bm.readingGroupGuide ?? []).map((chapter) => {
+        const qs = chapter.questions.map((q) => `<li>${escapeHtml(q)}</li>`).join("");
+        return `<h3>Chapter ${chapter.chapterNumber}: ${escapeHtml(chapter.chapterTitle)}</h3><ol>${qs}</ol>`;
+      }).join("");
+      chapters.push({ title: "Reading Group Guide", content: guideHtml });
+    }
+
+    if ((bm.scriptureIndex ?? []).length > 0) {
+      const indexHtml = (bm.scriptureIndex ?? []).map((entry) =>
+        `<li><strong>${escapeHtml(entry.reference)}</strong> (${escapeHtml(entry.translation)}) — Ch. ${entry.chapters.join(", ")}</li>`
+      ).join("");
+      chapters.push({ title: "Scripture Index", content: `<ul>${indexHtml}</ul>` });
+    }
   }
 
   return chapters;
@@ -1364,7 +1430,7 @@ export async function generateEpubBuffer(manifest: EbookManifest, templateId?: s
       title: `Chapter ${ch.number}: ${ch.title}`,
       content: chapterToHtml(ch, manifest.allQuotes ?? []),
     })),
-    ...backMatterChapters(manifest.frontMatter, manifest.allQuotes ?? []),
+    ...backMatterChapters(manifest.frontMatter, manifest.allQuotes ?? [], manifest.backMatter),
   ];
 
   const epubBuffer = await epub(
