@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useId, useEffect } from "react";
-import { ProseEditor } from "./ProseEditor";
+import { ProseEditor, ProseToolbarProvider, SharedProseToolbar } from "./ProseEditor";
 import { EbookProgressRing } from "@/app/components/EbookProgressRing";
 import {
   saveEbookJob,
@@ -207,6 +207,71 @@ function detectDuplicateSentences(
     if (hit) flagged.push(ns.trim());
   }
   return flagged;
+}
+
+// ─── Amendment 1: Coverage Ledger Builder ─────────────────────────────────────
+// Returns a compact heading + one-sentence summary for every written section so
+// the LLM can see what ground has been covered without re-reading full bodies.
+function buildCoverageLedger(sections: SectionDraft[]): { heading: string; summary: string }[] {
+  return sections.map((s) => {
+    const firstSentence = (s.body ?? "")
+      .split(/\n\n+/)[0]               // first paragraph
+      ?.replace(/^#{1,3} .+$/gm, "")   // strip any stray heading markup
+      ?.match(/[^.!?]+[.!?]+/)?.[0]    // first sentence
+      ?.trim()
+      ?.slice(0, 130) ?? "";
+    return { heading: s.heading, summary: firstSentence };
+  }).filter((e) => e.heading && e.summary.length > 10);
+}
+
+// ─── Amendment 4: Thesis Sentence Extractor ───────────────────────────────────
+// The opening sentence of each paragraph is the most reliable thesis carrier.
+// Extract up to `maxPerSection` per section, capped at `hardCap` total.
+function extractBannedRecaps(sections: SectionDraft[], maxPerSection = 2, hardCap = 25): string[] {
+  const all: string[] = [];
+  for (const s of sections) {
+    const paras = (s.body ?? "").split(/\n\n+/).filter(Boolean);
+    for (const para of paras.slice(0, maxPerSection)) {
+      const opener = para.replace(/^#{1,3} .+$/gm, "")
+        .match(/[^.!?]+[.!?]+/)?.[0]?.trim() ?? "";
+      if (opener.split(/\s+/).length >= 8) all.push(opener.slice(0, 150));
+    }
+    if (all.length >= hardCap) break;
+  }
+  return all.slice(0, hardCap);
+}
+
+// ─── Amendment 6: Lexical Fingerprint Extractor ───────────────────────────────
+// Counts 3-gram frequency across the written corpus and returns the top-N phrases
+// the LLM should diversify away from (excluding scripture-heavy n-grams).
+const STOP_WORDS = new Set([
+  "the","a","an","and","but","or","of","to","in","on","at","is","are","was","were",
+  "be","been","being","have","has","had","do","does","did","will","would","can","could",
+  "should","may","might","must","shall","not","no","so","if","as","by","for","from",
+  "with","that","this","it","he","she","we","they","i","you","his","her","our","their",
+  "its","my","your","who","which","what","when","where","how","all","also","more","just",
+  "like","about","then","there","than","up","out","only","over","after","before","since",
+  "while","although","because","into","through","during","some","any","each","both",
+]);
+
+function extractOverusedPhrases(corpus: string, topN = 10): string[] {
+  if (!corpus || corpus.length < 800) return [];
+  const words = corpus.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+  const freq = new Map<string, number>();
+  for (let i = 0; i <= words.length - 3; i++) {
+    const [a, b, c] = [words[i], words[i + 1], words[i + 2]];
+    // Skip trigrams where the first two tokens are both stop words
+    if (STOP_WORDS.has(a) && STOP_WORDS.has(b)) continue;
+    // Skip scripture citation patterns like "john three sixteen"
+    if (/^\d+$/.test(c)) continue;
+    const gram = `${a} ${b} ${c}`;
+    freq.set(gram, (freq.get(gram) ?? 0) + 1);
+  }
+  return Array.from(freq.entries())
+    .filter(([, cnt]) => cnt >= 3) // must appear ≥3 times to be worth flagging
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([gram]) => gram);
 }
 
 // ─── Audio Upload Card ────────────────────────────────────────────────────────
@@ -2202,6 +2267,18 @@ export function EbookPipeline({
           usedIllustrations: Array.from(usedIllustrations),
           // Scripture Amendment 4: primary translation (from assignment, seeded by assign-segments)
           primaryTranslation: assignment.primaryTranslation,
+          // ── 7-Amendment Anti-Duplication System ──────────────────────────
+          // Amendment 1: full coverage ledger — every section written so far
+          coverageLedger: buildCoverageLedger(allSections),
+          // Amendment 4: thesis sentences from prior sections — banned from paraphrase
+          bannedRecaps: extractBannedRecaps(allSections),
+          // Amendment 6: top repeated 3-grams — encourage lexical variety
+          overusedPhrases: extractOverusedPhrases(writtenCorpus, 10),
+          // Amendment 7: section position within chapter — drives novelty cap
+          sectionIndexInChapter: (() => {
+            const chapterAssignments = assignments.filter((a) => a.chapterNumber === assignment.chapterNumber);
+            return Math.max(0, chapterAssignments.findIndex((a) => a.sectionNumber === assignment.sectionNumber));
+          })(),
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2739,6 +2816,7 @@ export function EbookPipeline({
       )}
 
         {completedManifest && reviewContext && (
+          <ProseToolbarProvider>
           <div className="rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-4 shadow-panel space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -2783,6 +2861,9 @@ export function EbookPipeline({
                 </button>
               </div>
             </div>
+
+            {/* Shared word processor toolbar — one bar for all editors */}
+            <SharedProseToolbar className="sticky top-0 z-20" />
 
             {/* Print Specification Toggle */}
             <PrintSpecPanel
@@ -2998,6 +3079,7 @@ export function EbookPipeline({
               </button>
             </div>
           </div>
+          </ProseToolbarProvider>
         )}
 
       {/* Error */}
