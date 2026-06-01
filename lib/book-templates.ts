@@ -131,21 +131,21 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     bodyAlign: "justify",
     chapterLabel: (n) => `CHAPTER ${n}`,
     chapterLabelSize: 9,
-    chapterLabelColor: "#888888",
+    chapterLabelColor: "#595959",   // CMYK 0/0/0/65 — neutral grey, press-safe
     chapterLabelFont: "sans",
     chapterLabelAlign: "center",
     chapterTitleSize: 22,
-    chapterTitleColor: "#111111",
+    chapterTitleColor: "#1a1a1a",   // CMYK 0/0/0/90 — rich black substitute
     chapterTitleFont: "serifBold",
     chapterTitleAlign: "center",
     chapterPreGap: 1.5,
     sectionSize: 12.5,
-    sectionColor: "#222222",
+    sectionColor: "#1a1a1a",        // CMYK 0/0/0/90
     sectionFont: "serifBold",
     sectionAlign: "left",
     sectionRule: false,
     showDivider: true,
-    dividerColor: "#dddddd",
+    dividerColor: "#c8c8c8",        // CMYK 0/0/0/22 — hairline rule, press-safe
     matterTitleSize: 20,
     matterTitleAlign: "center",
     titlePageTitleSize: 26,
@@ -155,8 +155,8 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     titlePageTopGap: 6,
     scriptureIndent: 36,
     scriptureFontSize: 11,
-    accentColor: "#444444",
-    labelColor: "#888888",
+    accentColor: "#404040",         // CMYK 0/0/0/75 — dark neutral, press-safe
+    labelColor: "#737373",          // CMYK 0/0/0/55 — muted label, press-safe
   },
 
   // 2 ── Modern Business ──────────────────────────────────────────────────────
@@ -173,21 +173,21 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     bodyAlign: "justify",
     chapterLabel: (n) => `CHAPTER ${n}`,
     chapterLabelSize: 9,
-    chapterLabelColor: "#1a3a6b",
+    chapterLabelColor: "#1b3d6e",   // CMYK 76/55/0/57 — navy, offset-press safe
     chapterLabelFont: "sansBold",
     chapterLabelAlign: "left",
     chapterTitleSize: 26,
-    chapterTitleColor: "#0f0f0f",
+    chapterTitleColor: "#0d0d0d",   // CMYK 0/0/0/95 — near-black
     chapterTitleFont: "serifBold",
     chapterTitleAlign: "left",
     chapterPreGap: 1.2,
     sectionSize: 12,
-    sectionColor: "#0f0f0f",
+    sectionColor: "#0d0d0d",        // CMYK 0/0/0/95
     sectionFont: "sansBold",
     sectionAlign: "left",
     sectionRule: true,
     showDivider: true,
-    dividerColor: "#1a3a6b",
+    dividerColor: "#1b3d6e",        // same as accent — navy rule
     matterTitleSize: 22,
     matterTitleAlign: "left",
     titlePageTitleSize: 30,
@@ -197,8 +197,8 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     titlePageTopGap: 5,
     scriptureIndent: 32,
     scriptureFontSize: 11.5,
-    accentColor: "#1a3a6b",
-    labelColor: "#1a3a6b",
+    accentColor: "#1b3d6e",         // CMYK 76/55/0/57 — navy
+    labelColor: "#1b3d6e",          // navy label
   },
 
   // 3 ── Devotional ───────────────────────────────────────────────────────────
@@ -215,21 +215,21 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     bodyAlign: "justify",
     chapterLabel: (n) => `Chapter ${n}`,
     chapterLabelSize: 11,
-    chapterLabelColor: "#7b3f00",
+    chapterLabelColor: "#7a3d00",   // CMYK 0/50/100/52 — burnt sienna, press-safe
     chapterLabelFont: "serifItalic",
     chapterLabelAlign: "center",
     chapterTitleSize: 24,
-    chapterTitleColor: "#1a1209",
+    chapterTitleColor: "#190f00",   // CMYK 0/40/100/90 — deep warm black
     chapterTitleFont: "serifBold",
     chapterTitleAlign: "center",
     chapterPreGap: 1.5,
     sectionSize: 13,
-    sectionColor: "#1a1209",
+    sectionColor: "#190f00",        // CMYK 0/40/100/90
     sectionFont: "serifBold",
     sectionAlign: "center",
     sectionRule: false,
     showDivider: true,
-    dividerColor: "#c49a6c",
+    dividerColor: "#c49060",        // CMYK 0/27/52/23 — warm tan rule, press-safe
     matterTitleSize: 22,
     matterTitleAlign: "center",
     titlePageTitleSize: 28,
@@ -239,8 +239,8 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     titlePageTopGap: 6,
     scriptureIndent: 40,
     scriptureFontSize: 12,
-    accentColor: "#7b3f00",
-    labelColor: "#7b3f00",
+    accentColor: "#7a3d00",         // CMYK 0/50/100/52 — burnt sienna
+    labelColor: "#7a3d00",          // burnt sienna label
   },
 
   // 4 ── Popular Nonfiction ───────────────────────────────────────────────────
@@ -257,21 +257,21 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     bodyAlign: "justify",
     chapterLabel: (n) => `${String(n).padStart(2, "0")}`,
     chapterLabelSize: 36,
-    chapterLabelColor: "#c2410c",
+    chapterLabelColor: "#bf3a06",   // CMYK 0/69/97/25 — vermilion, press-safe
     chapterLabelFont: "sansBold",
     chapterLabelAlign: "left",
     chapterTitleSize: 22,
-    chapterTitleColor: "#0f0f0f",
+    chapterTitleColor: "#0d0d0d",   // CMYK 0/0/0/95
     chapterTitleFont: "serifBold",
     chapterTitleAlign: "left",
     chapterPreGap: 1.2,
     sectionSize: 13,
-    sectionColor: "#111111",
+    sectionColor: "#0d0d0d",        // CMYK 0/0/0/95
     sectionFont: "serifBold",
     sectionAlign: "left",
     sectionRule: false,
     showDivider: true,
-    dividerColor: "#e5e5e5",
+    dividerColor: "#d9d9d9",        // CMYK 0/0/0/15 — light rule, press-safe
     matterTitleSize: 22,
     matterTitleAlign: "left",
     titlePageTitleSize: 32,
@@ -281,8 +281,8 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     titlePageTopGap: 4.5,
     scriptureIndent: 30,
     scriptureFontSize: 11.5,
-    accentColor: "#c2410c",
-    labelColor: "#c2410c",
+    accentColor: "#bf3a06",         // CMYK 0/69/97/25 — vermilion
+    labelColor: "#bf3a06",          // vermilion label
   },
 
   // 5 ── Premium Literary ─────────────────────────────────────────────────────
@@ -299,21 +299,21 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     bodyAlign: "justify",
     chapterLabel: (n) => toRoman(n),
     chapterLabelSize: 11,
-    chapterLabelColor: "#555555",
+    chapterLabelColor: "#4d4d4d",   // CMYK 0/0/0/70 — cool mid-grey, press-safe
     chapterLabelFont: "serifItalic",
     chapterLabelAlign: "center",
     chapterTitleSize: 20,
-    chapterTitleColor: "#111111",
+    chapterTitleColor: "#1a1a1a",   // CMYK 0/0/0/90
     chapterTitleFont: "serif",
     chapterTitleAlign: "center",
     chapterPreGap: 2,
     sectionSize: 11.5,
-    sectionColor: "#333333",
+    sectionColor: "#333333",        // CMYK 0/0/0/80
     sectionFont: "serifItalic",
     sectionAlign: "center",
     sectionRule: false,
     showDivider: false,
-    dividerColor: "#cccccc",
+    dividerColor: "#bfbfbf",        // CMYK 0/0/0/25 — light rule, press-safe
     matterTitleSize: 18,
     matterTitleAlign: "center",
     titlePageTitleSize: 24,
@@ -323,8 +323,8 @@ export const BOOK_TEMPLATES: Record<BookTemplateId, BookTemplateConfig> = {
     titlePageTopGap: 7,
     scriptureIndent: 44,
     scriptureFontSize: 11,
-    accentColor: "#555555",
-    labelColor: "#777777",
+    accentColor: "#4d4d4d",         // CMYK 0/0/0/70 — cool grey
+    labelColor: "#737373",          // CMYK 0/0/0/55 — softer label
   },
 };
 

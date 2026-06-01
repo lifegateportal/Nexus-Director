@@ -21,6 +21,14 @@ import {
   PageBreak,
   TableOfContents,
   LevelFormat,
+  Header,
+  Footer,
+  TabStopType,
+  TabStopPosition,
+  LeaderType,
+  SectionType,
+  NumberFormat,
+  PageNumber,
 } from "docx";
 
 type PdfFontSet = {
@@ -148,32 +156,52 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
   const trimSpec = TRIM_SIZE_SPECS[resolvedPrintSpec.trimSize ?? "6x9"];
   const showRunningHeaders = resolvedPrintSpec.runningHeaders !== false && tpl.runningHeaders;
 
+  // ── Amendment 7: Bleed + crop marks ───────────────────────────────────────
+  // When bleed is enabled the canvas expands by BLEED_PT on each edge; all
+  // content is offset so it still sits at the correct trim position.
+  const BLEED_PT = 9; // 0.125 in (industry standard for IngramSpark / KDP Print)
+  const enableBleed    = resolvedPrintSpec.bleed    === true;
+  const enableCropMarks = resolvedPrintSpec.cropMarks === true && enableBleed;
+  const bleedOffset = enableBleed ? BLEED_PT : 0;
+
   // Merge trim-size overrides on top of template defaults
-  const pageSize = trimSpec.pageSize;
-  const pageMargins = trimSpec.margins;
+  const trimPageSize = trimSpec.pageSize; // actual book trim dimensions
+  const pageSize: [number, number] = enableBleed
+    ? [trimPageSize[0] + BLEED_PT * 2, trimPageSize[1] + BLEED_PT * 2]
+    : trimPageSize;
+  const pageMargins = {
+    top:    trimSpec.margins.top    + bleedOffset,
+    bottom: trimSpec.margins.bottom + bleedOffset,
+    left:   trimSpec.margins.left   + bleedOffset,
+    right:  trimSpec.margins.right  + bleedOffset,
+  };
   const adjustedBodyFontSize = tpl.bodyFontSize + trimSpec.bodyFontSizeAdjust;
 
   // Pre-compute fixed layout values (avoids reliance on doc.page inside event handlers)
-  const _mL = trimSpec.gutterMargin;   // recto default (overridden per page in pageAdded)
-  const _mR = trimSpec.outsideMargin;
+  // Gutter/outside margins are relative to the content area (inside bleed offset).
+  const _mL = trimSpec.gutterMargin + bleedOffset;
+  const _mR = trimSpec.outsideMargin + bleedOffset;
   const _pageW = pageSize[0];
   const _pageH = pageSize[1];
-  const _textW = _pageW - _mL - _mR;   // text column width is constant (gutter+outside same total)
+  const _textW = trimPageSize[0] - trimSpec.gutterMargin - trimSpec.outsideMargin; // text column = trim width minus margins
   const _footerY = _pageH - pageMargins.bottom + 18;
   const _layout = {
-    gutterMargin: trimSpec.gutterMargin,
-    outsideMargin: trimSpec.outsideMargin,
+    gutterMargin: trimSpec.gutterMargin + bleedOffset,
+    outsideMargin: trimSpec.outsideMargin + bleedOffset,
     textW: _textW,
     pageW: _pageW,
     footerY: _footerY,
   };
 
   return new Promise<Buffer>((resolve, reject) => {
+    // ── Amendment 3: PDF 1.4 + PDF/X-1a compatible metadata ──────────────────
+    const creationDate = new Date();
     const doc = new PDFDocument({
       margins: pageMargins,
       size: pageSize,
       autoFirstPage: false, // we add pages manually so pageAdded tracking is accurate
       bufferPages: true,    // hold all pages in memory for the second-pass header stamp
+      pdfVersion: "1.4",    // required for PDF/X-1a compliance
       info: {
         Title: manifest.bookTitle,
         Author: manifest.authorName,
@@ -181,6 +209,11 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
         Creator: "Nexus Director",
         Producer: "Nexus Director",
         Keywords: [manifest.authorName, manifest.bookTitle].filter(Boolean).join(", "),
+        CreationDate: creationDate,
+        ModDate: creationDate,
+        // PDF/X-1a identifies itself via the GTS_PDFXVersion key in the Info dict
+        GTS_PDFXVersion: "PDF/X-1a:2001",
+        Trapped: "False",
       },
     });
     const fonts = resolvePdfFonts(doc);
@@ -269,8 +302,8 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
 
       // Alternate gutter/outside margins across ALL pages (including front matter)
       const isVerso = totalPageCounter % 2 === 0;
-      doc.page.margins.left  = isVerso ? trimSpec.outsideMargin : trimSpec.gutterMargin;
-      doc.page.margins.right = isVerso ? trimSpec.gutterMargin  : trimSpec.outsideMargin;
+      doc.page.margins.left  = isVerso ? (trimSpec.outsideMargin + bleedOffset) : (trimSpec.gutterMargin + bleedOffset);
+      doc.page.margins.right = isVerso ? (trimSpec.gutterMargin + bleedOffset)  : (trimSpec.outsideMargin + bleedOffset);
       doc.x = doc.page.margins.left; // re-sync cursor after overriding margins
     });
 
@@ -380,8 +413,115 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       }
     }
 
+    // ── Amendment 7: Crop marks (second pass, all pages) ─────────────────────
+    // L-shaped marks at each corner outside the trim area, in registration black.
+    // Only drawn when bleed + cropMarks are both enabled.
+    if (enableCropMarks) {
+      const markLen  = 18;  // 0.25 in — length of each crop mark arm
+      const markGap  = 3;   // 3pt gap between trim edge and mark start
+      const tX = BLEED_PT;            // trim left X
+      const tY = BLEED_PT;            // trim top Y
+      const tW = trimPageSize[0];     // trim width
+      const tH = trimPageSize[1];     // trim height
+      for (let i = 0; i < count; i++) {
+        doc.switchToPage(start + i);
+        // Disable all page margins so we can draw anywhere on the canvas
+        const savedMargins = { ...doc.page.margins };
+        doc.page.margins = { top: 0, bottom: 0, left: 0, right: 0 };
+        doc.strokeColor("#000000").lineWidth(0.25);
+        // Top-left corner
+        doc.moveTo(tX - markGap, tY).lineTo(tX - markGap - markLen, tY).stroke();
+        doc.moveTo(tX, tY - markGap).lineTo(tX, tY - markGap - markLen).stroke();
+        // Top-right corner
+        doc.moveTo(tX + tW + markGap, tY).lineTo(tX + tW + markGap + markLen, tY).stroke();
+        doc.moveTo(tX + tW, tY - markGap).lineTo(tX + tW, tY - markGap - markLen).stroke();
+        // Bottom-left corner
+        doc.moveTo(tX - markGap, tY + tH).lineTo(tX - markGap - markLen, tY + tH).stroke();
+        doc.moveTo(tX, tY + tH + markGap).lineTo(tX, tY + tH + markGap + markLen).stroke();
+        // Bottom-right corner
+        doc.moveTo(tX + tW + markGap, tY + tH).lineTo(tX + tW + markGap + markLen, tY + tH).stroke();
+        doc.moveTo(tX + tW, tY + tH + markGap).lineTo(tX + tW, tY + tH + markGap + markLen).stroke();
+        // Restore margins
+        doc.page.margins = savedMargins;
+      }
+    }
+
     doc.end();
   });
+}
+
+// ── Amendment 4: Drop Cap ─────────────────────────────────────────────────────
+// Renders the first character of `paragraph` as a traditional publisher drop cap
+// (lines × body font size tall, inset, serif bold) and flows the remainder of the
+// paragraph text beside it.  Returns the remaining text after the cap character
+// so the caller can continue rendering the rest of the paragraph normally.
+//
+// Algorithm:
+//   1. Measure the drop cap character width at capFontSize.
+//   2. Draw the cap at (marginLeft, currentY) with lineBreak: false.
+//   3. Re-flow the first `capLines` lines of the rest of the paragraph in the
+//      narrowed column (startX = marginLeft + capWidth + gap).
+//   4. Advance doc.y and doc.x so subsequent paragraphs start at the normal margin.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeDropCapParagraph(
+  doc: any,
+  paragraph: string,
+  fonts: PdfFontSet,
+  tpl: BookTemplateConfig,
+  bodyFontSize: number,
+): void {
+  const capLines   = 3;
+  const capGap     = 5; // pt gap between cap and text column
+  const lineH      = bodyFontSize + tpl.bodyLineGap;
+  const capH       = capLines * lineH;
+  const capFontSize = capH * 0.88; // scale to fill drop height (0.88 accounts for descenders)
+
+  const clean = stripMarkdownForPdf(applySmartTypography(paragraph));
+  if (!clean || clean.length < 2) {
+    // Fallback: render as normal paragraph
+    doc.fontSize(bodyFontSize).font(fonts.serif).fillColor("#1a1a1a")
+      .text(clean || paragraph, doc.page.margins.left, undefined, {
+        lineGap: tpl.bodyLineGap, align: tpl.bodyAlign,
+      });
+    return;
+  }
+
+  const capChar  = clean[0];
+  const restText = clean.slice(1).trimStart();
+  const mL       = doc.page.margins.left;
+  const contentW = doc.page.width - mL - doc.page.margins.right;
+  const capY     = doc.y;
+
+  // Measure cap width at the resolved size
+  doc.font(fonts.serifBold).fontSize(capFontSize);
+  const capW = doc.widthOfString(capChar) + capGap;
+
+  // Draw the drop cap — positioned absolutely, no line break
+  doc.fillColor(tpl.chapterTitleColor)
+    .text(capChar, mL, capY, { lineBreak: false });
+
+  // Render text beside the cap for the first `capLines` lines
+  const narrowW = contentW - capW;
+  const narrowX = mL + capW;
+  doc.font(fonts.serif).fontSize(bodyFontSize).fillColor("#1a1a1a");
+
+  // Use PDFKit's built-in wrapping in the narrow column; then continue below
+  // the cap for any overflow lines using the full content width.
+  doc.text(restText, narrowX, capY, {
+    width:  narrowW,
+    height: capH + 2, // allow slight overflow for rounding
+    lineGap: tpl.bodyLineGap,
+    align:  tpl.bodyAlign,
+    continued: false,
+  });
+
+  // Advance past the drop cap area if the text was shorter than capLines
+  const afterNarrowY = doc.y;
+  if (afterNarrowY < capY + capH) {
+    doc.y = capY + capH;
+  }
+  doc.x = mL;
+  doc.moveDown(tpl.paragraphGap > 0 ? tpl.paragraphGap / lineH : 0.6);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -761,6 +901,36 @@ function writeRichBody(doc: any, text: string, quotes: Quote[], fonts: PdfFontSe
     const indent = noIndentFirst && renderedIndex === 0 ? 0 : tpl.paragraphIndent;
     const textOpts = { lineGap: tpl.bodyLineGap, indent, paragraphGap: tpl.paragraphGap, align: tpl.bodyAlign };
 
+    // ── Amendment 5: Widow / orphan protection ────────────────────────────────
+    // Estimate how many lines this paragraph needs. If only 1–2 lines would fit
+    // on the remaining page space (orphan) or the paragraph is short enough to
+    // fit entirely on the next page (widow — last line would be alone), force a
+    // page break before rendering so the paragraph starts fresh on a new page.
+    {
+      const lineH   = fontSize + tpl.bodyLineGap;
+      const pageBottom = doc.page.height - doc.page.margins.bottom;
+      const remaining  = pageBottom - doc.y;
+      const contentW   = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const cleanForEst = stripMarkdownForPdf(applySmartTypography(paragraph));
+      if (cleanForEst) {
+        doc.font(fonts.serif).fontSize(fontSize);
+        // Rough character-based line estimate (faster than widthOfString per word)
+        const charsPerLine = Math.max(1, Math.floor((contentW - indent) / (fontSize * 0.52)));
+        const estimatedLines = Math.ceil(cleanForEst.length / charsPerLine);
+
+        // Orphan guard: if fewer than 2 full lines would fit, push to new page
+        const linesFit = Math.floor(remaining / lineH);
+        if (linesFit < 2 && estimatedLines > 2) {
+          doc.addPage();
+        }
+        // Widow guard: if paragraph is 2–3 lines total and only 1 line fits,
+        // push the whole paragraph to a new page so it's never split 1+rest.
+        if (estimatedLines <= 3 && linesFit < estimatedLines) {
+          doc.addPage();
+        }
+      }
+    }
+
     // Small-cap chapter opener: first 5 words uppercase + letter-spacing (traditional chapter opener)
     if (options?.smallCapOpener && renderedIndex === 0) {
       const clean = stripMarkdownForPdf(applySmartTypography(paragraph));
@@ -883,6 +1053,60 @@ function stampTOC(
   const lineH      = entrySize + 7;
   const mutedColor = "#888888";
 
+  // ── Amendment 6: dotted-leader row helper (Chicago Manual §1.4) ──────────
+  // Renders: [numLabel] [chapterTitle] [....] [pageNum]
+  // The dot string is computed via widthOfString("." ) so the fill is pixel-exact.
+  function stampTocRow(
+    numLabel: string,
+    title: string,
+    pageStr: string,
+    rowY: number,
+    bold: boolean,
+  ) {
+    doc.fontSize(entrySize).font(fonts.serif);
+    const numW   = numLabel ? Math.ceil(doc.widthOfString(numLabel)) + 4 : 0;
+    const pageNumW = Math.ceil(doc.widthOfString(pageStr)) + 2;
+    const titleFont = bold ? fonts.serifBold : fonts.serif;
+
+    // Measure title in its actual font to know how wide it renders
+    doc.font(titleFont).fontSize(entrySize);
+    // Clamp title so it doesn't intrude on the dot area or page number
+    const maxTitleW = textW - numW - pageNumW - 20;
+    let titleStr = title;
+    while (titleStr.length > 1 && Math.ceil(doc.widthOfString(titleStr)) > maxTitleW) {
+      titleStr = titleStr.slice(0, -1);
+    }
+    const actualTitleW = Math.ceil(doc.widthOfString(titleStr));
+
+    // Render chapter number
+    if (numLabel) {
+      doc.font(fonts.serif).fillColor(mutedColor)
+        .text(numLabel, mL, rowY, { width: numW, lineBreak: false });
+    }
+
+    // Render chapter title
+    const titleX = mL + numW + (numLabel ? 2 : 0);
+    doc.font(titleFont).fillColor(bold ? "#1a1a1a" : mutedColor)
+      .text(titleStr, titleX, rowY, { width: maxTitleW, lineBreak: false });
+
+    // Dotted leaders: fill gap between title end and page number
+    doc.font(fonts.serif).fontSize(entrySize - 1).fillColor("#bbbbbb");
+    const dotW        = doc.widthOfString(".");
+    const dotSpacing  = dotW + 1.5;
+    const leaderStart = titleX + actualTitleW + 6;
+    const leaderEnd   = mL + textW - pageNumW - 4;
+    const leaderSpan  = leaderEnd - leaderStart;
+    const dotCount    = Math.max(0, Math.floor(leaderSpan / dotSpacing));
+    if (dotCount > 0) {
+      const dotsStr = Array(dotCount).fill(".").join("\u2009"); // thin-space separated
+      doc.text(dotsStr, leaderStart, rowY, { lineBreak: false });
+    }
+
+    // Render page number flush-right
+    doc.font(fonts.serif).fontSize(entrySize).fillColor(mutedColor)
+      .text(pageStr, mL + textW - pageNumW, rowY, { width: pageNumW, align: "right", lineBreak: false });
+  }
+
   // Front matter (no page numbers)
   for (const label of ["Preface", "Introduction"]) {
     if (y > bottomLimit) break;
@@ -892,24 +1116,11 @@ function stampTOC(
   }
   y += 6;
 
-  // Chapters with page numbers
+  // Chapters with dotted leaders + page numbers
   for (let i = 0; i < chapterTocEntries.length; i++) {
     if (y > bottomLimit) break;
     const { chapterTitle, bodyPageNum } = chapterTocEntries[i];
-    const numLabel  = `${i + 1}.`;
-    const pageStr   = String(bodyPageNum);
-    doc.fontSize(entrySize).font(fonts.serif);
-    const numW  = Math.ceil(doc.widthOfString(numLabel)) + 4;
-    const pageW = Math.ceil(doc.widthOfString(pageStr))  + 2;
-    const titleW = textW - numW - pageW - 14;
-    // Chapter number (muted)
-    doc.fillColor(mutedColor).text(numLabel, mL, y, { width: numW, lineBreak: false });
-    // Chapter title (bold)
-    doc.font(fonts.serifBold).fillColor("#1a1a1a")
-      .text(chapterTitle, mL + numW + 2, y, { width: titleW, lineBreak: false, ellipsis: true });
-    // Page number (right-aligned)
-    doc.font(fonts.serif).fillColor(mutedColor)
-      .text(pageStr, mL + numW + 2 + titleW + 12, y, { width: pageW, align: "right", lineBreak: false });
+    stampTocRow(`${i + 1}.`, chapterTitle, String(bodyPageNum), y, true);
     y += lineH;
   }
   y += 6;
@@ -974,7 +1185,26 @@ function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: P
       .text(section.heading, { align: tpl.sectionAlign });
     if (tpl.sectionRule) writeDivider(doc, tpl);
     doc.moveDown(0.5);
-    writeRichBody(doc, section.body, quotes, fonts, tpl, { noIndentFirstParagraph: true, smallCapOpener: !_firstSectionDone }, bodyFontSize);
+
+    // ── Amendment 4: Drop cap on the very first body paragraph of the chapter ──
+    if (!_firstSectionDone && section.body) {
+      const bodyFontSizeResolved = bodyFontSize ?? tpl.bodyFontSize;
+      // Extract the first paragraph and render it as a drop cap, then render
+      // the remaining paragraphs normally (no smallCapOpener since drop cap covers it).
+      const firstParaBreak = normalizeParagraphBreaks(section.body).indexOf("\n\n");
+      const firstPara = firstParaBreak >= 0
+        ? normalizeParagraphBreaks(section.body).slice(0, firstParaBreak)
+        : normalizeParagraphBreaks(section.body);
+      const restBody = firstParaBreak >= 0
+        ? normalizeParagraphBreaks(section.body).slice(firstParaBreak + 2)
+        : "";
+      writeDropCapParagraph(doc, firstPara.trim(), fonts, tpl, bodyFontSizeResolved);
+      if (restBody.trim()) {
+        writeRichBody(doc, restBody, quotes, fonts, tpl, { noIndentFirstParagraph: false }, bodyFontSize);
+      }
+    } else {
+      writeRichBody(doc, section.body, quotes, fonts, tpl, { noIndentFirstParagraph: true, smallCapOpener: !_firstSectionDone }, bodyFontSize);
+    }
     _firstSectionDone = true;
   }
 
@@ -1478,6 +1708,8 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     const verseLines = quote.text.split(/\n/).filter((l) => l.trim().length > 0);
     const verseParagraphs = verseLines.map((line) =>
       new Paragraph({
+        // Amendment 4: named style for publisher editorial workflows
+        style: "NxBlockQuote",
         children: [new TextRun({ text: line.trim(), italics: true, size: scriptureHalfPt })],
         alignment: AlignmentType.LEFT,
         spacing: { before: 40, after: 40 },
@@ -1543,6 +1775,8 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         const processedPara = markInlineScriptureRefs(applySmartTypography(para));
         return [
           new Paragraph({
+            // Amendment 4: named style — publisher editorial workflows (InDesign import, macros)
+            style: "NxBodyText",
             children: parseRunsForDocx(processedPara, bodyHalfPt),
             alignment: bodyAlign,
             spacing: { after: paraSpacingAfter },
@@ -1552,11 +1786,49 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       });
   }
 
-  const children: (Paragraph | TableOfContents)[] = [];
+  // ── Amendment 5 + 9: Per-chapter sections with running headers ───────────────
+  // Build a helper for header paragraphs (book title verso, chapter title recto).
+  // We use a single "default" header per section; Word alternating pages are
+  // enabled via evenAndOddHeaderAndFooters on the document.
+  const accentRgbClean = accentRgb; // already stripped of "#"
 
+  function makeDocxHeader(bookTitleText: string, chapterTitleText: string): Header {
+    const headerSize = 14; // 7pt — matches PDF running head
+    return new Header({
+      children: [
+        new Paragraph({
+          children: [
+            new TextRun({ text: bookTitleText.toUpperCase(), size: headerSize, color: "aaaaaa" }),
+            new TextRun({ text: "\t", size: headerSize }),
+            new TextRun({ text: chapterTitleText.toUpperCase(), size: headerSize, color: "aaaaaa" }),
+          ],
+          tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+          spacing: { after: 60 },
+          border: { bottom: { style: "single", size: 2, color: "dddddd", space: 4 } },
+        }),
+      ],
+    });
+  }
+
+  function makeDocxFooter(): Footer {
+    return new Footer({
+      children: [
+        new Paragraph({
+          children: [
+            new TextRun({ children: [PageNumber.CURRENT], size: 16, color: "aaaaaa" }),
+          ],
+          alignment: AlignmentType.CENTER,
+        }),
+      ],
+    });
+  }
+
+  // ── Front-matter children (title, copyright, TOC, preface, introduction) ──
+  const frontChildren: (Paragraph | TableOfContents)[] = [];
+  const year = new Date().getFullYear();
 
   // Title page
-  children.push(
+  frontChildren.push(
     new Paragraph({
       children: [new TextRun({ text: bookTitle, bold: true, size: Math.round(tpl.titlePageTitleSize * 2) })],
       heading: HeadingLevel.TITLE,
@@ -1576,15 +1848,14 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     new Paragraph({ children: [new PageBreak()] })
   );
 
-  // Copyright page (matches PDF)
-  const year = new Date().getFullYear();
-  children.push(
+  // Copyright page
+  frontChildren.push(
     new Paragraph({
       children: [new TextRun({ text: `${bookTitle}${subtitle ? `: ${subtitle}` : ""}`, bold: true, size: 18 })],
       spacing: { after: 120 },
     }),
     new Paragraph({
-      children: [new TextRun({ text: `Copyright © ${year} by ${authorName}`, size: 18 })],
+      children: [new TextRun({ text: `Copyright \u00A9 ${year} by ${authorName}`, size: 18 })],
       spacing: { after: 120 },
     }),
     new Paragraph({
@@ -1595,19 +1866,14 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       children: [new TextRun({ text: "Scripture quotations, unless otherwise indicated, are from the Holy Bible.", italics: true, size: 14 })],
       spacing: { after: 80 },
     }),
-    new Paragraph({
-      children: [new TextRun({ text: "First Edition", size: 14 })],
-      spacing: { after: 40 },
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: "Printed in the United States of America", size: 14 })],
-      spacing: { after: 40 },
-    }),
+    new Paragraph({ children: [new TextRun({ text: "First Edition", size: 14 })], spacing: { after: 40 } }),
+    new Paragraph({ children: [new TextRun({ text: "Printed in the United States of America", size: 14 })], spacing: { after: 40 } }),
     new Paragraph({ children: [new PageBreak()] })
   );
 
-  // Table of Contents (Word auto TOC)
-  children.push(
+  // Amendment 10 — Table of Contents with dotted leaders
+  // Word generates dotted leaders from the TOC1 style's tab stop (defined below).
+  frontChildren.push(
     new TableOfContents("Table of Contents", {
       hyperlink: true,
       headingStyleRange: "1-2",
@@ -1621,22 +1887,29 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     new Paragraph({ children: [new PageBreak()] })
   );
 
+  // Preface + Introduction
   for (const { title, text } of [
     { title: "Preface", text: frontMatter.preface },
     { title: "Introduction", text: frontMatter.introduction },
-    ...(frontMatter.dedication ? [{ title: "Dedication", text: frontMatter.dedication }] : []),
   ]) {
     if (!text?.trim()) continue;
-    children.push(
+    frontChildren.push(
       new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
       ...textToStyledParagraphs(text, true),
       new Paragraph({ children: [new PageBreak()] })
     );
   }
 
+  // ── Per-chapter children ──────────────────────────────────────────────────
+  const chapterChildrenMap: Map<number, (Paragraph | TableOfContents)[]> = new Map();
+
   for (const chapter of chapters) {
-    children.push(
+    const cc: (Paragraph | TableOfContents)[] = [];
+
+    cc.push(
       new Paragraph({
+        // Amendment 4: named style for chapter label
+        style: "NxChapterLabel",
         children: [new TextRun({ text: tpl.chapterLabel(chapter.number), size: Math.round(tpl.chapterLabelSize * 2), color: tpl.chapterLabelColor.replace("#", "") })],
         alignment: titleAlign,
         spacing: { before: 400, after: 80 },
@@ -1649,9 +1922,8 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       })
     );
 
-    // Epigraph (if present)
     if (chapter.epigraph?.trim()) {
-      children.push(
+      cc.push(
         new Paragraph({
           children: parseRunsForDocx(applySmartTypography(chapter.epigraph), bodyHalfPt, true),
           alignment: AlignmentType.CENTER,
@@ -1660,14 +1932,13 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       );
     }
 
-    // Chapter intro — consolidated opener (premise + question), centered italic
     if (chapter.intro?.trim()) {
       normalizeParagraphBreaks(chapter.intro)
         .split(/\n{2,}/)
         .map((p) => p.trim())
         .filter(Boolean)
         .forEach((introPara) => {
-          children.push(
+          cc.push(
             new Paragraph({
               children: parseRunsForDocx(markInlineScriptureRefs(applySmartTypography(introPara)), bodyHalfPt, true),
               alignment: AlignmentType.CENTER,
@@ -1679,7 +1950,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
     for (const section of chapter.sections) {
       if (section.heading) {
-        children.push(
+        cc.push(
           new Paragraph({
             children: [new TextRun({ text: section.heading, bold: tpl.sectionFont.includes("Bold") || tpl.sectionFont === "serifBold" || tpl.sectionFont === "sansBold", size: Math.round(tpl.sectionSize * 2), color: tpl.sectionColor.replace("#", "") })],
             heading: HeadingLevel.HEADING_2,
@@ -1688,27 +1959,26 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           })
         );
       }
-      children.push(...textToStyledParagraphs(section.body, true));
+      cc.push(...textToStyledParagraphs(section.body, true));
     }
 
-    // Forward question — centered italic teaser at chapter end
     if (chapter.forwardQuestion?.trim()) {
-      children.push(...textToStyledParagraphs(chapter.forwardQuestion, true).map((p) =>
+      cc.push(...textToStyledParagraphs(chapter.forwardQuestion, true).map((p) =>
         Object.assign(p, { alignment: AlignmentType.CENTER })
       ));
     }
 
-    // Key Takeaways
     if ((chapter.keyTakeaways ?? []).length > 0) {
-      children.push(
+      cc.push(
         new Paragraph({
           children: [new TextRun({ text: "KEY TAKEAWAYS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
           spacing: { before: 280, after: 120 },
         })
       );
       for (const t of (chapter.keyTakeaways ?? [])) {
-        children.push(
+        cc.push(
           new Paragraph({
+            style: "NxBodyText",
             children: [new TextRun({ text: t, size: bodyHalfPt })],
             alignment: bodyAlign,
             spacing: { after: Math.round(paraSpacingAfter * 0.6) },
@@ -1718,17 +1988,17 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       }
     }
 
-    // Reflection Questions
     if ((chapter.reflectionQuestions ?? []).length > 0) {
-      children.push(
+      cc.push(
         new Paragraph({
           children: [new TextRun({ text: "REFLECTION QUESTIONS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
           spacing: { before: 280, after: 120 },
         })
       );
       (chapter.reflectionQuestions ?? []).forEach((q) => {
-        children.push(
+        cc.push(
           new Paragraph({
+            style: "NxBodyText",
             children: [new TextRun({ text: q, size: bodyHalfPt })],
             alignment: bodyAlign,
             spacing: { after: Math.round(paraSpacingAfter * 0.6) },
@@ -1738,33 +2008,36 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       });
     }
 
-    // Page break after all chapter content (before next chapter or back matter)
-    children.push(new Paragraph({ children: [new PageBreak()] }));
+    chapterChildrenMap.set(chapter.number, cc);
   }
 
+  // ── Back-matter children ──────────────────────────────────────────────────
+  const backChildren: (Paragraph | TableOfContents)[] = [];
+
   if (frontMatter.conclusion?.trim()) {
-    children.push(
+    backChildren.push(
       new Paragraph({ text: "Conclusion", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
       ...textToStyledParagraphs(frontMatter.conclusion, true),
-      new Paragraph({ children: [new PageBreak()] })
     );
   }
 
   if (frontMatter.aboutAuthor?.trim()) {
-    children.push(
+    backChildren.push(
+      new Paragraph({ children: [new PageBreak()] }),
       new Paragraph({ text: "About the Author", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
       ...textToStyledParagraphs(frontMatter.aboutAuthor, true),
-      new Paragraph({ children: [new PageBreak()] })
     );
   }
 
   if ((frontMatter.resourcesList ?? []).length > 0) {
-    children.push(
+    backChildren.push(
+      new Paragraph({ children: [new PageBreak()] }),
       new Paragraph({ text: "Resources", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
     );
     for (const r of (frontMatter.resourcesList ?? [])) {
-      children.push(
+      backChildren.push(
         new Paragraph({
+          style: "NxBodyText",
           children: [new TextRun({ text: r, size: bodyHalfPt })],
           alignment: bodyAlign,
           spacing: { after: Math.round(paraSpacingAfter * 0.6) },
@@ -1774,8 +2047,53 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     }
   }
 
+  // ── Build sections array ──────────────────────────────────────────────────
+  // Amendment 5/9: each chapter is an isolated Word section (SectionType.ODD_PAGE)
+  // so per-chapter headers work and editors can toggle header/footer per chapter.
+  const docSections = [
+    // Front matter section (no chapter-specific header)
+    {
+      headers: { default: makeDocxHeader(bookTitle, "Contents") },
+      footers: { default: makeDocxFooter() },
+      properties: {
+        page: {
+          margin: { top: 1134, right: 1080, bottom: 1440, left: 1260 }, // 6×9 trim margins in twips
+          pageNumbers: { start: 1, formatType: NumberFormat.DECIMAL },
+        },
+      },
+      children: frontChildren,
+    },
+    // Per-chapter sections
+    ...chapters.map((chapter) => ({
+      headers: { default: makeDocxHeader(bookTitle, chapter.title) },
+      footers: { default: makeDocxFooter() },
+      properties: {
+        type: SectionType.ODD_PAGE,
+        page: {
+          margin: { top: 1134, right: 1080, bottom: 1440, left: 1260 },
+          pageNumbers: { formatType: NumberFormat.DECIMAL },
+        },
+      },
+      children: chapterChildrenMap.get(chapter.number) ?? [],
+    })),
+    // Back matter section
+    ...(backChildren.length > 0 ? [{
+      headers: { default: makeDocxHeader(bookTitle, "Notes") },
+      footers: { default: makeDocxFooter() },
+      properties: {
+        type: SectionType.ODD_PAGE,
+        page: {
+          margin: { top: 1134, right: 1080, bottom: 1440, left: 1260 },
+          pageNumbers: { formatType: NumberFormat.DECIMAL },
+        },
+      },
+      children: backChildren,
+    }] : []),
+  ];
+
   const doc = new DocxDocument({
-    sections: [{ children }],
+    evenAndOddHeaderAndFooters: true,
+    sections: docSections,
     numbering: {
       config: [
         {
@@ -1804,6 +2122,8 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         },
       ],
     },
+    // ── Amendment 4: Named paragraph styles for publisher editorial workflows ──
+    // Publisher InDesign import scripts and editorial macros rely on these IDs.
     styles: {
       default: {
         document: {
@@ -1819,6 +2139,80 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           paragraph: { spacing: { before: 320, after: 160 } },
         },
       },
+      paragraphStyles: [
+        // NxBodyText — main prose style used by all body paragraphs
+        {
+          id: "NxBodyText",
+          name: "Nx Body Text",
+          basedOn: "Normal",
+          run: { size: bodyHalfPt, font: "Georgia" },
+          paragraph: {
+            alignment: AlignmentType.JUSTIFIED,
+            spacing: { after: paraSpacingAfter, line: Math.round((tpl.bodyFontSize + tpl.bodyLineGap) * 20 * 0.55) },
+            indent: { firstLine: paraIndentTwips },
+          },
+        },
+        // NxBlockQuote — scripture / block quotation style
+        {
+          id: "NxBlockQuote",
+          name: "Nx Block Quotation",
+          basedOn: "Normal",
+          run: { size: scriptureHalfPt, italics: true, font: "Georgia" },
+          paragraph: {
+            alignment: AlignmentType.LEFT,
+            spacing: { before: 160, after: 200 },
+            indent: { left: scriptureIndentTwips, right: scriptureIndentTwips },
+          },
+        },
+        // NxChapterLabel — decorative chapter number / roman numeral
+        {
+          id: "NxChapterLabel",
+          name: "Nx Chapter Label",
+          basedOn: "Normal",
+          run: { size: Math.round(tpl.chapterLabelSize * 2), color: accentRgbClean },
+          paragraph: {
+            alignment: tpl.chapterLabelAlign === "center" ? AlignmentType.CENTER
+              : tpl.chapterLabelAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
+            spacing: { before: 480, after: 80 },
+          },
+        },
+        // Amendment 10 — TOC 1 style with right-aligned dotted leader tab stop
+        // Word's TableOfContents field reads this style to format top-level entries.
+        {
+          id: "toc 1",
+          name: "toc 1",
+          basedOn: "Normal",
+          run: { size: bodyHalfPt, font: "Georgia" },
+          paragraph: {
+            spacing: { after: 120 },
+            tabStops: [
+              {
+                type: TabStopType.RIGHT,
+                position: TabStopPosition.MAX,
+                leader: LeaderType.DOT,
+              },
+            ],
+          },
+        },
+        // TOC 2 — section-level TOC entries (same treatment, slightly smaller)
+        {
+          id: "toc 2",
+          name: "toc 2",
+          basedOn: "Normal",
+          run: { size: Math.round(tpl.bodyFontSize * 1.8), font: "Georgia" },
+          paragraph: {
+            spacing: { after: 80 },
+            indent: { left: 360 },
+            tabStops: [
+              {
+                type: TabStopType.RIGHT,
+                position: TabStopPosition.MAX,
+                leader: LeaderType.DOT,
+              },
+            ],
+          },
+        },
+      ],
     },
   });
 

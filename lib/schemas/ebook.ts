@@ -248,6 +248,10 @@ export const PrintSpecSchema = z.object({
   trimSize: z.enum(["6x9", "5.5x8.5"]).default("6x9"),
   /** Whether to render running headers (book title verso / chapter title recto) and page numbers */
   runningHeaders: z.boolean().default(true),
+  /** Expand page canvas by 9pt on each side for offset / print-on-demand bleed area */
+  bleed: z.boolean().default(false),
+  /** Draw printer crop marks at the bleed corners (requires bleed: true to take effect) */
+  cropMarks: z.boolean().default(false),
 });
 
 export const EbookManifestSchema = z.object({
