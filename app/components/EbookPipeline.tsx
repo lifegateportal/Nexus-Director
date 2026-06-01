@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useId, useEffect } from "react";
+import { ProseEditor } from "./ProseEditor";
 import { EbookProgressRing } from "@/app/components/EbookProgressRing";
 import {
   saveEbookJob,
@@ -549,12 +550,12 @@ function ChapterCard({
               </div>
 
               <div>
-                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Chapter Intro</label>
-                <textarea
+                <ProseEditor
+                  label="Chapter Intro"
                   value={chapter.intro ?? ""}
-                  onChange={(e) => patchChapter({ intro: e.target.value })}
+                  onChange={(v) => patchChapter({ intro: v })}
                   rows={4}
-                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                  placeholder="Chapter opening paragraph…"
                 />
               </div>
             </div>
@@ -562,18 +563,21 @@ function ChapterCard({
 
           {chapter.sections.map((s) => (
             <div key={s.sectionNumber}>
-              <p className="text-xs font-semibold text-cyan-400/80 mb-1">{s.heading}</p>
               {editable ? (
-                <textarea
+                <ProseEditor
+                  label={s.heading}
                   value={s.body ?? ""}
-                  onChange={(e) => patchSection(s.sectionNumber, { body: e.target.value, wordCount: countWords(e.target.value) })}
-                  rows={8}
-                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
+                  onChange={(v) => patchSection(s.sectionNumber, { body: v, wordCount: countWords(v) })}
+                  rows={10}
+                  placeholder="Write section body…"
                 />
               ) : (
-                <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">
-                  {(s.body ?? "").slice(0, 220)}{(s.body ?? "").length > 220 ? "…" : ""}
-                </p>
+                <>
+                  <p className="text-xs font-semibold text-cyan-400/80 mb-1">{s.heading}</p>
+                  <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">
+                    {(s.body ?? "").slice(0, 220)}{(s.body ?? "").length > 220 ? "…" : ""}
+                  </p>
+                </>
               )}
             </div>
           ))}
@@ -2196,6 +2200,8 @@ export function EbookPipeline({
           coreThesis: contentMap.coreThesis || undefined,
           // Upgrade 4: illustration dedup
           usedIllustrations: Array.from(usedIllustrations),
+          // Scripture Amendment 4: primary translation (from assignment, seeded by assign-segments)
+          primaryTranslation: assignment.primaryTranslation,
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2806,45 +2812,37 @@ export function EbookPipeline({
             )}
 
             <div className="grid gap-3 md:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Preface</label>
-                <textarea
-                  value={completedManifest.frontMatter.preface}
-                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, preface: e.target.value } }))}
-                  rows={5}
-                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Introduction</label>
-                <textarea
-                  value={completedManifest.frontMatter.introduction}
-                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, introduction: e.target.value } }))}
-                  rows={5}
-                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Conclusion</label>
-                <textarea
-                  value={completedManifest.frontMatter.conclusion}
-                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, conclusion: e.target.value } }))}
-                  rows={5}
-                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
-                />
-              </div>
+              <ProseEditor
+                label="Preface"
+                value={completedManifest.frontMatter.preface}
+                onChange={(v) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, preface: v } }))}
+                rows={5}
+                placeholder="Book preface…"
+              />
+              <ProseEditor
+                label="Introduction"
+                value={completedManifest.frontMatter.introduction}
+                onChange={(v) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, introduction: v } }))}
+                rows={5}
+                placeholder="Book introduction…"
+              />
+              <ProseEditor
+                label="Conclusion"
+                value={completedManifest.frontMatter.conclusion}
+                onChange={(v) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, conclusion: v } }))}
+                rows={5}
+                placeholder="Book conclusion…"
+              />
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">About Author</label>
-                <textarea
-                  value={completedManifest.frontMatter.aboutAuthor ?? ""}
-                  onChange={(e) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, aboutAuthor: e.target.value.trim() ? e.target.value : null } }))}
-                  rows={4}
-                  className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
-                />
-              </div>
+              <ProseEditor
+                label="About Author"
+                value={completedManifest.frontMatter.aboutAuthor ?? ""}
+                onChange={(v) => updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, aboutAuthor: v.trim() ? v : null } }))}
+                rows={4}
+                placeholder="Author bio…"
+              />
               <div>
                 <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Resources</label>
                 <textarea

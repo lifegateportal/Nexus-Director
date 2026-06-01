@@ -22,6 +22,19 @@ export async function POST(req: NextRequest) {
       input.contentMap.segments.map((s) => [s.id, s])
     );
 
+    // ── Scripture Amendment 4: Compute dominant Bible translation ──────────
+    // Count non-empty translation strings across all quotes in the content map.
+    // The most-frequent one becomes the book's primaryTranslation, used as the
+    // default when a verse is quoted without an explicit translation label.
+    const translationCounts: Record<string, number> = {};
+    for (const q of input.contentMap.allQuotes ?? []) {
+      const t = (q.translation ?? "").trim().toUpperCase();
+      if (t) translationCounts[t] = (translationCounts[t] ?? 0) + 1;
+    }
+    const primaryTranslation = Object.keys(translationCounts).length > 0
+      ? Object.entries(translationCounts).sort((a, b) => b[1] - a[1])[0][0]
+      : undefined;
+
     // Build all assignments by resolving segment text for each section
     const assignments = input.architecture.chapters.flatMap((chapter) =>
       chapter.sections.map((section, idx) => {
@@ -47,6 +60,8 @@ export async function POST(req: NextRequest) {
           chapterPremise: chapter.chapterPremise || undefined,
           // Upgrade 3: book thesis threaded from content map
           coreThesis: input.contentMap.coreThesis || undefined,
+          // Scripture Amendment 4: primary translation for consistency
+          primaryTranslation,
         };
       })
     );

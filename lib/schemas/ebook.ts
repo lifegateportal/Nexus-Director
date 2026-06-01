@@ -151,6 +151,8 @@ export const SectionAssignmentSchema = z.object({
   coreThesis: z.string().optional(),                    // book's central thesis from content map — thread through every section
   // ── Upgrade 4: Illustration / story dedup ────────────────────────────────
   usedIllustrations: z.array(z.string()).default([]),   // story/illustration titles already used in earlier sections
+  // ── Scripture Amendment 4: Primary translation consistency ───────────────
+  primaryTranslation: z.string().optional(),            // dominant Bible translation for this book (e.g. "NIV") — default for unspecified verses
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────

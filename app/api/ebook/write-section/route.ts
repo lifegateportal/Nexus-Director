@@ -329,6 +329,39 @@ PROVERBS / UNATTRIBUTED SAYINGS:
 CRITICAL: Reproduce scripture text EXACTLY as the speaker quoted it. Never paraphrase scripture. Never merge two separate verses into one block unless the speaker quoted them together.
 
 ════════════════════════════════════════════
+SCRIPTURE EDITORIAL STANDARDS (industry rules — enforce on every passage)
+════════════════════════════════════════════
+
+RULE 1 — ANCHOR BEFORE EXPOSITION (placement discipline):
+When a section's central argument depends on a single controlling passage, that passage must appear as a standalone block quote at or near the opening of the section — before the author's explanatory words develop the argument. Do not bury the key verse mid-paragraph as a late proof-text after the argument is already complete. The Word anchors the teaching; the author unpacks what it says. If the transcript introduces the verse after several explanatory paragraphs, restructure so the verse leads and the explanation follows. Exception: when the speaker is building narrative suspense toward a verse, the natural progression may be preserved.
+
+RULE 2 — NO POST-QUOTE RESTATEMENT (scripture-specific hard ban):
+The sentence immediately after a scripture quote must ADVANCE the argument — it must not rephrase, summarize, translate, or explain what the verse just said in different words. "This verse tells us that God loves us" after John 3:16 is always wrong. "What Paul means here is..." after quoting Paul directly is always wrong. The reader has eyes. Land the implication, draw the consequence, or pivot to the application — but never echo back what the text already said. This rule applies to every scripture quotation in every section, no exceptions.
+
+RULE 3 — PRESERVE LINGUISTIC ANCHORS (Greek/Hebrew term fidelity):
+When the speaker provides the original Greek or Hebrew word, its transliteration, or its root meaning, you MUST reproduce that exact term — never paraphrase, generalize, or drop it. These are doctrinal load-bearing details. Place the term adjacent to the verse it annotates. Format: the Greek word *[transliteration]*, meaning "[definition as the speaker stated it]". If the speaker said "the word translated 'prayer' here is proseuchomai, which means to exchange your wish for God's wish," that exact claim must appear in the prose — not a smoothed paraphrase of it. These word studies are often the most memorable teaching moment in the whole chapter; erasing them is a content error, not an editorial improvement.
+
+RULE 4 — FULL-QUOTE-ONCE, SHORTHAND-AFTER (repetition discipline):
+Within the same section, a scripture may only be quoted in full once. Any subsequent reference to the same passage within this section must be shorthand only: "As Jesus said in John 15:5..." or "Returning to James 1:5..." without reprinting the verse text. The forbidden verse texts list (in the dedup block above) already enforces this across sections; this rule extends it within the current section as well. Never reprint a verse text that has already appeared — even if you rephrase the framing.
+
+RULE 5 — NO UNINVITED BIBLICAL BACKGROUND (source-lock for scripture):
+You may not add any of the following unless the speaker explicitly stated it in the transcript:
+  • Historical setting or date of the original writing
+  • Cultural or sociological context of the original audience
+  • Authorial intent, personal biography, or life situation of the Bible author
+  • Grammatical or syntactical commentary on the original language
+  • Audience situation of the church/people the letter/book was addressed to (e.g., "Paul wrote to the Corinthians because they were divided over...")
+  • Any doctrinal position, theological system, or church tradition that "explains" the verse but was not in the transcript
+Every word of explanation must trace directly to the transcript. Your training data about biblical texts is not source material. When in doubt, delete the sentence.
+
+RULE 6 — TEXT → TRUTH → APPLICATION (teaching circuit):
+Every scripture quotation must complete a circuit within the same section:
+  Text: The verse is quoted or cited.
+  Truth: The speaker's doctrinal or practical claim drawn from the text.
+  Application: What the reader must believe differently, do, or become as a result.
+All three stages must appear within two or three paragraphs of the quotation. If the transcript provides the text and truth but no application material, close the circuit with a reader-facing implication sentence drawn from the transcript's broader argument — not invented content. If the transcript genuinely provides no application, add [application thin] as a note after the section's last paragraph and reduce the word count rather than padding with fabricated application.
+
+════════════════════════════════════════════
 AUDIENCE & FORMAT
 ════════════════════════════════════════════
 • Remove crowd cues and stage prompts (e.g., "say amen", "look at your neighbor", applause calls, house-response commands)
@@ -388,6 +421,17 @@ USED STORIES & ILLUSTRATIONS — DO NOT REPEAT
 ════════════════════════════════════════════
 The following personal stories, illustrations, parables, and named examples have ALREADY appeared in earlier sections of this book. Do NOT retell, re-describe, paraphrase, or re-introduce them as illustrations. If the transcript mentions them, extract ONLY the principle they illustrate — never the narrative wrapper:
 ${(assignment.usedIllustrations ?? []).map((s) => `• "${s}"`).join("\n")}`
+    : "";
+
+  // ── Scripture Amendment 4: Primary translation block ─────────────────────
+  // Injected into the prompt so the LLM uses the book's dominant translation
+  // as the default whenever a verse has no explicit translation label.
+  const primaryTranslationBlock = assignment.primaryTranslation
+    ? `\n\n════════════════════════════════════════════
+PRIMARY BIBLE TRANSLATION FOR THIS BOOK
+════════════════════════════════════════════
+The speaker's dominant Bible translation is: ${assignment.primaryTranslation}
+When quoting a verse for which the speaker did not specify a translation, use (${assignment.primaryTranslation}) as the parenthetical label. Never mix translations within the same passage or apply a different default to achieve variety — consistency is correctness here.`
     : "";
 
   // ── Server-side excerpt dedup (existing Upgrade 2) ─────────────────────
@@ -648,8 +692,8 @@ ${READER_NORMALIZATION_RULES}`,
 
     const deduplicatedSystem =
       (assignment.alreadyCoveredPoints ?? []).length > 0
-        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\n\nSCRIPTURE EXCEPTION — OVERRIDES THE SKIP RULE ABOVE:\nThis hard-skip rule NEVER applies to Bible verses, scripture quotations, or the direct commentary that unpacks them. If the transcript excerpts for THIS section contain a Bible verse or reference, you MUST include it in the prose — even if the same verse or a related one appeared in an earlier section. This author is a preacher; their argument is built verse by verse. Removing a scripture silently breaks the theological foundation of the point. The ONLY restriction is the FORBIDDEN VERSE TEXTS block, which prevents reprinting the exact same verse text verbatim — in that case, cite the reference inline (e.g. "as David declares in Psalm 34:4") without reprinting the full text.`
-        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${alreadyQuotedBlock}`;
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\n\nSCRIPTURE EXCEPTION — OVERRIDES THE SKIP RULE ABOVE:\nThis hard-skip rule NEVER applies to Bible verses, scripture quotations, or the direct commentary that unpacks them. If the transcript excerpts for THIS section contain a Bible verse or reference, you MUST include it in the prose — even if the same verse or a related one appeared in an earlier section. This author is a preacher; their argument is built verse by verse. Removing a scripture silently breaks the theological foundation of the point. The ONLY restriction is the FORBIDDEN VERSE TEXTS block, which prevents reprinting the exact same verse text verbatim — in that case, cite the reference inline (e.g. "as David declares in Psalm 34:4") without reprinting the full text.`
+        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}`;
 
     const { object } = await generateObject({
       model: deepSeekModel,
