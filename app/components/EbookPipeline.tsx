@@ -140,8 +140,8 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
 async function streamSection(
   assignment: SectionAssignment,
   authorConfig?: { instructions: string; targetAudience: string }
-): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount: number; unfullfilledHook: string | null }> {
-  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount?: number; unfullfilledHook?: string | null }>(
+): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount: number; unfullfilledHook: string | null; sequenceBreakCount: number }> {
+  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount?: number; unfullfilledHook?: string | null; sequenceBreakCount?: number }>(
     "/api/ebook/write-section", { assignment, ...(authorConfig ? { authorConfig } : {}) }
   );
   return {
@@ -149,6 +149,7 @@ async function streamSection(
     claimLedger: result.claimLedger ?? [],
     passiveVoiceCount: result.passiveVoiceCount ?? 0,
     unfullfilledHook: result.unfullfilledHook ?? null,
+    sequenceBreakCount: result.sequenceBreakCount ?? 0,
   };
 }
 
@@ -272,6 +273,120 @@ function extractOverusedPhrases(corpus: string, topN = 10): string[] {
     .sort((a, b) => b[1] - a[1])
     .slice(0, topN)
     .map(([gram]) => gram);
+}
+
+// ─── Seq-Amendment 3: Argument-Turn Extractor ─────────────────────────────────
+// Scans excerpts for speaker pivot phrases — the moments the teacher changes
+// direction or signals a key point. These mark paragraph boundaries the LLM
+// must NOT merge across.
+const TURN_SIGNALS = /\b(but here'?s? (?:the )?(?:thing|truth|key|point)|now watch this|let me show you|look at (?:verse|this)|here'?s? what i want you to see|here'?s? the (?:point|key|thing)|but watch|but look at this|now look|pay attention|don'?t miss this|notice this|watch this|get this|and notice|the (?:point|key|truth|secret) is|so here'?s? (?:what|where|the)|now here'?s? the|here'?s? where it gets|but this is (?:important|key|critical)|so what does (?:that|this) mean|what does that look like|now what about|and this is where|see what happened|watch what|now consider|look at what)\b/gi;
+
+function extractSequenceTurns(excerpts: string[]): string[] {
+  const turns: string[] = [];
+  for (const excerpt of excerpts) {
+    const sentences = excerpt.split(/(?<=[.!?])\s+/).filter(Boolean);
+    for (const sentence of sentences) {
+      if (TURN_SIGNALS.test(sentence)) {
+        TURN_SIGNALS.lastIndex = 0;
+        const cleaned = sentence.replace(/[#>*_]/g, "").trim().slice(0, 140);
+        if (!turns.includes(cleaned)) turns.push(cleaned);
+      }
+    }
+  }
+  return turns.slice(0, 20); // cap to avoid prompt bloat
+}
+
+// ─── Seq-Amendment 4: Story Setup → Payoff Extractor ─────────────────────────
+// Finds story-opening sentences and the principle/payoff sentence that follows
+// within 4 sentences. Passed to the writer as ordered pairs: setup must come
+// before payoff — reversing them violates the speaker's teaching logic.
+const PRINCIPLE_SIGNALS = /\b(the (?:lesson|point|truth|key|principle|answer|secret) (?:is|here is)|what (?:this|that) (?:teaches|shows|tells|means)|(?:and )?(?:that'?s? why|that'?s? the|this is why|this means)|so the (?:point|truth|lesson)|here'?s? the truth|the moral (?:is|of)|what god (?:was|is) saying|what (?:he|she|they) (?:was|were|is) trying to say|the takeaway|the (?:real )?question is|the (?:real )?issue (?:is|here)|so what|and so|therefore)\b/i;
+
+function extractStoryPayoffPairs(excerpts: string[]): { setup: string; principle: string }[] {
+  const pairs: { setup: string; principle: string }[] = [];
+  for (const excerpt of excerpts) {
+    const sentences = excerpt.split(/(?<=[.!?])\s+/).filter(Boolean);
+    for (let i = 0; i < sentences.length; i++) {
+      if (!STORY_OPENERS.test(sentences[i])) continue;
+      // Look forward up to 5 sentences for the payoff
+      for (let j = i + 1; j < Math.min(i + 6, sentences.length); j++) {
+        if (PRINCIPLE_SIGNALS.test(sentences[j])) {
+          pairs.push({
+            setup: sentences[i].replace(/[#>*_]/g, "").trim().slice(0, 130),
+            principle: sentences[j].replace(/[#>*_]/g, "").trim().slice(0, 130),
+          });
+          break;
+        }
+      }
+    }
+  }
+  return pairs.slice(0, 8);
+}
+
+// ─── Seq-Amendment 5: Scripture Position Extractor ───────────────────────────
+// Records which excerpt index (0-based) each scripture reference first appears
+// in. Passed to the LLM so it knows a verse from Excerpt 4 must not appear in
+// paragraphs anchored to Excerpts 1–3.
+const SCRIPTURE_REF_RE = /\b(?:genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|(?:1|2)\s*samuel|(?:1|2)\s*kings|(?:1|2)\s*chronicles|ezra|nehemiah|esther|job|psalm(?:s)?|proverbs|ecclesiastes|(?:song of solomon|song of songs)|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|romans|(?:1|2)\s*corinthians|galatians|ephesians|philippians|colossians|(?:1|2)\s*thessalonians|(?:1|2)\s*timothy|titus|philemon|hebrews|james|(?:1|2|3)\s*(?:john|peter)|jude|revelation)\s+\d+:\d+/gi;
+
+function extractScripturePositions(excerpts: string[]): { reference: string; excerptIndex: number }[] {
+  const seen = new Set<string>();
+  const positions: { reference: string; excerptIndex: number }[] = [];
+  for (let i = 0; i < excerpts.length; i++) {
+    const matches = excerpts[i].matchAll(SCRIPTURE_REF_RE);
+    for (const match of matches) {
+      const ref = match[0].replace(/\s+/g, " ").trim().toLowerCase();
+      if (!seen.has(ref)) {
+        seen.add(ref);
+        positions.push({ reference: match[0].trim(), excerptIndex: i });
+      }
+    }
+  }
+  return positions;
+}
+
+// ─── Seq-Amendment 2: Server-side sequence watermark ─────────────────────────
+// For each written paragraph, finds the best-matching excerpt by 4-gram overlap
+// and verifies excerpt indices are non-decreasing. Returns any positions where
+// the LLM jumped back to an earlier excerpt (sequence inversion).
+function checkSequenceWatermark(
+  paragraphs: string[],
+  excerpts: string[],
+  minScore = 0.06
+): { paragraphIdx: number; expectedMin: number; got: number }[] {
+  if (excerpts.length < 2) return [];
+  const breaks: { paragraphIdx: number; expectedMin: number; got: number }[] = [];
+  let lastExcerptIdx = -1;
+  const words = (text: string) => text.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+  const ngrams = (text: string, n: number): Set<string> => {
+    const w = words(text);
+    const s = new Set<string>();
+    for (let i = 0; i <= w.length - n; i++) s.add(w.slice(i, i + n).join(" "));
+    return s;
+  };
+  const overlapScore = (a: string, b: string): number => {
+    const sa = ngrams(a, 4);
+    const sb = ngrams(b, 4);
+    if (sa.size === 0) return 0;
+    let shared = 0;
+    for (const g of sa) { if (sb.has(g)) shared++; }
+    return shared / sa.size;
+  };
+  for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+    let bestScore = minScore;
+    let bestExcerptIdx = -1;
+    for (let eIdx = 0; eIdx < excerpts.length; eIdx++) {
+      const score = overlapScore(paragraphs[pIdx], excerpts[eIdx]);
+      if (score > bestScore) { bestScore = score; bestExcerptIdx = eIdx; }
+    }
+    if (bestExcerptIdx >= 0) {
+      if (lastExcerptIdx >= 0 && bestExcerptIdx < lastExcerptIdx) {
+        breaks.push({ paragraphIdx: pIdx + 1, expectedMin: lastExcerptIdx + 1, got: bestExcerptIdx + 1 });
+      }
+      lastExcerptIdx = Math.max(lastExcerptIdx, bestExcerptIdx);
+    }
+  }
+  return breaks;
 }
 
 // ─── Audio Upload Card ────────────────────────────────────────────────────────
@@ -2126,6 +2241,12 @@ export function EbookPipeline({
         ? getLastSentence(allSections[allSections.length - 1].body ?? "")
         : "";
 
+      // ── Seq-A7: Prior excerpt tail tracker ───────────────────────────────
+      // After each section is written, record the last 2 sentences of that
+      // section's final transcript excerpt so the next section can pick up
+      // mid-argument rather than re-setting up what was already established.
+      let previousExcerptTail = "";
+
       // ── Upgrade 4: Chapter-bucketed covered-points ────────────────────────
       // Current chapter entries are kept in full; completed chapters are compressed
       // to one summary line each — guaranteeing intra-chapter dedup is perfect while
@@ -2279,6 +2400,15 @@ export function EbookPipeline({
             const chapterAssignments = assignments.filter((a) => a.chapterNumber === assignment.chapterNumber);
             return Math.max(0, chapterAssignments.findIndex((a) => a.sectionNumber === assignment.sectionNumber));
           })(),
+          // ── 7-Amendment Speaker-Sequence System ──────────────────────────
+          // Seq-A3: argument pivot phrases extracted from this section's excerpts
+          sequenceTurns: extractSequenceTurns(filteredExcerpts.length > 0 ? filteredExcerpts : assignment.transcriptExcerpts),
+          // Seq-A4: story setup → principle pairs extracted from this section's excerpts
+          storyPayoffPairs: extractStoryPayoffPairs(filteredExcerpts.length > 0 ? filteredExcerpts : assignment.transcriptExcerpts),
+          // Seq-A5: scripture reference → excerpt index positions
+          scripturePositions: extractScripturePositions(filteredExcerpts.length > 0 ? filteredExcerpts : assignment.transcriptExcerpts),
+          // Seq-A7: last 2 sentences of prev section's final excerpt — argument was mid-flow
+          priorExcerptTail: previousExcerptTail || undefined,
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2296,7 +2426,7 @@ export function EbookPipeline({
           )
         );
 
-        let { body, claimLedger, passiveVoiceCount, unfullfilledHook } = await streamSection(
+        let { body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
           augmented,
           (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
         );
@@ -2306,7 +2436,7 @@ export function EbookPipeline({
         if (wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
           addLog(`  ↺ Section too short (${wc} words) — retrying with expansion prompt…`);
           const expanded = { ...augmented, targetWordCount: Math.max(assignment.targetWordCount, 600) };
-          ({ body, claimLedger, passiveVoiceCount, unfullfilledHook } = await streamSection(
+          ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
             expanded,
             (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
           ));
@@ -2325,7 +2455,7 @@ export function EbookPipeline({
                   slice(0, 10),
               ],
             };
-            ({ body, claimLedger, passiveVoiceCount, unfullfilledHook } = await streamSection(
+            ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
               redraftExclusion,
               (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
             ));
@@ -2340,6 +2470,10 @@ export function EbookPipeline({
         if (unfullfilledHook) {
           addLog(`  ⚠ Unfulfilled hook in Ch${assignment.chapterNumber} §${assignment.sectionNumber}: "${unfullfilledHook.slice(0, 80)}…"`);
         }
+        // ── Seq-A6: Log route-level sequence breaks ───────────────────────
+        if (sequenceBreakCount > 0) {
+          addLog(`  ⚠ Seq: ${sequenceBreakCount} sequence break(s) in Ch${assignment.chapterNumber} §${assignment.sectionNumber} — speaker arc may be partially out of order`);
+        }
 
         const finalWc = countWords(body);
         const draft: SectionDraft = {
@@ -2353,6 +2487,21 @@ export function EbookPipeline({
         allSections.push(draft);
         completedCount++;
         previousEnding = getLastSentence(body ?? "");
+
+        // ── Seq-A7: Update prior excerpt tail for next section ────────────
+        const effectiveExcerpts = filteredExcerpts.length > 0 ? filteredExcerpts : assignment.transcriptExcerpts;
+        const lastExcerpt = effectiveExcerpts[effectiveExcerpts.length - 1] ?? "";
+        const excerptSentences = lastExcerpt.split(/(?<=[.!?])\s+/).filter(Boolean);
+        previousExcerptTail = excerptSentences.slice(-2).join(" ").slice(0, 240);
+
+        // ── Seq-A2: Post-write sequence watermark ─────────────────────────
+        const writtenParas = (body ?? "").split(/\n\n+/).filter(Boolean);
+        const seqBreaks = checkSequenceWatermark(writtenParas, effectiveExcerpts);
+        if (seqBreaks.length > 0) {
+          for (const brk of seqBreaks) {
+            addLog(`  ⚠ Seq-A2: Ch${assignment.chapterNumber} §${assignment.sectionNumber} paragraph ${brk.paragraphIdx} drew from excerpt ${brk.got} (expected ≥${brk.expectedMin}) — sequence inversion`);
+          }
+        }
 
         // ── Upgrade 6: Extend corpus for future similarity checks ─────────
         writtenCorpus += "\n\n" + body;

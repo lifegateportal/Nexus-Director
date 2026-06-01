@@ -162,6 +162,15 @@ export const SectionAssignmentSchema = z.object({
   overusedPhrases: z.array(z.string()).default([]),
   /** Amendment 7 — Section index within its chapter (0-based) — drives the diminishing novelty cap */
   sectionIndexInChapter: z.number().int().default(0),
+  // ── 7-Amendment Speaker-Sequence System ──────────────────────────────────
+  /** Seq-A3 — Argument pivot phrases extracted from the excerpts (e.g. "now watch this", "but here's the thing") */
+  sequenceTurns: z.array(z.string()).default([]),
+  /** Seq-A4 — Story setup → principle landing pairs extracted from excerpts so setup always precedes payoff */
+  storyPayoffPairs: z.array(z.object({ setup: z.string(), principle: z.string() })).default([]),
+  /** Seq-A5 — Scripture positions: which excerpt index (0-based) each reference first appears in */
+  scripturePositions: z.array(z.object({ reference: z.string(), excerptIndex: z.number().int() })).default([]),
+  /** Seq-A7 — Last 2 sentences of the final excerpt from the previous section — the argument was mid-flow here */
+  priorExcerptTail: z.string().optional(),
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────

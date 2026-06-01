@@ -189,6 +189,18 @@ function excerptOverlapWithCoveredContent(excerpt: string, coveredText: string, 
   return shared / excerptGrams.size;
 }
 
+// ── Seq-A2: Per-paragraph excerpt-match overlap (used for server-side watermark)
+// Scores how strongly a written paragraph draws from a given transcript excerpt
+// by 4-gram overlap against the paragraph's own n-gram vocabulary.
+function excerptOverlapScore(para: string, excerpt: string, n = 4): number {
+  const paraGrams = extractNgrams(para, n);
+  const excGrams = extractNgrams(excerpt, n);
+  if (paraGrams.size === 0) return 0;
+  let shared = 0;
+  for (const g of paraGrams) { if (excGrams.has(g)) shared++; }
+  return shared / paraGrams.size;
+}
+
 function filterConsumedExcerpts(
   excerpts: string[],
   alreadyCoveredPoints: string[],
@@ -481,15 +493,58 @@ NEW CONCEPT CAP FOR THIS SECTION
 ════════════════════════════════════════════
 This is section ${sectionIdx + 1} within its chapter. You MAY introduce at most ${maxNewConcepts} new core concept${maxNewConcepts !== 1 ? "s" : ""} in this section — ideas the reader has NOT encountered yet anywhere in this book. Every additional paragraph must deepen, apply, or illustrate a concept already introduced (either earlier in this chapter, or in this section's own opening). Width is not the goal; depth is. A section that introduces ${maxNewConcepts + 1}+ new concepts will feel scattered and under-developed.`;
 
-  // ── Server-side excerpt dedup (existing Upgrade 2) ─────────────────────
+  // ── Seq-A3: Argument-turn sequence enforcement block ─────────────────────
+  const sequenceTurns = assignment.sequenceTurns ?? [];
+  const sequenceTurnsBlock = sequenceTurns.length > 0
+    ? `\n\n════════════════════════════════════════════
+ARGUMENT TURNS — PRESERVE THESE PIVOT POINTS
+════════════════════════════════════════════
+The speaker made the following rhetorical pivots at specific points in the transcript. Each turn marks where the argument changes direction. Do NOT merge paragraphs across a turn, and do NOT write the conclusion of a turn before writing its setup:
+${sequenceTurns.map((t) => `• ${t}`).join("\n")}`
+    : "";
+
+  // ── Seq-A4: Story setup-before-payoff ordering block ─────────────────────
+  const storyPayoffPairs = assignment.storyPayoffPairs ?? [];
+  const storyPayoffBlock = storyPayoffPairs.length > 0
+    ? `\n\n════════════════════════════════════════════
+STORY SETUP-BEFORE-PAYOFF — ORDERING REQUIRED
+════════════════════════════════════════════
+The following story/principle pairs were found in the transcript. You MUST write the narrative setup BEFORE the concluding principle — never reverse the order by stating the lesson first and filling in the backstory afterward:
+${storyPayoffPairs.map((p, i) => `${i + 1}. SETUP FIRST: "${p.setup}" → THEN PRINCIPLE: "${p.principle}"`).join("\n")}`
+    : "";
+
+  // ── Seq-A5: Scripture position enforcement block ──────────────────────────
+  const scripturePositions = assignment.scripturePositions ?? [];
+  const scripturePositionsBlock = scripturePositions.length > 0
+    ? `\n\n════════════════════════════════════════════
+SCRIPTURE SEQUENCE POSITIONS — DO NOT MOVE EARLIER
+════════════════════════════════════════════
+Each scripture below appears at a specific position in the transcript (by excerpt number). Do NOT use a scripture before you reach the paragraph that corresponds to its excerpt position. The verse belongs where the speaker placed it in their argument — not where it feels rhetorically convenient:
+${scripturePositions.map((p) => `• "${p.reference}" — appears in Excerpt ${p.excerptIndex + 1}. Do not use it in paragraphs anchored to earlier excerpts.`).join("\n")}`
+    : "";
+
+  // ── Seq-A7: Prior excerpt tail (argument-entry-point) block ──────────────
+  const priorExcerptTailBlock = assignment.priorExcerptTail
+    ? `\n\n════════════════════════════════════════════
+ARGUMENT ENTRY POINT — READ BEFORE OPENING PARAGRAPH
+════════════════════════════════════════════
+The speaker was mid-argument when this section's excerpts begin. The previous section's transcript ended with:
+"${assignment.priorExcerptTail}"
+Your opening paragraph must land where that argument was heading — do NOT re-establish the premise that was already set up. Do not reintroduce context; continue forward from it.`
+    : "";
+
+
   const { filtered: dedupedExcerpts, removedCount: excerptRemovedCount } = filterConsumedExcerpts(
     assignment.transcriptExcerpts,
     assignment.alreadyCoveredPoints ?? []
   );
   const effectiveExcerpts = excerptRemovedCount > 0 ? dedupedExcerpts : assignment.transcriptExcerpts;
 
+  // ── Seq-A1: Label each excerpt with its position "of N" so the LLM knows
+  // the total sequence and cannot pretend later excerpts come first.
+  const totalExcerpts = assignment.transcriptExcerpts.length; // use original count so numbering is stable
   const excerptBlock = effectiveExcerpts
-    .map((t, i) => `[EXCERPT ${i + 1}]\n${t}`)
+    .map((t, i) => `[EXCERPT ${i + 1} of ${totalExcerpts}]\n${t}`)
     .join("\n\n---\n\n");
 
   const quoteBlock =
@@ -604,9 +659,9 @@ ${chapterPremiseBlock}
 ${coverageLedgerBlock}
 ${bannedRecapsBlock}
 ${lexicalFingerprintBlock}
-${diminishingPermissionBlock}
+${diminishingPermissionBlock}${sequenceTurnsBlock}${storyPayoffBlock}${scripturePositionsBlock}${priorExcerptTailBlock}
 
-TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
+TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these — numbered EXCERPT 1 of ${totalExcerpts} through EXCERPT ${effectiveExcerpts.length} of ${totalExcerpts}):
 ${excerptBlock}
 
 SECTION SCOPE RULE — READ BEFORE WRITING:
@@ -622,6 +677,7 @@ NO HEADINGS RULE — ABSOLUTE: Do NOT include any markdown heading (##, ###, #) 
 Return:
 - paragraphs: an array of strings where EACH ELEMENT IS ONE PARAGRAPH of polished prose. Every paragraph is a separate array item. Never put more than one paragraph in a single array element. Do not use \n or \n\n inside any element — each element is exactly one paragraph.
 - claimLedger: list of major claims and the excerpt numbers (1-based) that support each claim.
+- planSequenceIds: for EACH paragraph in the paragraphs array, provide the 0-based index of the paragraph plan step it fulfills. Must be non-decreasing (paragraph N cannot fulfill a plan step earlier than paragraph N-1's step).
 
 Now write the section prose:`;
 
@@ -630,6 +686,8 @@ Now write the section prose:`;
     paragraphPlan: z.array(z.object({
       purpose: z.string().default(""),
       supportedExcerptNumbers: z.array(z.number().int().positive()).default([]),
+      // Seq-A1: minimum excerpt number this paragraph draws from (for monotonicity check)
+      minExcerptNumber: z.number().int().positive().optional(),
     })).default([]),
   });
 
@@ -641,6 +699,8 @@ Now write the section prose:`;
       claim: z.string().default(""),
       excerptNumbers: z.array(z.number().int().positive()).default([]),
     })).default([]),
+    // Seq-A6: for each paragraph, the 0-based plan step index it fulfills
+    planSequenceIds: z.array(z.number().int().nonnegative()).default([]),
   });
 
   try {
@@ -668,6 +728,9 @@ Within that sequence, the prose of each paragraph should:
 - Develop it with any supporting specifics the speaker provided
 - Land it before moving to the next point in sequence
 Do not skip ahead to a later point and return to an earlier one.
+
+EXCERPT ANCHOR REQUIREMENT (Seq-A1):
+Every paragraph plan entry MUST list the specific excerpt number(s) that support it in supportedExcerptNumbers[]. Plans with empty supportedExcerptNumbers will be pruned automatically. The minimum excerpt number must advance across the plan — do not plan paragraph N drawing from a lower excerpt than paragraph N-1's minimum. Excerpts are labeled "EXCERPT X of ${totalExcerpts}" — use those numbers in supportedExcerptNumbers.
 ${plannerDedup}
 Each paragraph in your plan must have a clear narrative purpose and be supported by specific transcript excerpt numbers. Do not plan paragraphs with no excerpt support.
 
@@ -691,6 +754,18 @@ ${READER_NORMALIZATION_RULES}`,
         return overlap < 0.65; // prune if >65% of meaningful purpose words are in covered content
       });
       paragraphPlan = prunedPlan.length > 0 ? prunedPlan : (plan.paragraphPlan ?? []);
+
+      // ── Seq-A1: Post-plan prune — remove plan entries with no excerpt anchor,
+      // then sort remaining entries by their minimum excerpt number so the plan
+      // itself enforces the speaker's argument order before the writer sees it.
+      const anchoredPlan = paragraphPlan.filter((e) => (e.supportedExcerptNumbers ?? []).length > 0);
+      const basePlan = anchoredPlan.length > 0 ? anchoredPlan : paragraphPlan;
+      basePlan.sort((a, b) => {
+        const minA = Math.min(...(a.supportedExcerptNumbers.length ? a.supportedExcerptNumbers : [Infinity]));
+        const minB = Math.min(...(b.supportedExcerptNumbers.length ? b.supportedExcerptNumbers : [Infinity]));
+        return minA - minB;
+      });
+      paragraphPlan = basePlan;
     } catch {
       paragraphPlan = [];
     }
@@ -768,6 +843,42 @@ ${READER_NORMALIZATION_RULES}`,
     if (orphansFixed > 0) {
       console.log(`[write-section] S5: merged ${orphansFixed} orphan paragraph(s) in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
     }
+
+    // ── Seq-A6: Plan sequence contract check ─────────────────────────────
+    // The writer declares which plan step each paragraph fulfills via
+    // planSequenceIds. Verify the array is non-decreasing; log any inversions.
+    let sequenceBreakCount = 0;
+    const planSeqIds = object.planSequenceIds ?? [];
+    for (let i = 1; i < planSeqIds.length; i++) {
+      if (planSeqIds[i] < planSeqIds[i - 1]) {
+        sequenceBreakCount++;
+        console.warn(`[write-section] Seq-A6 plan break: paragraph ${i + 1} fulfills plan step ${planSeqIds[i]} before step ${planSeqIds[i - 1]} in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
+      }
+    }
+
+    // ── Seq-A2: Sentence-level sequence watermark ─────────────────────────
+    // For each paragraph, find closest matching excerpt by 4-gram overlap and
+    // verify the matched excerpt indices advance monotonically. Sequence
+    // inversions (writing from excerpt 2 after already using excerpt 4) are logged.
+    let lastExcerptIdx = -1;
+    for (let pi = 0; pi < repairedParagraphs.length; pi++) {
+      const para = repairedParagraphs[pi];
+      if (para.split(/\s+/).length < 15) continue; // skip very short transitional paragraphs
+      let bestMatch = -1;
+      let bestScore = 0;
+      for (let ei = 0; ei < effectiveExcerpts.length; ei++) {
+        const score = excerptOverlapScore(para, effectiveExcerpts[ei]);
+        if (score > bestScore) { bestScore = score; bestMatch = ei; }
+      }
+      if (bestMatch >= 0 && bestScore > 0.08) {
+        if (bestMatch < lastExcerptIdx) {
+          sequenceBreakCount++;
+          console.warn(`[write-section] Seq-A2 watermark break: paragraph ${pi + 1} matches excerpt ${bestMatch + 1} but excerpt ${lastExcerptIdx + 1} was already used in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
+        }
+        lastExcerptIdx = Math.max(lastExcerptIdx, bestMatch);
+      }
+    }
+
     const rawBody = repairedParagraphs.join("\n\n") || fallbackSectionBody(assignment);
     const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
     // ── Upgrade 8: Passive voice detection ───────────────────────────────
@@ -787,6 +898,7 @@ ${READER_NORMALIZATION_RULES}`,
       claimLedger: object.claimLedger ?? [],
       passiveVoiceCount: passiveHits.length,
       unfullfilledHook,
+      sequenceBreakCount,
     }, { status: 200 });
   } catch (err) {
     const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(fallbackSectionBody(assignment)));
