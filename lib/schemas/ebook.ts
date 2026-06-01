@@ -153,6 +153,15 @@ export const SectionAssignmentSchema = z.object({
   usedIllustrations: z.array(z.string()).default([]),   // story/illustration titles already used in earlier sections
   // ── Scripture Amendment 4: Primary translation consistency ───────────────
   primaryTranslation: z.string().optional(),            // dominant Bible translation for this book (e.g. "NIV") — default for unspecified verses
+  // ── 7-Amendment Anti-Duplication System ─────────────────────────────────
+  /** Amendment 1 — Coverage ledger: heading + 1-sentence summary of every written section */
+  coverageLedger: z.array(z.object({ heading: z.string(), summary: z.string() })).default([]),
+  /** Amendment 4 — Banned recaps: opening thesis sentence from each prior section — must not be paraphrased */
+  bannedRecaps: z.array(z.string()).default([]),
+  /** Amendment 6 — Lexical fingerprint: top repeated 3-grams across the written corpus — find fresher language */
+  overusedPhrases: z.array(z.string()).default([]),
+  /** Amendment 7 — Section index within its chapter (0-based) — drives the diminishing novelty cap */
+  sectionIndexInChapter: z.number().int().default(0),
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────

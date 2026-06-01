@@ -434,6 +434,53 @@ The speaker's dominant Bible translation is: ${assignment.primaryTranslation}
 When quoting a verse for which the speaker did not specify a translation, use (${assignment.primaryTranslation}) as the parenthetical label. Never mix translations within the same passage or apply a different default to achieve variety — consistency is correctness here.`
     : "";
 
+  // ── Amendment 1: Coverage Ledger ─────────────────────────────────────────
+  // Each entry is a section that has ALREADY been written. The LLM must not
+  // re-establish any insight that is summarised here — reference it at most once.
+  const coverageLedger = assignment.coverageLedger ?? [];
+  const coverageLedgerBlock = coverageLedger.length > 0
+    ? `\n\n════════════════════════════════════════════
+COVERAGE LEDGER — NEVER RE-EXPLAIN THESE SECTIONS
+════════════════════════════════════════════
+Every section below has ALREADY BEEN WRITTEN and delivered to the reader. Do NOT re-introduce, re-define, re-explain, or re-develop the ideas they established — not even in passing. You may presuppose the reader already knows each one. Reference an entry at most once (inline citation only, e.g. "as we saw in [heading]") and only when it directly supports NEW content:
+${coverageLedger.map((e) => `• [${e.heading}] — Established: "${e.summary}"`).join("\n")}`
+    : "";
+
+  // ── Amendment 4: Banned Recaps ────────────────────────────────────────────
+  // These are the exact opening thesis sentences from prior sections. The LLM
+  // must not rephrase, echo, or restate any of them — not even loosely.
+  const bannedRecaps = assignment.bannedRecaps ?? [];
+  const bannedRecapsBlock = bannedRecaps.length > 0
+    ? `\n\n════════════════════════════════════════════
+BANNED RECAPS — DO NOT REPHRASE OR RESTATE
+════════════════════════════════════════════
+The following sentences are the opening claims of sections already written. You MUST NOT rephrase, echo, paraphrase, or restate any sentence in this list — not in full, not in part, not with synonyms, not as a summary. Write entirely new argumentation:
+${bannedRecaps.map((s) => `• "${s}"`).join("\n")}`
+    : "";
+
+  // ── Amendment 6: Lexical Fingerprint Exclusion ───────────────────────────
+  // The most-repeated 3-grams from all written sections. The LLM should avoid
+  // these unless quoting scripture or transcript directly.
+  const overusedPhrases = assignment.overusedPhrases ?? [];
+  const lexicalFingerprintBlock = overusedPhrases.length > 0
+    ? `\n\n════════════════════════════════════════════
+OVERUSED PHRASES — FIND FRESHER LANGUAGE
+════════════════════════════════════════════
+The following 3-word phrases appear too frequently across the sections already written. Unless you are quoting scripture or the transcript verbatim, AVOID these phrases. Use semantically equivalent but lexically distinct language:
+${overusedPhrases.map((p) => `• "${p}"`).join("\n")}`
+    : "";
+
+  // ── Amendment 7: Diminishing Permission Rule ─────────────────────────────
+  // Section 1 in a chapter may introduce 3 new core concepts.
+  // Section 2 may introduce 2. Section 3+ may introduce only 1.
+  // This forces depth over breadth as the chapter builds.
+  const sectionIdx = assignment.sectionIndexInChapter ?? 0;
+  const maxNewConcepts = sectionIdx === 0 ? 3 : sectionIdx === 1 ? 2 : 1;
+  const diminishingPermissionBlock = `\n\n════════════════════════════════════════════
+NEW CONCEPT CAP FOR THIS SECTION
+════════════════════════════════════════════
+This is section ${sectionIdx + 1} within its chapter. You MAY introduce at most ${maxNewConcepts} new core concept${maxNewConcepts !== 1 ? "s" : ""} in this section — ideas the reader has NOT encountered yet anywhere in this book. Every additional paragraph must deepen, apply, or illustrate a concept already introduced (either earlier in this chapter, or in this section's own opening). Width is not the goal; depth is. A section that introduces ${maxNewConcepts + 1}+ new concepts will feel scattered and under-developed.`;
+
   // ── Server-side excerpt dedup (existing Upgrade 2) ─────────────────────
   const { filtered: dedupedExcerpts, removedCount: excerptRemovedCount } = filterConsumedExcerpts(
     assignment.transcriptExcerpts,
@@ -554,6 +601,10 @@ ${chapterClosingBlock}
 ${hookBlock}
 ${conceptOwnershipBlock}
 ${chapterPremiseBlock}
+${coverageLedgerBlock}
+${bannedRecapsBlock}
+${lexicalFingerprintBlock}
+${diminishingPermissionBlock}
 
 TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these):
 ${excerptBlock}
@@ -690,10 +741,15 @@ ${READER_NORMALIZATION_RULES}`,
         })()
       : "";
 
+    // ── Amendment 3: Transitional presupposition language (skip for book's very first section)
+    const isAbsoluteFirstSection = (assignment.chapterNumber === 1 && sectionIdx === 0);
+    const transitionalRuleBlock = isAbsoluteFirstSection ? "" : `\n\n════════════════════════════════════════════\nTRANSITIONAL PRESUPPOSITION — STANDING RULE\n════════════════════════════════════════════\nThis section is NOT the first section of the book. Do NOT open as though the reader is encountering these ideas for the first time. The opening paragraph MUST presuppose what came before — use transitional presupposition language such as: "Having seen…", "Building on what we established…", "Since we know…", "With that foundation in place…", "Now that we understand…", "Given what [previous section heading] revealed…". Exception: if this IS the first section of the first chapter (sectionNumber=1, chapterNumber=1), omit this rule.`;
+    const shortTransitionalRuleBlock = isAbsoluteFirstSection ? "" : `\n\n════════════════════════════════════════════\nTRANSITIONAL PRESUPPOSITION — STANDING RULE\n════════════════════════════════════════════\nIf there are any sections already written before this one (see COVERAGE LEDGER), the opening paragraph MUST presuppose prior content using language like "Having seen…", "Building on…", "Since we established…", "With that foundation in place…". Do not open as though the reader is encountering the book's ideas for the first time.`;
+
     const deduplicatedSystem =
       (assignment.alreadyCoveredPoints ?? []).length > 0
-        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\n\nSCRIPTURE EXCEPTION — OVERRIDES THE SKIP RULE ABOVE:\nThis hard-skip rule NEVER applies to Bible verses, scripture quotations, or the direct commentary that unpacks them. If the transcript excerpts for THIS section contain a Bible verse or reference, you MUST include it in the prose — even if the same verse or a related one appeared in an earlier section. This author is a preacher; their argument is built verse by verse. Removing a scripture silently breaks the theological foundation of the point. The ONLY restriction is the FORBIDDEN VERSE TEXTS block, which prevents reprinting the exact same verse text verbatim — in that case, cite the reference inline (e.g. "as David declares in Psalm 34:4") without reprinting the full text.`
-        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}`;
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nFIRST-USE OWNERSHIP — STANDING RULE\n════════════════════════════════════════════\nThe first section to introduce a concept, term, or principle OWNS it for the entire book. Later sections REFERENCE what was established — they do not re-develop, re-define, or re-explain it. If a concept was introduced earlier (see COVERAGE LEDGER and PRIOR CONTENT blocks), you may assume the reader already understands it. One sentence of callback is allowed; a full re-explanation is a duplication error.${transitionalRuleBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\n\nSCRIPTURE EXCEPTION — OVERRIDES THE SKIP RULE ABOVE:\nThis hard-skip rule NEVER applies to Bible verses, scripture quotations, or the direct commentary that unpacks them. If the transcript excerpts for THIS section contain a Bible verse or reference, you MUST include it in the prose — even if the same verse or a related one appeared in an earlier section. This author is a preacher; their argument is built verse by verse. Removing a scripture silently breaks the theological foundation of the point. The ONLY restriction is the FORBIDDEN VERSE TEXTS block, which prevents reprinting the exact same verse text verbatim — in that case, cite the reference inline (e.g. "as David declares in Psalm 34:4") without reprinting the full text.`
+        : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nFIRST-USE OWNERSHIP — STANDING RULE\n════════════════════════════════════════════\nThe first section to introduce a concept, term, or principle OWNS it. Later sections reference what was established — never re-develop or re-explain it. Presuppose reader knowledge of all concepts in the COVERAGE LEDGER.${shortTransitionalRuleBlock}`;
 
     const { object } = await generateObject({
       model: deepSeekModel,
