@@ -213,22 +213,30 @@ function detectDuplicateSentences(
 // ─── Amendment 1: Coverage Ledger Builder ─────────────────────────────────────
 // Returns a compact heading + one-sentence summary for every written section so
 // the LLM can see what ground has been covered without re-reading full bodies.
-function buildCoverageLedger(sections: SectionDraft[]): { heading: string; summary: string }[] {
+function buildCoverageLedger(
+  sections: SectionDraft[],
+  assignmentLookup?: Map<string, string[]>, // key: `ch-sec`, value: keyPoints[]
+): { heading: string; summary: string }[] {
   return sections.map((s) => {
+    // Capture the first sentence of the first paragraph as the prose anchor
     const firstSentence = (s.body ?? "")
-      .split(/\n\n+/)[0]               // first paragraph
-      ?.replace(/^#{1,3} .+$/gm, "")   // strip any stray heading markup
-      ?.match(/[^.!?]+[.!?]+/)?.[0]    // first sentence
+      .split(/\n\n+/)[0]
+      ?.replace(/^#{1,3} .+$/gm, "")
+      ?.match(/[^.!?]+[.!?]+/)?.[0]
       ?.trim()
-      ?.slice(0, 130) ?? "";
-    return { heading: s.heading, summary: firstSentence };
+      ?.slice(0, 120) ?? "";
+    // Append key points from assignments so the block lists what was actually taught
+    const kps = assignmentLookup?.get(`${s.chapterNumber}-${s.sectionNumber}`) ?? [];
+    const keyPointHint = kps.length > 0 ? ` | Key points: ${kps.slice(0, 3).join("; ")}` : "";
+    const summary = `${firstSentence}${keyPointHint}`.slice(0, 260);
+    return { heading: s.heading, summary };
   }).filter((e) => e.heading && e.summary.length > 10);
 }
 
 // ─── Amendment 4: Thesis Sentence Extractor ───────────────────────────────────
 // The opening sentence of each paragraph is the most reliable thesis carrier.
 // Extract up to `maxPerSection` per section, capped at `hardCap` total.
-function extractBannedRecaps(sections: SectionDraft[], maxPerSection = 2, hardCap = 25): string[] {
+function extractBannedRecaps(sections: SectionDraft[], maxPerSection = 4, hardCap = 35): string[] {
   const all: string[] = [];
   for (const s of sections) {
     const paras = (s.body ?? "").split(/\n\n+/).filter(Boolean);
@@ -1656,14 +1664,14 @@ export function EbookPipeline({
   const applyAuditToManuscript = useCallback(async (appliedKeys: string[]) => {
     if (!completedManifest || !auditReport) return;
     setApplyingAudit(true);
-    addLog(`→ Rewriting chapters to apply ${appliedKeys.length} audit fix(es)…`);
+    addLog(`→ Applying ${appliedKeys.length} audit fix(es) — duplicate sections will be deleted, word/phrase fixes applied…`);
     try {
       const result = await postJson<{ chapters: EbookManifest["chapters"] }>(
         "/api/ebook/apply-audit",
         { manifest: completedManifest, report: auditReport, appliedKeys },
       );
       updateCompletedManifest((current) => ({ ...current, chapters: result.chapters }));
-      addLog(`✓ Manuscript rewritten — ${result.chapters.length} chapter(s) updated`);
+      addLog(`✓ Audit applied — ${result.chapters.length} chapter(s) updated (duplicate sections deleted, seams stitched)`);
     } catch (err) {
       addLog(`✗ Apply audit error: ${err instanceof Error ? err.message : "Rewrite failed"}`);
     } finally {
@@ -2255,19 +2263,32 @@ export function EbookPipeline({
       let coveredCurrentChapter: string[] = [];  // full entries for the chapter being written
       let coveredCurrentChapterNum = -1;
 
-      // Seed from already-completed sections on resume
+      // Seed from already-completed sections on resume.
+      // Include section heading + all key points so the LLM gets real signal,
+      // not just section labels.
       for (const a of assignments.filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))) {
         const bucket = coveredByChapter.get(a.chapterNumber) ?? [];
-        bucket.push(`[Covered] Ch ${a.chapterNumber} §${a.sectionNumber}: ${a.heading}`);
+        bucket.push(`[Already written] Ch ${a.chapterNumber} §${a.sectionNumber}: ${a.heading}`);
+        for (const kp of a.keyPoints ?? []) {
+          if (kp.trim().length > 5) bucket.push(kp.trim());
+        }
         coveredByChapter.set(a.chapterNumber, bucket);
       }
 
-      // Flatten to the array the LLM receives — cross-chapter summaries + current-chapter full entries
+      // Flatten to the array the LLM receives — cross-chapter per-entry list + current-chapter full entries.
+      // Each prior-chapter entry is emitted individually so the LLM can read specific topics, not a compressed blob.
       function buildCoveredKeyPoints(currentChapterNum: number): string[] {
         const crossChapter: string[] = [];
         for (const [chNum, entries] of coveredByChapter.entries()) {
-          if (chNum !== currentChapterNum) {
-            crossChapter.push(`[Ch ${chNum} fully covered: ${entries.slice(0, 4).map((e) => e.replace(/^\[Covered\] Ch \d+ §\d+: /, "")).join(", ")}]`);
+          if (chNum === currentChapterNum) continue;
+          // Emit up to 20 individual entries per completed chapter (enough for real dedup signal)
+          const label = `[Ch ${chNum} — already written]`;
+          for (const entry of entries.slice(0, 20)) {
+            const text = entry
+              .replace(/^\[Already written\] Ch \d+ §\d+: /, "")
+              .replace(/^\[Section covered\] Ch \d+ §\d+: /, "")
+              .replace(/^\[Covered\] Ch \d+ §\d+: /, "");
+            if (text.trim().length > 5) crossChapter.push(`${label} ${text}`);
           }
         }
         return [...crossChapter, ...coveredCurrentChapter];
@@ -2286,6 +2307,8 @@ export function EbookPipeline({
       // Built once from architecture: concept/section heading → owning chapter number.
       // Sent to write-section so the LLM knows which chapter owns each concept.
       const conceptOwnershipMap: Record<string, number> = {};
+      // Assignment key-points lookup for coverage ledger enrichment (ch-sec → keyPoints[])
+      const assignmentKeyPointsLookup = new Map<string, string[]>();
       for (const ch of architecture.chapters) {
         for (const sec of ch.sections) {
           conceptOwnershipMap[sec.heading] = ch.number;
@@ -2293,6 +2316,9 @@ export function EbookPipeline({
             conceptOwnershipMap[kp] = ch.number;
           }
         }
+      }
+      for (const a of assignments) {
+        assignmentKeyPointsLookup.set(`${a.chapterNumber}-${a.sectionNumber}`, a.keyPoints ?? []);
       }
 
       // ── Upgrade 7: Tiered quote dedup ────────────────────────────────────
@@ -2340,9 +2366,11 @@ export function EbookPipeline({
         // ── Upgrade 4: Rotate chapter bucket when we enter a new chapter ──
         if (assignment.chapterNumber !== coveredCurrentChapterNum) {
           if (coveredCurrentChapterNum !== -1 && coveredCurrentChapter.length > 0) {
-            // Compress finished chapter to a summary line
+            // When rotating chapters, persist the FULL key-point signal (section labels + key points).
+            // Filter out paragraph-topic entries (no bracket prefix) which are too verbose for cross-chapter use.
+            const compactEntries = coveredCurrentChapter.filter((e) => e.startsWith("[") || e.split(/\s+/).length <= 12);
             const existing = coveredByChapter.get(coveredCurrentChapterNum) ?? [];
-            coveredByChapter.set(coveredCurrentChapterNum, [...existing, ...coveredCurrentChapter.slice(0, 8)]);
+            coveredByChapter.set(coveredCurrentChapterNum, [...existing, ...compactEntries.slice(0, 40)]);
           }
           coveredCurrentChapter = [];
           coveredCurrentChapterNum = assignment.chapterNumber;
@@ -2390,7 +2418,7 @@ export function EbookPipeline({
           primaryTranslation: assignment.primaryTranslation,
           // ── 7-Amendment Anti-Duplication System ──────────────────────────
           // Amendment 1: full coverage ledger — every section written so far
-          coverageLedger: buildCoverageLedger(allSections),
+          coverageLedger: buildCoverageLedger(allSections, assignmentKeyPointsLookup),
           // Amendment 4: thesis sentences from prior sections — banned from paraphrase
           bannedRecaps: extractBannedRecaps(allSections),
           // Amendment 6: top repeated 3-grams — encourage lexical variety
@@ -2523,9 +2551,25 @@ export function EbookPipeline({
           ...(claimLedger ?? []).map((c) => c.claim).filter(Boolean),
           ...allParagraphTopics,
         );
-        // Cap the current-chapter bucket at 80 entries (full fidelity within chapter)
-        if (coveredCurrentChapter.length > 80) {
-          coveredCurrentChapter.splice(0, coveredCurrentChapter.length - 80);
+        // Cap the current-chapter bucket at 100 entries. Trim by removing paragraph-topic
+        // sentences first (they are verbose but lower priority than section headers + key points).
+        // Section headers start with "[Section covered]" — protect those from FIFO trimming.
+        if (coveredCurrentChapter.length > 100) {
+          // Find and remove the oldest paragraph-topic entries first (no bracket prefix)
+          let removed = 0;
+          const target = coveredCurrentChapter.length - 80;
+          for (let _i = 0; _i < coveredCurrentChapter.length && removed < target; ) {
+            if (!coveredCurrentChapter[_i].startsWith("[")) {
+              coveredCurrentChapter.splice(_i, 1);
+              removed++;
+            } else {
+              _i++;
+            }
+          }
+          // If still over cap, do plain FIFO for the remainder
+          if (coveredCurrentChapter.length > 80) {
+            coveredCurrentChapter.splice(0, coveredCurrentChapter.length - 80);
+          }
         }
 
         // ── Upgrade 1: Mark source segments as consumed ───────────────────

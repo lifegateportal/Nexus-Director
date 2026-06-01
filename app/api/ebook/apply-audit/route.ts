@@ -465,91 +465,133 @@ export const POST = async (req: NextRequest): Promise<Response> => {
     }
   }
 
-  // ── Tier 2: Targeted LLM fixes — only the affected section is sent ───────────
+  // ── Tier 2: Section deletions for concept duplicates and similar pairs ────────
+  // Rather than rewriting duplicate sections with the same material under a fresh
+  // coat of paint, we delete the redundant occurrence outright and stitch the seam.
 
-  // Collect all LLM work items before running them
-  const llmTasks: LLMTask[] = [];
+  // Collect which sections to delete
+  const sectionsToDelete: { chapterNum: number; sectionNum: number }[] = [];
 
   for (const key of appliedKeys) {
-    // ── Concept duplicates ───────────────────────────────────────────────────
+    // ── Concept duplicates — delete every occurrence after the first ───────────
+    // The first location is canonical (introduced the concept first in the book).
+    // All subsequent occurrences are pure duplication and should be removed.
     if (key.startsWith("c-")) {
       const idx = parseInt(key.slice(2));
       const dup = report.conceptDuplicates[idx];
-      if (!dup) continue;
+      // Must have at least 2 locations — if only one exists there's nothing to delete
+      if (!dup || dup.locations.length < 2) continue;
 
-      for (const loc of dup.locations) {
-        const { chapterNum, sectionNum } = parseLocation(loc.location);
-        if (chapterNum === null) continue;
-
-        const chIdx = chapters.findIndex((c) => c.number === chapterNum);
-        if (chIdx === -1) continue;
-        const ch = chapters[chIdx];
-
-        if (sectionNum !== null) {
-          const sec = ch.sections.find((s) => s.sectionNumber === sectionNum);
-          if (!sec) continue;
-          llmTasks.push({
-            chapterIndex: chIdx,
-            field: { sectionNumber: sectionNum },
-            task: `This section contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
-            heading: sec.heading,
-            body: sec.body,
-            voiceDNA: voiceDNA ?? null,
-          });
-        } else if (loc.location.toLowerCase().includes("intro")) {
-          llmTasks.push({
-            chapterIndex: chIdx,
-            field: "intro",
-            task: `This intro contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
-            heading: `Chapter ${ch.number} Introduction`,
-            body: ch.intro,
-            voiceDNA: voiceDNA ?? null,
-          });
-        } else if (loc.location.toLowerCase().includes("conclusion")) {
-          llmTasks.push({
-            chapterIndex: chIdx,
-            field: "conclusion",
-            task: `This conclusion contains a concept duplicate: "${dup.title}". ${dup.recommendation}`,
-            heading: `Chapter ${ch.number} Conclusion`,
-            body: ch.conclusion,
-            voiceDNA: voiceDNA ?? null,
-          });
-        }
+      for (let li = 1; li < dup.locations.length; li++) {
+        const { chapterNum, sectionNum } = parseLocation(dup.locations[li].location);
+        // Only delete full sections — intros/conclusions are structural anchors, leave them
+        if (chapterNum === null || sectionNum === null) continue;
+        sectionsToDelete.push({ chapterNum, sectionNum });
       }
     }
 
-    // ── Similar pairs ────────────────────────────────────────────────────────
+    // ── Similar pairs — delete location B (the secondary occurrence) ──────────
     if (key.startsWith("p-")) {
       const idx = parseInt(key.slice(2));
       const pair = report.similarPairs[idx];
       if (!pair) continue;
 
-      // Rewrite the LATER location (B) to differentiate it from A
-      // If we can't parse B, fall back to A
       const locB = parseLocation(pair.locationB);
-      const locA = parseLocation(pair.locationA);
-
-      const targetLoc = locB.chapterNum !== null ? locB : locA;
-      const otherLoc = targetLoc === locB ? pair.locationA : pair.locationB;
-
-      if (targetLoc.chapterNum === null) continue;
-      const chIdx = chapters.findIndex((c) => c.number === targetLoc.chapterNum);
-      if (chIdx === -1) continue;
-      const ch = chapters[chIdx];
-
-      if (targetLoc.sectionNum !== null) {
-        const sec = ch.sections.find((s) => s.sectionNumber === targetLoc.sectionNum);
-        if (!sec) continue;
-        llmTasks.push({
-          chapterIndex: chIdx,
-          field: { sectionNumber: targetLoc.sectionNum },
-          task: `This section has ${Math.round(pair.similarity * 100)}% content overlap with ${otherLoc}. Rewrite it to present a more distinct angle while preserving its core teaching point.`,
-          heading: sec.heading,
-          body: sec.body,
-          voiceDNA: voiceDNA ?? null,
-        });
+      if (locB.chapterNum !== null && locB.sectionNum !== null) {
+        sectionsToDelete.push({ chapterNum: locB.chapterNum, sectionNum: locB.sectionNum });
       }
     }
+  }
+
+  // Execute deletions and capture neighbor pairs for seam repair
+  type SeamTask = {
+    chapterIndex: number;
+    precedingSecNum: number;
+    precedingHeading: string;
+    precedingBody: string;
+    followingSecNum: number;
+    followingHeading: string;
+    followingBody: string;
+  };
+  const seamTasks: SeamTask[] = [];
+
+  // Deduplicate: a section might be nominated for deletion by multiple keys
+  const deletionSet = new Set(sectionsToDelete.map((d) => `${d.chapterNum}:${d.sectionNum}`));
+  for (const key of Array.from(deletionSet)) {
+    const [chapterNum, sectionNum] = key.split(":").map(Number);
+    const chIdx = chapters.findIndex((c) => c.number === chapterNum);
+    if (chIdx === -1) continue;
+    const ch = chapters[chIdx];
+    const secIdx = ch.sections.findIndex((s) => s.sectionNumber === sectionNum);
+    if (secIdx === -1) continue;
+
+    // Capture neighbors for seam repair BEFORE mutating
+    const precSec = secIdx > 0 ? ch.sections[secIdx - 1] : null;
+    const follSec = secIdx < ch.sections.length - 1 ? ch.sections[secIdx + 1] : null;
+    if (precSec && follSec) {
+      seamTasks.push({
+        chapterIndex: chIdx,
+        precedingSecNum: precSec.sectionNumber,
+        precedingHeading: precSec.heading,
+        precedingBody: precSec.body,
+        followingSecNum: follSec.sectionNumber,
+        followingHeading: follSec.heading,
+        followingBody: follSec.body,
+      });
+    }
+
+    // Delete the section and recalculate the chapter word count
+    const updatedSections = ch.sections.filter((s) => s.sectionNumber !== sectionNum);
+    const updatedWordCount = updatedSections.reduce((sum, s) => sum + s.wordCount, 0);
+    chapters[chIdx] = { ...ch, sections: updatedSections, totalWordCount: updatedWordCount };
+  }
+
+  // Repair seams between now-adjacent sections where a deletion created a gap.
+  // Only the edge paragraphs of each neighbor are changed; everything else stays verbatim.
+  if (seamTasks.length > 0) {
+    const seamResults = await mapWithConcurrency(seamTasks, 2, async (task) => {
+      const follOpen = (task.followingBody.split(/\n\n+/)[0] ?? "").trim().slice(0, 200);
+      const precClose = (task.precedingBody.split(/\n\n+/).at(-1) ?? "").trim().slice(-200);
+
+      const [precRevised, follRevised] = await Promise.all([
+        reviseSectionBody(
+          task.precedingHeading,
+          task.precedingBody,
+          `A section that immediately followed this one has been removed. Return the COMPLETE body, changing ONLY the final paragraph so it closes naturally and leads into the section that now follows, which opens with: "${follOpen}". Every other paragraph must remain word-for-word identical.`,
+          voiceDNA,
+        ),
+        reviseSectionBody(
+          task.followingHeading,
+          task.followingBody,
+          `A section that immediately preceded this one has been removed. Return the COMPLETE body, changing ONLY the opening paragraph so it opens naturally following the section that now precedes it, which ends with: "${precClose}". Every other paragraph must remain word-for-word identical.`,
+          voiceDNA,
+        ),
+      ]);
+
+      return { task, precRevised, follRevised };
+    });
+
+    for (const { task, precRevised, follRevised } of seamResults) {
+      const ch = chapters[task.chapterIndex];
+      chapters[task.chapterIndex] = {
+        ...ch,
+        sections: ch.sections.map((s) => {
+          if (s.sectionNumber === task.precedingSecNum)
+            return { ...s, body: precRevised, wordCount: precRevised.split(/\s+/).filter(Boolean).length };
+          if (s.sectionNumber === task.followingSecNum)
+            return { ...s, body: follRevised, wordCount: follRevised.split(/\s+/).filter(Boolean).length };
+          return s;
+        }),
+      };
+    }
+  }
+
+  // ── Tier 3: LLM tasks (empty now — r-N and w-N are Tier 1; c-N/p-N are now deletions)
+  // Kept as an extension point for future audit finding types.
+  const llmTasks: LLMTask[] = [];
+
+  for (const key of appliedKeys) {
+    void key; // no additional LLM task types currently
   }
 
   // Run LLM tasks with concurrency limit (max 4 at a time)

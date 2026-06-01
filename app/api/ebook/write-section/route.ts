@@ -204,7 +204,7 @@ function excerptOverlapScore(para: string, excerpt: string, n = 4): number {
 function filterConsumedExcerpts(
   excerpts: string[],
   alreadyCoveredPoints: string[],
-  threshold = 0.55
+  threshold = 0.40
 ): { filtered: string[]; removedCount: number } {
   if (alreadyCoveredPoints.length === 0) return { filtered: excerpts, removedCount: 0 };
   const coveredText = alreadyCoveredPoints.join(" ");
@@ -751,7 +751,7 @@ ${READER_NORMALIZATION_RULES}`,
         if (purposeWords.length < 4) return true;
         const matchCount = purposeWords.filter((w) => coveredWords.has(w) && w.length > 4).length;
         const overlap = matchCount / purposeWords.length;
-        return overlap < 0.65; // prune if >65% of meaningful purpose words are in covered content
+        return overlap < 0.50; // prune if >50% of meaningful purpose words are in covered content
       });
       paragraphPlan = prunedPlan.length > 0 ? prunedPlan : (plan.paragraphPlan ?? []);
 
