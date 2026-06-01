@@ -152,6 +152,24 @@ function repairOrphanParagraphs(paragraphs: string[]): { paragraphs: string[]; o
 // Strips excerpts whose content is substantially covered by already-covered points
 // before the LLM ever receives them, removing the root-cause material.
 
+// Detects any Bible reference in a string (e.g. "John 3:16", "Psalm 23:1-4")
+const BIBLE_REF_RE = /\b(?:genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|chronicles|ezra|nehemiah|esther|job|psalm|psalms|proverbs|ecclesiastes|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|romans|corinthians|galatians|ephesians|philippians|colossians|thessalonians|timothy|titus|philemon|hebrews|james|peter|jude|revelation)\s+\d+:\d+|\b(?:gen|exo|lev|num|deut|josh|judg|sam|kgs|chr|ps|prov|eccl|isa|jer|lam|ezek|dan|hos|nah|hab|zeph|mal|matt|mk|lk|jn|rom|cor|gal|eph|phil|col|thess|tim|heb|jas|pet|rev)\s+\d+:\d+/i;
+
+function containsScripture(text: string): boolean {
+  return BIBLE_REF_RE.test(text);
+}
+
+// Strip scripture citation tokens before n-gram comparison so verse references
+// don't falsely inflate the "already covered" overlap score.
+function stripScriptureTokens(text: string): string {
+  return text
+    .replace(BIBLE_REF_RE, " ")
+    .replace(/\b(?:NIV|KJV|ESV|NKJV|NLT|NASB|AMP|MSG)\b/gi, " ")
+    .replace(/\d+:\d+(?:-\d+)?/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function extractNgrams(text: string, n = 4): Set<string> {
   const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
   const grams = new Set<string>();
@@ -162,8 +180,9 @@ function extractNgrams(text: string, n = 4): Set<string> {
 }
 
 function excerptOverlapWithCoveredContent(excerpt: string, coveredText: string, n = 4): number {
-  const excerptGrams = extractNgrams(excerpt, n);
-  const coveredGrams = extractNgrams(coveredText, n);
+  // Strip scripture tokens so Bible verse citations don't falsely inflate the overlap score
+  const excerptGrams = extractNgrams(stripScriptureTokens(excerpt), n);
+  const coveredGrams = extractNgrams(stripScriptureTokens(coveredText), n);
   if (excerptGrams.size === 0) return 0;
   let shared = 0;
   for (const g of excerptGrams) { if (coveredGrams.has(g)) shared++; }
@@ -181,8 +200,12 @@ function filterConsumedExcerpts(
   let removedCount = 0;
   for (const excerpt of excerpts) {
     const wordCount = excerpt.trim().split(/\s+/).length;
-    // Only run dedup on substantial excerpts; short ones pass through
+    // Short excerpts always pass through
     if (wordCount < 40) { filtered.push(excerpt); continue; }
+    // SCRIPTURE PROTECTION: never drop an excerpt that contains a Bible reference.
+    // The preacher builds their argument on scripture — filtering scripture-bearing
+    // excerpts silently removes the theological backbone of the section.
+    if (containsScripture(excerpt)) { filtered.push(excerpt); continue; }
     const overlap = excerptOverlapWithCoveredContent(excerpt, coveredText);
     if (overlap >= threshold) {
       removedCount++;
@@ -220,7 +243,7 @@ You will receive transcribed audio text. Expect the following flaws:
    - One sentence per paragraph may be a deliberate fragment. For emphasis. That's allowed.
    - Never close a paragraph with "This is what it means to..." or "This is why..." followed by a restatement.
    - Banned AI-signature words in this output: "indeed," "certainly," "ultimately," "at its core," "in essence," "simply put," "profoundly," "transformative," "vibrant," "fostering," "crucial," "vital" (overused), "journey" (metaphorical use).
-7. FORMATTING: Output strictly in Markdown. Use hierarchical headings (## for main sections, ### for subsections) to visually break up the text. Never use HTML or \`<br>\` tags.
+7. FORMATTING: Output ONLY as an array of plain prose paragraph strings. NEVER add any markdown heading (##, ###, #, or any heading level) as a paragraph element — the section heading is already displayed by the book layout. Adding a heading inside the paragraphs array creates a duplicate, out-of-place label mid-chapter. Prose paragraphs only. Never use HTML or br tags.
 8. SECTION BOUNDARY — ABSOLUTE RULE: Each section is a sealed unit. You MUST NOT preview, introduce, foreshadow, or summarize content that belongs to a future section. This includes any sentence that:
    - Names or paraphrases a point the next section will make
    - Begins developing an argument that has no transcript support in THIS section's excerpts
@@ -460,8 +483,8 @@ HARD RULES for this section's close:
     : "";
 
   const hookBlock = assignment.sectionNumber === 1
-    ? `\nCHAPTER OPENER REQUIREMENT: This is the FIRST section of the chapter. The very first sentence must be a compelling hook — a bold provocative claim, a pointed question, or an immersive specific detail drawn directly from the transcript. Do not open with a general context-setting statement. Drop the reader immediately into the argument.`
-    : "";
+    ? `\nCHAPTER OPENER REQUIREMENT: This is the FIRST section of the chapter. The very first sentence must be a compelling hook — a bold provocative claim, a pointed question, or an immersive specific detail drawn directly from the transcript. Do not open with a general context-setting statement. Drop the reader immediately into the argument.\nHEADING ECHO BAN: The section heading is "${assignment.heading}". The first sentence of the body must NOT restate, echo, paraphrase, or summarise this heading — not even loosely. The heading is already displayed above; repeating it as the first sentence is a critical error. Begin with entirely new content from the transcript.`
+    : `\nHEADING ECHO BAN: The section heading is "${assignment.heading}". The first sentence of the body must NOT restate, echo, paraphrase, or summarise this heading. The heading is already displayed above. Begin immediately with the argument, scripture, or story from the transcript.`;
 
   // ── S7: Chapter premise anchor ──────────────────────────────────────────
   // First paragraph's opening sentence should echo (not quote) the chapter premise
@@ -496,6 +519,10 @@ Your section is: "${assignment.heading}"${assignment.nextSectionHeading ? `\nThe
 Write ONLY content that belongs to THIS section's heading and key points. If any excerpt contains sentences that transition into or introduce the next section's topic, STOP before those sentences. Do not write them. A transcript boundary does not override a section boundary.
 
 CONTENT COVERAGE REQUIREMENT: Exhaust every distinct key point, story, illustration, and argument that belongs to THIS section's scope. Skip any excerpt content that clearly belongs to the next section or next chapter. Write shorter rather than bleed forward.
+
+SEQUENCE RULE — ABSOLUTE: Write paragraphs in the EXACT ORDER ideas appear across the excerpts (Excerpt 1 first, then Excerpt 2, etc.). Do NOT reorder. Do NOT restructure into a different arc. The speaker's build-up is intentional — follow it point by point without skipping ahead or circling back.
+
+NO HEADINGS RULE — ABSOLUTE: Do NOT include any markdown heading (##, ###, #) as a paragraph element. The section heading is already rendered by the book layout. A heading inside the paragraphs array creates a duplicate label mid-chapter. Pure prose paragraphs only.
 
 Return:
 - paragraphs: an array of strings where EACH ELEMENT IS ONE PARAGRAPH of polished prose. Every paragraph is a separate array item. Never put more than one paragraph in a single array element. Do not use \n or \n\n inside any element — each element is exactly one paragraph.
@@ -538,17 +565,20 @@ Now write the section prose:`;
         abortSignal: plannerAbort,
         system: `You are a structural editor planning the paragraph-level architecture for a single book section.
 
-BESTSELLER ARC — apply within this section where the content supports it:
-- HOOK: Open with a grabbing claim, question, or specific detail drawn directly from the transcript
-- CONTEXT: Establish why this matters (drawn only from what the speaker said)
-- MECHANISM: Develop the core argument or framework the speaker presented
-- APPLICATION: Close with how the reader applies or internalizes this
+TRANSCRIPT SEQUENCE — NON-NEGOTIABLE:
+Paragraphs MUST follow the order ideas appear in the transcript excerpts. Do NOT reorder, shuffle, or front-load ideas from later excerpts earlier in the section. The speaker built their argument in a specific sequence — preserve that build-up exactly, point by point.
+
+Within that sequence, the prose of each paragraph should:
+- Open each new point with the concrete claim or detail from the transcript
+- Develop it with any supporting specifics the speaker provided
+- Land it before moving to the next point in sequence
+Do not skip ahead to a later point and return to an earlier one.
 ${plannerDedup}
 Each paragraph in your plan must have a clear narrative purpose and be supported by specific transcript excerpt numbers. Do not plan paragraphs with no excerpt support.
 
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}`,
-        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}${assignment.nextSectionHeading ? `\nNEXT SECTION (do NOT plan paragraphs about this): "${assignment.nextSectionHeading}"` : ""}${assignment.isLastSectionInChapter && assignment.nextChapterTitle ? `\nCHAPTER BOUNDARY: This is the LAST section of Chapter ${assignment.chapterNumber}. The next chapter is titled "${assignment.nextChapterTitle}". Do NOT plan any paragraph that introduces or develops content from that next chapter. If an excerpt transitions into the next chapter's opening topic, stop planning before that line.` : ""}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
+        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}${assignment.nextSectionHeading ? `\nNEXT SECTION (do NOT plan paragraphs about this): "${assignment.nextSectionHeading}"` : ""}${assignment.isLastSectionInChapter && assignment.nextChapterTitle ? `\nCHAPTER BOUNDARY: This is the LAST section of Chapter ${assignment.chapterNumber}. The next chapter is titled "${assignment.nextChapterTitle}". Do NOT plan any paragraph that introduces or develops content from that next chapter. If an excerpt transitions into the next chapter's opening topic, stop planning before that line.` : ""}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\n\nSCRIPTURE EXCEPTION: The skip rule above does NOT apply to Bible verses or their direct supporting commentary. Plan a dedicated paragraph for every scripture the excerpts contain for this section. Scripture is the foundation of each point — never omit it from the plan.` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
       });
 
       // ── Upgrade 3: Planner prune pass ────────────────────────────────────
@@ -618,7 +648,7 @@ ${READER_NORMALIZATION_RULES}`,
 
     const deduplicatedSystem =
       (assignment.alreadyCoveredPoints ?? []).length > 0
-        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
+        ? `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${alreadyQuotedBlock}\n\n════════════════════════════════════════════\nPRIOR CONTENT — HARD SKIP (NON-NEGOTIABLE)\n════════════════════════════════════════════\nThe following sections, ideas, claims, and teaching points have ALREADY BEEN WRITTEN in earlier sections of this book. You MUST skip them COMPLETELY — zero sentences, zero phrases, zero acknowledgment. Do not re-introduce, re-explain, re-state, or re-develop ANY of them, even briefly, even in passing, even with different wording. If a transcript excerpt contains these topics, skip that part of the excerpt entirely and write ONLY the new content from the remaining excerpts. Writing even one sentence about an already-covered topic is a critical error:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\n\nSCRIPTURE EXCEPTION — OVERRIDES THE SKIP RULE ABOVE:\nThis hard-skip rule NEVER applies to Bible verses, scripture quotations, or the direct commentary that unpacks them. If the transcript excerpts for THIS section contain a Bible verse or reference, you MUST include it in the prose — even if the same verse or a related one appeared in an earlier section. This author is a preacher; their argument is built verse by verse. Removing a scripture silently breaks the theological foundation of the point. The ONLY restriction is the FORBIDDEN VERSE TEXTS block, which prevents reprinting the exact same verse text verbatim — in that case, cite the reference inline (e.g. "as David declares in Psalm 34:4") without reprinting the full text.`
         : `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${alreadyQuotedBlock}`;
 
     const { object } = await generateObject({
@@ -629,7 +659,11 @@ ${READER_NORMALIZATION_RULES}`,
       system: deduplicatedSystem,
       prompt: `${prompt}\n\nPARAGRAPH PLAN (must follow if provided):\n${JSON.stringify(paragraphPlan)}`,
     });
-    const rawParagraphs = (object.paragraphs ?? []).map((p) => p.trim()).filter(Boolean);
+    const rawParagraphs = (object.paragraphs ?? [])
+      .map((p) => p.trim())
+      .filter(Boolean)
+      // Strip any markdown heading lines the LLM adds despite the ban
+      .filter((p) => !(/^#{1,6}\s/.test(p)));
     const { paragraphs: repairedParagraphs, orphansFixed } = repairOrphanParagraphs(rawParagraphs);
     if (orphansFixed > 0) {
       console.log(`[write-section] S5: merged ${orphansFixed} orphan paragraph(s) in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
