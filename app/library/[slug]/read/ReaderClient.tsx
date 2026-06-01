@@ -483,7 +483,9 @@ function ChapterView({
       {/* Sections */}
       {chapter.sections.map((section, idx) => (
         <section key={section.sectionNumber} style={{ marginBottom: "0.5em" }}>
-          {section.heading && (
+          {/* Never render the first section heading — it sits flush under the chapter title
+               and reads as a subtitle. Chapter context is already set by the chapter title. */}
+          {section.heading && idx > 0 && (
             <h2
               data-pkey={`s${idx}_h`}
               style={{
@@ -493,7 +495,7 @@ function ChapterView({
                 letterSpacing: "0.18em",
                 textTransform: "uppercase",
                 color:         theme.muted,
-                marginTop:     idx > 0 ? "3.25em" : 0,
+                marginTop:     "3.25em",
                 marginBottom:  "1.75em",
                 paddingBottom: "0.65em",
                 borderBottom:  `1px solid ${theme.border}`,
