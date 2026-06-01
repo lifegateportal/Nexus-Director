@@ -176,11 +176,18 @@ async function reviseSectionBody(
       })()
     : "";
 
+  const originalWordCount = body.split(/\s+/).filter(Boolean).length;
+  const minWords = Math.floor(originalWordCount * 0.92);
+  const maxWords = Math.ceil(originalWordCount * 1.08);
+  // Allow ~2 tokens per word (generous) + headroom, minimum 2048
+  const maxTokens = Math.max(2048, originalWordCount * 3);
+
   let text = "";
   try {
     const result = await generateText({
       model: deepSeekModel,
       temperature: 0.3,
+      maxTokens,
       system:
         "You are a surgical book editor. Make only the minimum changes required by the task. Return ONLY the revised section body as plain prose — no JSON, no markdown, no commentary.",
       prompt: `SECTION HEADING: ${heading}${voiceDnaBlock}
@@ -194,8 +201,9 @@ ${task}
 RULES:
 - Change ONLY what is necessary to address the task above
 - Preserve every scripture reference, quote, and theological teaching point exactly
-- Do not add new content, illustrations, or arguments not already present
-- Keep the same approximate length and sentence rhythm
+- WORD COUNT REQUIREMENT: The original section is ${originalWordCount} words. Your revised version MUST be between ${minWords} and ${maxWords} words. If the task requires removing or condensing duplicate content, you MUST replace the removed content with fresh supporting material, expanded explanation, or new illustrative detail on the same theme — never simply delete and leave a gap.
+- Do not add entirely new arguments or topics not already in the section; expand within the existing themes
+- Keep the same sentence rhythm and paragraph structure
 - Never use an em dash (— or --)
 - Return the revised body as plain prose text only`,
     });
@@ -204,7 +212,20 @@ RULES:
     console.error("[apply-audit] LLM section rewrite failed:", err);
     return body; // fall back to original
   }
-  return text || body;
+
+  if (!text) return body;
+
+  // Hard safety net: if the rewrite lost more than 15% of words, reject and return original.
+  // This prevents concept-duplicate removal from silently deleting thousands of words.
+  const revisedWordCount = text.split(/\s+/).filter(Boolean).length;
+  if (revisedWordCount < Math.floor(originalWordCount * 0.85)) {
+    console.warn(
+      `[apply-audit] Rewrite shrank section from ${originalWordCount} → ${revisedWordCount} words (>${Math.round((1 - revisedWordCount / originalWordCount) * 100)}% loss) — keeping original`,
+    );
+    return body;
+  }
+
+  return text;
 }
 
 // Concurrency-limited parallel runner
@@ -362,8 +383,8 @@ async function repairTransitions(
   const results = await mapWithConcurrency(unique, 2, async (task) => {
     const taskPrompt =
       task.role === "preceding"
-        ? `The section immediately after this one has been revised. It now opens with:\n"${task.adjacentEdge}"\n\nRewrite ONLY the final paragraph of this section so it transitions naturally into that opening. Change nothing else.`
-        : `The section immediately before this one has been revised. It now ends with:\n"${task.adjacentEdge}"\n\nRewrite ONLY the opening paragraph of this section so it follows naturally from that closing. Change nothing else.`;
+        ? `The section immediately after this one has been revised. It now opens with:\n"${task.adjacentEdge}"\n\nReturn the COMPLETE section body below, changing ONLY the final paragraph so it transitions naturally into that new opening. Every other paragraph must remain word-for-word identical.`
+        : `The section immediately before this one has been revised. It now ends with:\n"${task.adjacentEdge}"\n\nReturn the COMPLETE section body below, changing ONLY the opening paragraph so it follows naturally from that new closing. Every other paragraph must remain word-for-word identical.`;
     return {
       task,
       revisedBody: await reviseSectionBody(task.headingContext, task.bodyToFix, taskPrompt, voiceDNA),
