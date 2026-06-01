@@ -82,6 +82,7 @@ SEGMENT RULES
 - Identify natural topic shifts as segment boundaries
 - keyPoints: exact claims made in that segment — use the speaker's own words
 - Aim for 3–8 segments per recording, each covering 200–600 words of teaching material
+- TOPIC NAMING: Name every segment by its actual teaching claim. NEVER use structural labels like "Introduction", "Introduction:", "Intro", "Overview", "Opening", or "Conclusion" as the topic — not even as a prefix. Name the specific idea being taught (e.g. "Prayer changes your countenance", not "Introduction: Prayer").
 
 ════════════════════════════════════════════
 SCRIPTURE / QUOTE DETECTION

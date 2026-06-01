@@ -142,7 +142,7 @@ function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
     const segs = segmentsByAudio.get(audioKey)!;
     const sections = segs.map((segment, sectionIndex) => ({
       sectionNumber: sectionIndex + 1,
-      heading: segment.topic || `Section ${sectionIndex + 1}`,
+      heading: (segment.topic || `Section ${sectionIndex + 1}`).replace(/^(introduction|intro|overview|opening|summary|conclusion)\s*:\s*/i, "").trim() || `Section ${sectionIndex + 1}`,
       sourceSegmentIds: [segment.id],
       targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
     }));
@@ -160,7 +160,7 @@ function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
     keyTheme: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.teachingArc || "Core teaching",
     sections: input.contentMap.segments.map((segment, index) => ({
       sectionNumber: index + 1,
-      heading: segment.topic || `Section ${index + 1}`,
+      heading: (segment.topic || `Section ${index + 1}`).replace(/^(introduction|intro|overview|opening|summary|conclusion)\s*:\s*/i, "").trim() || `Section ${index + 1}`,
       sourceSegmentIds: [segment.id],
       targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
     })),
@@ -200,7 +200,7 @@ function normalizeArchitecture(
           uniqueIds.forEach((id) => globalUsedSegIds.add(id));
           return {
             sectionNumber: Math.max(1, Math.trunc(section.sectionNumber || sectionIndex + 1)),
-            heading: (section.heading || "").trim() || `Section ${sectionIndex + 1}`,
+            heading: ((section.heading || "").trim() || `Section ${sectionIndex + 1}`).replace(/^(introduction|intro|overview|opening|summary|conclusion)\s*:\s*/i, "").trim() || `Section ${sectionIndex + 1}`,
             sourceSegmentIds: uniqueIds,
             targetWordCount: Math.max(0, Math.trunc(section.targetWordCount || 0)),
           };
@@ -279,7 +279,8 @@ This content is a sermon series. The author's preaching sequence IS the book's s
 - bookTitle and authorName must come from the content; use "the Author" if name is unknown.
 - estimatedTotalWords = sum of all section targetWordCounts.
 - Always return every required field, even if some strings are brief.
-- Never leave sections empty; every chapter must have at least one section with at least one sourceSegmentId.`,
+- Never leave sections empty; every chapter must have at least one section with at least one sourceSegmentId.
+- SECTION HEADING BAN: Never start a section heading with "Introduction", "Intro", "Overview", "Opening", "Summary", or "Conclusion". These are structural labels, not teaching titles. Rename any such heading to the specific claim or truth the speaker made in that segment (e.g. "Prayer changes your countenance", not "Introduction: Prayer Changes People").`,
         prompt: `Design the chapter architecture.
 
       VOICE DNA TONE: ${input.voiceDNA.toneProfile}
