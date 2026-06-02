@@ -3118,60 +3118,65 @@ export function EbookPipeline({
             <p className="mt-1 text-[10px] text-slate-600">Tell the AI how you want your book to read. Be specific about tone, vocabulary level, and style.</p>
           </div>
 
-          {/* Chapter mode toggle */}
-          <div className="flex items-start gap-3 rounded-xl border border-slate-700/40 bg-slate-950/50 px-3 py-3">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={oneChapterPerUpload}
-              onClick={() => setOneChapterPerUpload((v) => !v)}
-              disabled={isRunning}
+          {/* Chapter mode toggle — entire row is the tap target */}
+          <div
+            role="switch"
+            aria-checked={oneChapterPerUpload}
+            onClick={() => !isRunning && setOneChapterPerUpload((v) => !v)}
+            className={[
+              "flex items-center gap-3 min-h-[52px] rounded-xl border border-slate-700/40 bg-slate-950/50 px-3 py-3",
+              !isRunning ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+            ].join(" ")}
+          >
+            {/* visual switch — pointer-events:none so clicks fall through to the row div */}
+            <div
               className={[
-                "mt-0.5 flex-shrink-0 w-9 h-5 rounded-full transition-colors",
+                "flex-shrink-0 w-9 h-5 rounded-full transition-colors pointer-events-none",
                 oneChapterPerUpload ? "bg-violet-500" : "bg-slate-700",
-                isRunning ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
               ].join(" ")}
             >
               <span
                 className={[
-                  "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5",
+                  "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5 mt-0.5",
                   oneChapterPerUpload ? "translate-x-4" : "translate-x-0",
                 ].join(" ")}
               />
-            </button>
-            <div>
+            </div>
+            <div className="select-none">
               <p className="text-sm font-medium text-slate-200 leading-tight">One chapter per upload</p>
               <p className="text-[10px] text-slate-500 mt-0.5">
-                When on, each audio file becomes exactly one chapter — the AI won't reorganize or split the content across chapter boundaries.
+                When on, each audio file becomes exactly one chapter — the AI won't reorganize or split content across audio boundaries.
               </p>
             </div>
           </div>
 
-          {/* Chapter Writer toggle (Proposal 2) */}
-          <div className="flex items-start gap-3 pt-2">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={useChapterWriter}
-              onClick={() => setUseChapterWriter((v) => !v)}
-              disabled={isRunning}
+          {/* Chapter Writer toggle — entire row is the tap target */}
+          <div
+            role="switch"
+            aria-checked={useChapterWriter}
+            onClick={() => !isRunning && setUseChapterWriter((v) => !v)}
+            className={[
+              "flex items-center gap-3 min-h-[52px] rounded-xl border border-slate-700/40 bg-slate-950/50 px-3 py-3",
+              !isRunning ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+            ].join(" ")}
+          >
+            <div
               className={[
-                "mt-0.5 flex-shrink-0 w-9 h-5 rounded-full transition-colors",
+                "flex-shrink-0 w-9 h-5 rounded-full transition-colors pointer-events-none",
                 useChapterWriter ? "bg-cyan-500" : "bg-slate-700",
-                isRunning ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
               ].join(" ")}
             >
               <span
                 className={[
-                  "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5",
+                  "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5 mt-0.5",
                   useChapterWriter ? "translate-x-4" : "translate-x-0",
                 ].join(" ")}
               />
-            </button>
-            <div>
+            </div>
+            <div className="select-none">
               <p className="text-sm font-medium text-slate-200 leading-tight">Single-pass chapter writer</p>
               <p className="text-[10px] text-slate-500 mt-0.5">
-                When on, all sections in a chapter are written in one call so the model can see earlier sections while writing later ones — reduces intra-chapter repetition. Turns off to revert to the standard per-section writer.
+                When on, all sections in a chapter are written in one AI call — the model sees earlier sections while writing later ones, reducing repetition. Does not affect chapter structure.
               </p>
             </div>
           </div>
