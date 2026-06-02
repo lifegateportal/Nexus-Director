@@ -16,10 +16,64 @@ export type { Segment, SegmentType };
 // AudioState is used by the UI render below
 type AudioState = "idle" | "playing" | "paused";
 
+// ── Scripture reference expansion ────────────────────────────────────────────
+// Must run BEFORE all other sanitization so "John 3:16" is never handed to the
+// TTS engine as a bare "3:16" time token (which browsers read as "3 hours
+// 16 minutes").  Handles full names, common abbreviations, numbered books, and
+// optional verse ranges (e.g. John 3:16-17 or Rom 8:1-2:5).
+
+const BIBLE_BOOKS = [
+  // Old Testament — full names
+  "Genesis","Exodus","Leviticus","Numbers","Deuteronomy","Joshua","Judges","Ruth",
+  "Samuel","Kings","Chronicles","Ezra","Nehemiah","Esther","Job","Psalms","Psalm",
+  "Proverbs","Ecclesiastes","Isaiah","Jeremiah","Lamentations","Ezekiel","Daniel",
+  "Hosea","Joel","Amos","Obadiah","Jonah","Micah","Nahum","Habakkuk","Zephaniah",
+  "Haggai","Zechariah","Malachi",
+  // New Testament — full names
+  "Matthew","Mark","Luke","John","Acts","Romans","Corinthians","Galatians",
+  "Ephesians","Philippians","Colossians","Thessalonians","Timothy","Titus",
+  "Philemon","Hebrews","James","Peter","Jude","Revelation",
+  // Old Testament — abbreviations
+  "Gen","Exod","Exo","Ex","Lev","Num","Deut","Deu","Josh","Judg","Sam",
+  "Kgs","Chr","Neh","Est","Psa","Ps","Prov","Pro","Eccl","Ecc","Song",
+  "Isa","Jer","Lam","Ezek","Eze","Dan","Hos","Obad","Jon","Mic","Nah",
+  "Hab","Zeph","Hag","Zech","Zec","Mal",
+  // New Testament — abbreviations
+  "Matt","Mt","Mk","Lk","Jn","Rom","Gal","Eph","Phil","Col","Thess",
+  "Tim","Tit","Philem","Phlm","Heb","Jas","Rev",
+].join("|");
+
+// Matches: [1/2/3 ]BookName chapter:verse[-verse|-chapter:verse]
+const SCRIPTURE_RE = new RegExp(
+  `\\b((?:[123]\\s+)?(?:${BIBLE_BOOKS}))\\s+(\\d{1,3}):(\\d{1,3})(?:\\s*[-\u2013]\\s*(\\d{1,3}(?::\\d{1,3})?))?`,
+  "gi",
+);
+
+function expandScripture(
+  _: string,
+  rawBook: string,
+  ch: string,
+  v1: string,
+  end?: string,
+): string {
+  const book = rawBook
+    .replace(/^1\s+/i, "First ")
+    .replace(/^2\s+/i, "Second ")
+    .replace(/^3\s+/i, "Third ");
+  if (!end) return `${book} chapter ${ch} verse ${v1}`;
+  if (end.includes(":")) {
+    const [ch2, v2] = end.split(":");
+    return `${book} chapter ${ch} verse ${v1} through chapter ${ch2} verse ${v2}`;
+  }
+  return `${book} chapter ${ch} verses ${v1} to ${end}`;
+}
+
 // ── 1. Text pre-processing — clean abbreviations, punctuation, noise ──────────
 
 function sanitizeForSpeech(text: string): string {
   return text
+    // Scripture references must come first — before any colon or number handling
+    .replace(SCRIPTURE_RE, expandScripture as Parameters<typeof String.prototype.replace>[1])
     // common abbreviations → full words (prevents "e dot g dot" robot reading)
     .replace(/\be\.g\./gi,   "for example")
     .replace(/\bi\.e\./gi,   "that is")
@@ -403,8 +457,8 @@ export function AudioReader({
           )}
         </button>
 
-        {/* Close */}
-        <button onClick={() => { stop(); onClose(); }} aria-label="Close audio" style={{
+        {/* Close — hides bar only; audio continues in GlobalMiniPlayer */}
+        <button onClick={onClose} aria-label="Close audio player bar" style={{
           width: "2.25rem", height: "2.25rem",
           background: "none", border: "none",
           borderRadius: "50%", cursor: "pointer",

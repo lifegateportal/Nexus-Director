@@ -1,26 +1,27 @@
 "use client";
 
 /**
- * Global Audio Player Context
+ * Global Audio Player Context — production audio engine
  *
- * Upgrades over per-component synthesis:
- * 1. AudioContext keep-alive   — silent ConstantSourceNode signals the browser the
- *    tab has active audio, preventing Chrome/Safari from suspending synthesis in
- *    background tabs or when the screen locks.
- * 2. Chrome 15-second stall watchdog — Chrome silently pauses speechSynthesis
- *    after ~15 s in background tabs.  A 14-second interval kicks it awake and
- *    fully restarts it if it has died.
- * 3. Page-visibility recovery — on tab-visible, any paused/dead synthesis is
- *    resumed automatically so the user doesn't have to re-press Play.
- * 4. Media Session API — registers lock-screen / notification-shade controls
- *    (play, pause, seek ±10 segments) and sets Now-Playing metadata.
- * 5. Voice-loading polling retry — on Firefox & slow Android browsers
- *    getVoices() returns [] on first call; we retry at 100 ms / 500 ms / 1.5 s /
- *    3 s / 5 s so a voice is always selected before playback starts.
- * 6. Network-error retry — onerror fires "network" on flaky mobile connections;
- *    we wait 1.2 s before advancing instead of skipping immediately.
- * 7. Provider survives route changes — lives in the root layout so navigating
- *    between pages inside the SPA never kills the synthesis engine.
+ * Bug fixes in this revision:
+ * A. Generation counter (genRef) — every speakSegment call captures the current
+ *    generation.  cancel() increments it, which immediately invalidates every
+ *    pending setTimeout / onend / onerror callback.  This is the root cause of
+ *    sentence repeats: the stall watchdog and the inter-sentence timer could both
+ *    call speakSegment(idx) for the same idx.
+ * B. pendingRef — true while we are inside a pauseBeforeMs timeout or the tiny
+ *    inter-sentence gap.  The stall watchdog skips its restart check while
+ *    pendingRef is true, eliminating the 600 ms chapter-title double-start.
+ * C. Silent HTMLAudioElement for iOS lock screen — iOS Safari ignores
+ *    AudioContext nodes for MediaSession; only a real looping <audio> element
+ *    activates the lock screen / notification-shade transport controls.
+ *    We build a 1-second 4 kHz WAV in a Blob URL at runtime (no inline base64
+ *    blobs, no network request).  It plays at near-zero volume alongside TTS.
+ * D. AudioContext keep-alive still present for Chrome background-tab suppression.
+ * E. Chrome 15 s stall watchdog with pendingRef guard.
+ * F. Page-visibility recovery.
+ * G. Voice polling retry for Firefox / slow Android.
+ * H. Network-error back-off (1.2 s) before advancing past a failed segment.
  */
 
 import React, {
@@ -63,8 +64,8 @@ const VOICE_TREATMENT: Record<
 > = {
   "chapter-title": { pitch: 1.10, rate: 0.78, volume: 1.00, pauseBeforeMs: 600, pauseAfterMs: 700 },
   "heading":       { pitch: 1.06, rate: 0.82, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 500 },
-  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.82, pauseBeforeMs:   0, pauseAfterMs: 300 },
-  "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs:  80 },
+  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.82, pauseBeforeMs:   0, pauseAfterMs: 380 },
+  "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 380 },
 };
 
 // ── Voice selection ───────────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const [rateIdx,     setRateIdx]    = useState(1);
   const [chapterMeta, setChapterMeta]= useState<AudioChapterMeta | null>(null);
 
-  // ── Stable refs (safe inside setInterval / setTimeout closures) ──────────
+  // ── Stable refs ──────────────────────────────────────────────────────────
   const segsRef        = useRef<Segment[]>([]);
   const segIdxRef      = useRef(0);
   const rateIdxRef     = useRef(1);
@@ -136,18 +137,69 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const onProgressRef  = useRef<((idx: number, key: string) => void) | undefined>(undefined);
   const chapterMetaRef = useRef<AudioChapterMeta | null>(null);
 
-  // Indirection so stall watchdog / media-session handlers always call the
-  // latest speakSegment closure without stale captures.
-  const speakRef       = useRef<(idx: number) => void>(() => {});
+  // ── FIX A: generation counter — invalidates all stale callbacks on cancel ──
+  // Increment genRef whenever speechSynthesis.cancel() is called. Every
+  // speakSegment(idx, gen) call captures the generation at scheduling time.
+  // onend / onerror / pauseBeforeMs timeouts bail out if gen !== genRef.current.
+  const genRef         = useRef(0);
 
-  // AudioContext keep-alive node
+  // ── FIX B: pendingRef — true while in a pre-speech delay or inter-sentence gap
+  // The stall watchdog skips its restart while this is true.
+  const pendingRef     = useRef(false);
+
+  // Indirection pointer so closures always call the latest speakSegment.
+  const speakRef       = useRef<(idx: number, gen: number) => void>(() => {});
+
+  // AudioContext keep-alive (Chrome)
   const audioCtxRef    = useRef<AudioContext | null>(null);
-  // Chrome 15 s stall watchdog interval handle
+  // Stall watchdog interval
   const watchdogRef    = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // ── FIX C: silent <audio> element for iOS MediaSession lock screen ────────
+  // iOS Safari requires a playing HTMLAudioElement to activate the lock-screen
+  // / notification-shade transport controls via the MediaSession API.
+  // We create a 1-second 4 kHz mono WAV blob at runtime (no network round-trip,
+  // no large inline base64).
+  const silentAudioRef    = useRef<HTMLAudioElement | null>(null);
+  const silentBlobUrlRef  = useRef<string | null>(null);
+
+  const ensureSilentAudio = useCallback((): HTMLAudioElement | null => {
+    if (typeof window === "undefined") return null;
+    if (silentAudioRef.current) return silentAudioRef.current;
+    try {
+      // 1 second of silence at 4000 Hz, 16-bit PCM, mono
+      const rate       = 4000;
+      const numSamples = rate; // 1 second
+      const buf        = new ArrayBuffer(44 + numSamples * 2);
+      const v          = new DataView(buf);
+      const w = (o: number, s: string) => {
+        for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+      };
+      w(0,  "RIFF"); v.setUint32(4, 36 + numSamples * 2, true);
+      w(8,  "WAVE"); w(12, "fmt ");
+      v.setUint32(16, 16, true);       // chunk size
+      v.setUint16(20, 1,  true);       // PCM
+      v.setUint16(22, 1,  true);       // mono
+      v.setUint32(24, rate, true);     // sample rate
+      v.setUint32(28, rate * 2, true); // byte rate
+      v.setUint16(32, 2,  true);       // block align
+      v.setUint16(34, 16, true);       // bits/sample
+      w(36, "data"); v.setUint32(40, numSamples * 2, true);
+      // bytes 44…end are all 0 = silence
+
+      const url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+      silentBlobUrlRef.current = url;
+      const audio = new Audio(url);
+      audio.loop   = true;
+      audio.volume = 0.001; // near-silent, audibly transparent
+      silentAudioRef.current = audio;
+      return audio;
+    } catch { return null; }
+  }, []);
+
   // ── Sync state refs ──────────────────────────────────────────────────────
-  useEffect(() => { stateRef.current      = state;       }, [state]);
-  useEffect(() => { rateIdxRef.current    = rateIdx;     }, [rateIdx]);
+  useEffect(() => { stateRef.current      = state;        }, [state]);
+  useEffect(() => { rateIdxRef.current    = rateIdx;      }, [rateIdx]);
   useEffect(() => { chapterMetaRef.current = chapterMeta; }, [chapterMeta]);
 
   // ── Voice loading — polling retry ────────────────────────────────────────
@@ -162,7 +214,6 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       window.speechSynthesis.onvoiceschanged = load;
       return () => { window.speechSynthesis.onvoiceschanged = null; };
     }
-    // Retry at increasing delays for Firefox / slow Android
     const ids = [100, 500, 1500, 3000, 5000].map((d) =>
       setTimeout(() => { const v = window.speechSynthesis.getVoices(); if (v.length) voicesRef.current = v; }, d),
     );
@@ -173,9 +224,16 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  // ── AudioContext keep-alive ──────────────────────────────────────────────
+  // ── AudioContext keep-alive (Chrome background-tab suppression) ──────────
   const startAudioCtx = useCallback(() => {
-    if (typeof window === "undefined" || audioCtxRef.current) return;
+    if (typeof window === "undefined") return;
+    // Start silent <audio> for iOS MediaSession
+    const silent = ensureSilentAudio();
+    if (silent && silent.paused) {
+      silent.play().catch(() => { /* blocked before user gesture — ignore */ });
+    }
+    // AudioContext oscillator for Chrome
+    if (audioCtxRef.current) return;
     try {
       type ACtxCtor = typeof AudioContext;
       const Ctor = (window.AudioContext ??
@@ -184,21 +242,25 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       const ctx  = new Ctor();
       const src  = ctx.createConstantSource();
       const gain = ctx.createGain();
-      gain.gain.value = 0.001; // near-silent — no audible hum, but tab is "active"
+      gain.gain.value = 0.001;
       src.connect(gain);
       gain.connect(ctx.destination);
       src.start();
       audioCtxRef.current = ctx;
-    } catch { /* AudioContext not available */ }
-  }, []);
+    } catch { /* ignore */ }
+  }, [ensureSilentAudio]);
 
   const stopAudioCtx = useCallback(() => {
+    if (silentAudioRef.current && !silentAudioRef.current.paused) {
+      silentAudioRef.current.pause();
+      silentAudioRef.current.currentTime = 0;
+    }
     if (!audioCtxRef.current) return;
     try { audioCtxRef.current.close(); } catch { /* ignore */ }
     audioCtxRef.current = null;
   }, []);
 
-  // ── Chrome 15-second stall watchdog ─────────────────────────────────────
+  // ── Stall watchdog — FIX B: skips restart while pendingRef is true ───────
   const stopWatchdog = useCallback(() => {
     if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
   }, []);
@@ -206,14 +268,15 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const startWatchdog = useCallback(() => {
     stopWatchdog();
     watchdogRef.current = setInterval(() => {
-      if (stoppedRef.current || typeof window === "undefined") return;
-      const ss = window.speechSynthesis;
+      if (stoppedRef.current || pendingRef.current) return;
+      const ss = typeof window !== "undefined" ? window.speechSynthesis : null;
       if (!ss) return;
       if (ss.paused) {
-        ss.resume(); // Chrome silently paused it
+        ss.resume();
       } else if (!ss.speaking && stateRef.current === "playing") {
-        // Synthesis died completely — restart from last known segment
-        speakRef.current(segIdxRef.current);
+        // Synthesis queue is genuinely empty — restart from last known segment
+        const gen = genRef.current;
+        speakRef.current(segIdxRef.current, gen);
       }
     }, 14_000);
   }, [stopWatchdog]);
@@ -233,11 +296,15 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       s === "playing" ? "playing" : s === "paused" ? "paused" : "none";
   }, []);
 
-  // ── Core synthesis engine ────────────────────────────────────────────────
-  const speakSegment = useCallback((idx: number) => {
+  // ── Core synthesis engine — FIX A: gen parameter on every call ──────────
+  const speakSegment = useCallback((idx: number, gen: number) => {
+    // Bail immediately if this call is from a stale generation
+    if (gen !== genRef.current) return;
+
     const segs = segsRef.current;
     if (stoppedRef.current || idx >= segs.length) {
       stoppedRef.current = true;
+      pendingRef.current = false;
       setState("idle"); stateRef.current = "idle";
       setCurrentSeg(null); setCurrentWord(-1);
       stopWatchdog(); stopAudioCtx();
@@ -248,7 +315,11 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     const treatment = VOICE_TREATMENT[seg.type];
 
     const doSpeak = () => {
+      // Re-check gen after any async delay
+      if (gen !== genRef.current) return;
       if (stoppedRef.current) return;
+
+      pendingRef.current = false; // we are now actually speaking
       const voice    = pickVoice(voicesRef.current);
       const userRate = RATES[rateIdxRef.current];
       segIdxRef.current = idx;
@@ -265,33 +336,47 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       if (voice) utt.voice = voice;
 
       utt.onboundary = (e) => {
-        if (e.name !== "word") return;
+        if (e.name !== "word" || gen !== genRef.current) return;
         setCurrentWord((seg.text.slice(0, e.charIndex).match(/\S+/g) ?? []).length);
       };
 
       utt.onend = () => {
-        if (stoppedRef.current) return;
-        setTimeout(() => speakRef.current(idx + 1), treatment.pauseAfterMs);
+        // FIX A: only advance if our generation is still current
+        if (gen !== genRef.current || stoppedRef.current) return;
+        pendingRef.current = true; // briefly pending between sentences
+        setTimeout(() => {
+          pendingRef.current = false;
+          speakRef.current(idx + 1, gen);
+        }, treatment.pauseAfterMs);
       };
 
       utt.onerror = (e) => {
         if (e.error === "interrupted" || e.error === "canceled") return;
-        // Retry after 1.2 s for network errors; 80 ms skip for all others
+        if (gen !== genRef.current || stoppedRef.current) return;
         const delay = e.error === "network" ? 1200 : 80;
-        setTimeout(() => { if (!stoppedRef.current) speakRef.current(idx + 1); }, delay);
+        pendingRef.current = true;
+        setTimeout(() => {
+          pendingRef.current = false;
+          if (gen === genRef.current && !stoppedRef.current) {
+            speakRef.current(idx + 1, gen);
+          }
+        }, delay);
       };
 
       window.speechSynthesis.speak(utt);
     };
 
     if (treatment.pauseBeforeMs > 0) {
-      setTimeout(doSpeak, treatment.pauseBeforeMs);
+      pendingRef.current = true; // FIX B: block watchdog during lead-in silence
+      setTimeout(() => {
+        if (gen !== genRef.current) { pendingRef.current = false; return; }
+        doSpeak();
+      }, treatment.pauseBeforeMs);
     } else {
       doSpeak();
     }
   }, [stopWatchdog, stopAudioCtx, updateMediaSession]);
 
-  // Always keep speakRef pointing to the latest closure
   useEffect(() => { speakRef.current = speakSegment; }, [speakSegment]);
 
   // ── Page-visibility recovery ─────────────────────────────────────────────
@@ -301,8 +386,8 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       if (stateRef.current !== "playing") return;
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
-      } else if (!window.speechSynthesis.speaking && !stoppedRef.current) {
-        speakRef.current(segIdxRef.current);
+      } else if (!window.speechSynthesis.speaking && !stoppedRef.current && !pendingRef.current) {
+        speakRef.current(segIdxRef.current, genRef.current);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -314,45 +399,39 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     if (typeof window === "undefined" || !("mediaSession" in navigator)) return;
 
     navigator.mediaSession.setActionHandler("play", () => {
-      if (stateRef.current !== "playing") {
-        stoppedRef.current = false;
-        window.speechSynthesis?.resume();
-        setState("playing"); stateRef.current = "playing";
-        startWatchdog(); startAudioCtx();
-        updateMediaSession("playing");
-      }
+      if (stateRef.current === "playing") return;
+      stoppedRef.current = false;
+      window.speechSynthesis?.resume();
+      setState("playing"); stateRef.current = "playing";
+      startWatchdog(); startAudioCtx();
+      updateMediaSession("playing");
     });
 
     navigator.mediaSession.setActionHandler("pause", () => {
-      if (stateRef.current === "playing") {
-        window.speechSynthesis?.pause();
-        setState("paused"); stateRef.current = "paused";
-        stopWatchdog();
-        updateMediaSession("paused");
-      }
+      if (stateRef.current !== "playing") return;
+      window.speechSynthesis?.pause();
+      setState("paused"); stateRef.current = "paused";
+      stopWatchdog();
+      updateMediaSession("paused");
     });
 
-    navigator.mediaSession.setActionHandler("seekbackward", () => {
-      const newIdx = Math.max(0, segIdxRef.current - 10);
-      stoppedRef.current = true;
+    const seekRelative = (delta: number) => {
+      const newIdx = Math.max(0, Math.min(segsRef.current.length - 1, segIdxRef.current + delta));
+      genRef.current += 1;
+      stoppedRef.current = false;
+      pendingRef.current = false;
       window.speechSynthesis?.cancel();
+      const gen = genRef.current;
       setTimeout(() => {
-        stoppedRef.current = false;
         setState("playing"); stateRef.current = "playing";
-        speakRef.current(newIdx);
+        startAudioCtx(); startWatchdog();
+        updateMediaSession("playing");
+        speakRef.current(newIdx, gen);
       }, 80);
-    });
+    };
 
-    navigator.mediaSession.setActionHandler("seekforward", () => {
-      const newIdx = Math.min(segsRef.current.length - 1, segIdxRef.current + 10);
-      stoppedRef.current = true;
-      window.speechSynthesis?.cancel();
-      setTimeout(() => {
-        stoppedRef.current = false;
-        setState("playing"); stateRef.current = "playing";
-        speakRef.current(newIdx);
-      }, 80);
-    });
+    navigator.mediaSession.setActionHandler("seekbackward", () => seekRelative(-10));
+    navigator.mediaSession.setActionHandler("seekforward",  () => seekRelative(+10));
 
     return () => {
       (["play", "pause", "seekbackward", "seekforward"] as MediaSessionAction[]).forEach((a) => {
@@ -361,12 +440,14 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     };
   }, [startWatchdog, startAudioCtx, stopWatchdog, updateMediaSession]);
 
-  // ── Provider unmount cleanup ─────────────────────────────────────────────
+  // ── Provider unmount ─────────────────────────────────────────────────────
   useEffect(() => () => {
     stoppedRef.current = true;
+    genRef.current += 1;
     window.speechSynthesis?.cancel();
     stopWatchdog();
     stopAudioCtx();
+    if (silentBlobUrlRef.current) URL.revokeObjectURL(silentBlobUrlRef.current);
   }, [stopWatchdog, stopAudioCtx]);
 
   // ── Public API ───────────────────────────────────────────────────────────
@@ -377,12 +458,13 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     onProgress?: (idx: number, key: string) => void,
   ) => {
     const prevKey = chapterMetaRef.current?.chapterKey;
-    segsRef.current    = segs;
+    segsRef.current       = segs;
     onProgressRef.current = onProgress;
 
-    // Full reset only when a different chapter is loaded
     if (prevKey !== meta.chapterKey) {
+      genRef.current += 1; // invalidate all in-flight callbacks
       stoppedRef.current = true;
+      pendingRef.current = false;
       window.speechSynthesis?.cancel();
       stopWatchdog(); stopAudioCtx();
       segIdxRef.current = 0;
@@ -406,16 +488,20 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
   const play = useCallback((fromIdx = segIdxRef.current) => {
     stoppedRef.current = false;
+    pendingRef.current = false;
     setState("playing"); stateRef.current = "playing";
     startAudioCtx(); startWatchdog();
     updateMediaSession("playing");
-    speakRef.current(fromIdx);
+    speakRef.current(fromIdx, genRef.current);
   }, [startAudioCtx, startWatchdog, updateMediaSession]);
 
   const pause = useCallback(() => {
     window.speechSynthesis?.pause();
     setState("paused"); stateRef.current = "paused";
     stopWatchdog();
+    if (silentAudioRef.current && !silentAudioRef.current.paused) {
+      silentAudioRef.current.pause();
+    }
     updateMediaSession("paused");
   }, [stopWatchdog, updateMediaSession]);
 
@@ -424,11 +510,15 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     window.speechSynthesis?.resume();
     setState("playing"); stateRef.current = "playing";
     startWatchdog();
+    const silent = silentAudioRef.current;
+    if (silent && silent.paused) silent.play().catch(() => {});
     updateMediaSession("playing");
   }, [startWatchdog, updateMediaSession]);
 
   const stop = useCallback(() => {
+    genRef.current += 1; // invalidate all in-flight callbacks
     stoppedRef.current = true;
+    pendingRef.current = false;
     window.speechSynthesis?.cancel();
     stopWatchdog(); stopAudioCtx();
     segIdxRef.current = 0;
@@ -441,21 +531,26 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     const next = (rateIdxRef.current + 1) % RATES.length;
     setRateIdx(next); rateIdxRef.current = next;
     if (stateRef.current === "playing") {
+      genRef.current += 1;
       stoppedRef.current = false;
+      pendingRef.current = false;
       window.speechSynthesis?.cancel();
-      setTimeout(() => speakRef.current(segIdxRef.current), 60);
+      const gen = genRef.current;
+      setTimeout(() => speakRef.current(segIdxRef.current, gen), 60);
     }
   }, []);
 
   const seekTo = useCallback((idx: number) => {
-    stoppedRef.current = true;
+    genRef.current += 1;
+    stoppedRef.current = false;
+    pendingRef.current = false;
     window.speechSynthesis?.cancel();
+    const gen = genRef.current;
     setTimeout(() => {
-      stoppedRef.current = false;
       setState("playing"); stateRef.current = "playing";
       startAudioCtx(); startWatchdog();
       updateMediaSession("playing");
-      speakRef.current(idx);
+      speakRef.current(idx, gen);
     }, 80);
   }, [startAudioCtx, startWatchdog, updateMediaSession]);
 

@@ -60,9 +60,11 @@ export function GlobalMiniPlayer() {
           bottom:          0,
           left:            0,
           right:           0,
-          zIndex:          50,
-          paddingBottom:   "max(env(safe-area-inset-bottom), 5rem)",
-          pointerEvents:   "none",
+            // z-52 sits above NexusNav (z-50) and overlays on all pages
+            zIndex:        52,
+            // Push the card above: nav height (≈3.5rem) + safe-area on notched phones
+            bottom:        "max(calc(3.75rem + env(safe-area-inset-bottom)), 4.25rem)",
+            pointerEvents: "none",
         }}
       >
         <div
