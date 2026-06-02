@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { createHash } from "crypto";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import {
   EbookManifestSchema,
   SectionDraftSchema,
   ChapterDraftSchema,
   FrontBackMatterSchema,
+  BackMatterSchema,
 } from "@/lib/schemas/ebook";
+import { CoverAccentSchema } from "@/lib/schemas/published-book";
 import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
@@ -22,6 +25,8 @@ const RequestSchema = z.object({
   manifest: EbookManifestSchema,
   instruction: z.string().min(1).max(4000),
   history: z.array(ChatMessageSchema).max(20).optional(),
+  dryRun: z.boolean().optional(),
+  manifestVersion: z.string().optional(),
   pipeline: z.object({
     stage: z.string(),
     progress: z.object({ total: z.number().int().nonnegative(), completed: z.number().int().nonnegative() }),
@@ -52,15 +57,29 @@ const ChapterPatchSchema = z.object({
   reflectionQuestions: z.array(z.string()).optional(),
 });
 
+// Patch for the published library catalog entry — only the fields that can be edited without re-publishing
+const LibraryPatchSchema = z.object({
+  slug:         z.string().min(1),
+  title:        z.string().optional(),
+  subtitle:     z.string().optional(),
+  authorName:   z.string().optional(),
+  synopsis:     z.string().optional(),
+  coverAccent:  CoverAccentSchema.optional(),
+});
+
 // The agent returns only what changed — undefined fields = no change
 const EbookChangeSchema = z.object({
-  bookTitle: z.string().optional(),
-  subtitle: z.string().optional(),
-  authorName: z.string().optional(),
-  frontMatter: FrontBackMatterSchema.optional(),
-  chapters: z.array(ChapterDraftSchema).optional(),          // ONLY for section reorders / full restructures
+  bookTitle:     z.string().optional(),
+  subtitle:      z.string().optional(),
+  authorName:    z.string().optional(),
+  frontMatter:   FrontBackMatterSchema.optional(),
+  backMatter:    BackMatterSchema.optional(),                 // glossary, reading guide, scripture index, resources
+  chapters:      z.array(ChapterDraftSchema).optional(),     // ONLY for section reorders / full restructures
   chapterPatches: z.array(ChapterPatchSchema).optional(),    // preferred for chapter-level field edits
   updatedSections: z.array(SectionDraftSchema).optional(),   // targeted section edits
+  libraryPatch:  LibraryPatchSchema.optional(),              // update the published catalog entry metadata
+  confidence: z.enum(["high", "medium", "low"]).default("high"), // AI's self-assessed certainty
+  clarificationNeeded: z.string().optional(), // question to surface when confidence is low
   summary: z.string(), // one-sentence description of what changed
 });
 
@@ -77,6 +96,24 @@ export async function POST(req: NextRequest) {
   }
 
   const { manifest, instruction, history, pipeline } = input;
+  const dryRun       = input.dryRun ?? false;
+
+  // ── Optimistic locking ───────────────────────────────────────────────
+  // Hash the mutable content fields so concurrent edits from multiple tabs
+  // are detected and rejected with 409 instead of silently stomping each other.
+  function computeManifestVersion(m: typeof manifest): string {
+    return createHash("sha256")
+      .update(JSON.stringify({ bookTitle: m.bookTitle, subtitle: m.subtitle, authorName: m.authorName, chapters: m.chapters, frontMatter: m.frontMatter, backMatter: m.backMatter }))
+      .digest("hex")
+      .slice(0, 12);
+  }
+  const currentVersion = computeManifestVersion(manifest);
+  if (input.manifestVersion && input.manifestVersion !== currentVersion) {
+    return NextResponse.json(
+      { error: "Conflict: the book has been modified since you last loaded it. Please reload before editing.", code: "VERSION_CONFLICT" },
+      { status: 409 }
+    );
+  }
 
   const safeExcerpt = (value: string | null | undefined, max = 600) => (value ?? "").slice(0, max);
 
@@ -109,6 +146,24 @@ export async function POST(req: NextRequest) {
   const historyText = (history ?? []).map((m) => m.content).join(" ");
   const explicitRefs = parseExplicitSectionRefs(instruction + " " + historyText);
 
+  // Detect structural / high-reasoning operations that benefit from R1:
+  // - Structural: reorder/move/merge/split/add/remove chapters or sections
+  // - Book-wide: operations that touch every chapter simultaneously
+  // - Quality-fix: resolving a failed quality report across the manuscript
+  // - Back matter generation: building glossary/scripture index from scratch
+  const isStructuralOp = /\b(
+    reorder\s+chapter|move\s+(?:chapter|section)|merge\s+chapter|split\s+chapter|
+    add\s+a?\s*chapter|remove\s+chapter|delete\s+chapter|
+    restructure|reorganize|rearrange\s+chapter|add\s+a?\s*section|swap\s+chapter|
+    fix\s+all|remove\s+all|add\s+(?:takeaways|questions|conclusions?)\s+to\s+all|
+    book[- ]wide|across\s+all\s+chapters|every\s+chapter|
+    fix\s+(?:the\s+)?(?:quality|issues?|errors?|problems?)|resolve\s+(?:quality|issues?)|
+    build\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter|reading\s+guide)|
+    generate\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)|
+    create\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)
+  )\b/ix.test(instruction);
+  const selectedModel = isStructuralOp ? deepSeekReasonerModel : deepSeekModel;
+
   // Track which sections are truncated so we can restore original content if the AI loses words
   const truncatedSections = new Set<string>();
 
@@ -126,6 +181,19 @@ export async function POST(req: NextRequest) {
       aboutAuthor: manifest.frontMatter.aboutAuthor,
       resourcesList: manifest.frontMatter.resourcesList,
     },
+    backMatter: manifest.backMatter
+      ? {
+          glossaryTermCount: (manifest.backMatter.glossary ?? []).length,
+          glossary: manifest.backMatter.glossary ?? [],
+          readingGroupGuide: (manifest.backMatter.readingGroupGuide ?? []).map((c) => ({
+            chapterNumber: c.chapterNumber,
+            chapterTitle: c.chapterTitle,
+            questions: c.questions,
+          })),
+          scriptureIndex: manifest.backMatter.scriptureIndex ?? [],
+          recommendedResources: manifest.backMatter.recommendedResources ?? [],
+        }
+      : null,
     chapters: manifest.chapters.map((ch) => ({
       number: ch.number,
       title: ch.title,
@@ -172,7 +240,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: selectedModel,
       schema: EbookChangeSchema,
       mode: "json",
       maxTokens: 8000,
@@ -247,6 +315,22 @@ FRONT MATTER (return full frontMatter object with ALL fields):
   "update the resources list"         → update frontMatter.resourcesList
   Any front matter instruction        → return the COMPLETE frontMatter object with all fields preserved
 
+BACK MATTER (return partial backMatter — only the fields that changed):
+  "add a glossary term" / "define X in the glossary"   → backMatter: { glossary: [...existing+new] }
+  "remove a glossary term" / "clean up the glossary"   → backMatter: { glossary: [...filtered] }
+  "update the glossary" / "improve the glossary"       → backMatter: { glossary: [...all terms revised] }
+  "update the reading group guide" / "add questions to chapter N" → backMatter: { readingGroupGuide: [...] }
+  "update recommended resources" / "add a resource"   → backMatter: { recommendedResources: [...] }
+  "fix the scripture index" / "update the scripture index"  → backMatter: { scriptureIndex: [...] }
+  Any back matter instruction  → return backMatter with ONLY the changed fields
+
+LIBRARY CATALOG (update the published entry metadata — no re-publish required):
+  "update the library title"    → libraryPatch: { slug, title: "new title" }
+  "change the book synopsis"    → libraryPatch: { slug, synopsis: "new synopsis" }
+  "update the library subtitle" → libraryPatch: { slug, subtitle: "..." }
+  "change the cover colour"     → libraryPatch: { slug, coverAccent: "amber|cyan|emerald|rose|violet|slate" }
+  The slug is manifest.jobId-derived — use the published slug from manifest if known, or set slug to manifest.bookTitle slugified for reference
+
 CHAPTER OPERATIONS — use chapterPatches for field edits, chapters array ONLY for section reorders:
   "rename chapter N to…"               → chapterPatches: [{chapterNumber:N, title:"..."}]
   "rewrite the intro of chapter N"     → chapterPatches: [{chapterNumber:N, intro:"full prose"}]
@@ -291,6 +375,8 @@ OUTPUT RULES
 - If updatedSections is returned, include ONLY the changed sections — the client merges them by chapterNumber + sectionNumber
 - The body field in updatedSections MUST be the FULL rewritten prose — never truncate
 - frontMatter: if returned, include ALL fields (preface, introduction, conclusion, aboutAuthor, resourcesList)
+- backMatter: if returned, include ONLY the changed sub-fields (glossary, readingGroupGuide, scriptureIndex, or recommendedResources); unchanged fields may be omitted
+- libraryPatch: if updating the published catalog, include the slug plus only the changed metadata fields
 - Always write a concise one-sentence "summary" of exactly what changed
 - If the instruction is ambiguous, make the most useful interpretation and describe what you did in summary
 - ALWAYS attempt the instruction — never refuse or treat instructions as comments
@@ -312,6 +398,34 @@ OUTPUT RULES
         instruction,
       ].join("\n"),
     });
+
+    // ── Dry-run: return the AI patch without applying it ────────────────────────
+    // The client can diff this against the current manifest and show a preview
+    // before the user confirms the change.
+    if (dryRun) {
+      return NextResponse.json({
+        dryRun: true,
+        patch:  object,
+        summary: object.summary,
+        confidence: object.confidence,
+        ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
+        manifestVersion: currentVersion,
+      }, { status: 200 });
+    }
+
+    // ── Confidence gate ───────────────────────────────────────────────────
+    // When the AI flags low confidence and provides a clarifying question,
+    // surface it to the client without applying any changes. The user can
+    // answer the question and resubmit.
+    if (object.confidence === "low" && object.clarificationNeeded) {
+      return NextResponse.json({
+        needsClarification: true,
+        clarificationNeeded: object.clarificationNeeded,
+        summary: object.summary,
+        confidence: object.confidence,
+        manifestVersion: currentVersion,
+      }, { status: 200 });
+    }
 
     // Merge updatedSections into the full manifest chapters
     let mergedChapters = manifest.chapters;
@@ -379,12 +493,24 @@ OUTPUT RULES
       });
     }
 
+    // Merge back matter patch — only overwrite the sub-fields the AI returned
+    let mergedBackMatter = manifest.backMatter ?? null;
+    if (object.backMatter !== undefined) {
+      mergedBackMatter = {
+        scriptureIndex:      object.backMatter.scriptureIndex      ?? mergedBackMatter?.scriptureIndex      ?? [],
+        glossary:            object.backMatter.glossary            ?? mergedBackMatter?.glossary            ?? [],
+        readingGroupGuide:   object.backMatter.readingGroupGuide   ?? mergedBackMatter?.readingGroupGuide   ?? [],
+        recommendedResources: object.backMatter.recommendedResources ?? mergedBackMatter?.recommendedResources ?? [],
+      };
+    }
+
     const updatedManifest = {
       ...manifest,
-      ...(object.bookTitle !== undefined && { bookTitle: object.bookTitle }),
-      ...(object.subtitle !== undefined && { subtitle: object.subtitle }),
+      ...(object.bookTitle  !== undefined && { bookTitle:  object.bookTitle }),
+      ...(object.subtitle   !== undefined && { subtitle:   object.subtitle }),
       ...(object.authorName !== undefined && { authorName: object.authorName }),
       ...(object.frontMatter !== undefined && { frontMatter: object.frontMatter }),
+      ...(mergedBackMatter !== null && { backMatter: mergedBackMatter }),
       chapters: mergedChapters,
     };
 
@@ -396,15 +522,27 @@ OUTPUT RULES
       object.updatedSections?.length ||
       object.chapters?.length ||
       object.frontMatter !== undefined ||
-      object.bookTitle !== undefined ||
-      object.subtitle !== undefined ||
-      object.authorName !== undefined;
+      object.backMatter  !== undefined ||
+      object.libraryPatch !== undefined ||
+      object.bookTitle   !== undefined ||
+      object.subtitle    !== undefined ||
+      object.authorName  !== undefined;
 
     if (!hasChanges) {
       return NextResponse.json({ noChanges: true, summary: object.summary }, { status: 200 });
     }
 
     const harmonized = harmonizeBookManifest(updatedManifest);
+
+    // ── Append audit trail entry ─────────────────────────────────────────────
+    const changeLogEntry = {
+      timestamp:   new Date().toISOString(),
+      instruction: instruction.slice(0, 200),
+      summary:     object.summary,
+      model:       (isStructuralOp ? "r1" : "v3") as "r1" | "v3",
+    };
+    const existingLog = (manifest.changeLog ?? []) as typeof changeLogEntry[];
+    harmonized.changeLog = [...existingLog, changeLogEntry].slice(-50);
 
     const validated = EbookManifestSchema.safeParse(harmonized);
     if (!validated.success) {
@@ -414,7 +552,14 @@ OUTPUT RULES
       );
     }
 
-    return NextResponse.json({ manifest: validated.data, summary: object.summary }, { status: 200 });
+    return NextResponse.json({
+      manifest:        validated.data,
+      summary:         object.summary,
+      confidence:      object.confidence,
+      manifestVersion: computeManifestVersion(validated.data!),
+      ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
+      ...(object.libraryPatch !== undefined && { libraryPatch: object.libraryPatch }),
+    }, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Ebook assistant failed";
     return NextResponse.json({ error: message }, { status: 500 });

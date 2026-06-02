@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { createHash } from "crypto";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
@@ -14,6 +15,12 @@ const RequestSchema = z.object({
   academy:     AcademyPackageSchema,
   instruction: z.string().min(1).max(4000),
   siteConfig:  SiteConfigSchema.optional(),
+  dryRun:       z.boolean().optional(),
+  academyVersion: z.string().optional(),
+  history: z.array(z.object({
+    role:    z.enum(["user", "assistant"]),
+    content: z.string().max(8000),
+  })).max(20).optional(),
 });
 
 // ── Patch schemas — AI returns ONLY changed fields, never the full academy. ──
@@ -76,9 +83,11 @@ const AcademyPatchSchema = z.object({
 });
 
 const PatchResponseSchema = z.object({
-  academyPatch:    AcademyPatchSchema.optional(),
-  siteConfigPatch: SiteConfigSchema.partial().optional(),
-  summary:         z.string(),
+  academyPatch:        AcademyPatchSchema.optional(),
+  siteConfigPatch:     SiteConfigSchema.partial().optional(),
+  confidence:          z.enum(["high", "medium", "low"]).default("high"),
+  clarificationNeeded: z.string().optional(),
+  summary:             z.string(),
 });
 
 // ── Server-side merge helpers ────────────────────────────────────────────────
@@ -136,8 +145,70 @@ export async function POST(req: NextRequest) {
   }
 
   const { academy, instruction, siteConfig } = parsedInput;
+  const dryRun = parsedInput.dryRun ?? false;
 
-  // Wrap in SSE stream so keep-alive pings prevent EpicGlobal / nginx from
+  // ── Optimistic locking ───────────────────────────────────────────────
+  function computeAcademyVersion(a: typeof academy): string {
+    return createHash("sha256")
+      .update(JSON.stringify({ academyName: a.academyName, curriculum: a.curriculum }))
+      .digest("hex")
+      .slice(0, 12);
+  }
+  const currentVersion = computeAcademyVersion(academy);
+  if (parsedInput.academyVersion && parsedInput.academyVersion !== currentVersion) {
+    return new Response(
+      JSON.stringify({ error: "Conflict: the academy has been modified since you last loaded it. Please reload before editing.", code: "VERSION_CONFLICT" }),
+      { status: 409, headers: { "Content-Type": "application/json" } }
+    );
+  } ─────────────────────────────────────────────
+  // Build a module-level concept map before sending anything to the LLM.
+  // Each module OWNS its terms and lesson concepts — the AI must not redefine
+  // or re-explain a concept that already belongs to another module.
+  type ModuleEntry = { moduleIndex: number; moduleTitle: string; keyTerms: string[]; lessonTitles: string[]; objectives: string[] };
+  const moduleLedger: ModuleEntry[] = academy.curriculum.map((mod, mi) => ({
+    moduleIndex:  mi,
+    moduleTitle:  mod.moduleTitle,
+    keyTerms:     (mod.keyTerms ?? []).map((kt) => kt.term),
+    lessonTitles: mod.lessons.map((l) => l.title),
+    objectives:   (mod.learningObjectives ?? []).slice(0, 3),
+  }));
+
+  // Detect explicitly referenced modules/lessons in the instruction so we can
+  // send their full notes (not the 120-char stub) to the LLM.
+  function parseExplicitModuleRefs(text: string): Set<string> {
+    const refs = new Set<string>();
+    const patterns = [
+      /\bmodule\s+(\d+)\s+lesson\s+(\d+)/gi,
+      /\bm(\d+)\s*l(\d+)\b/gi,
+      /\blesson\s+(\d+)\b/gi,
+      /\bmodule\s+(\d+)\b/gi,
+    ];
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m[2]) refs.add(`${Number(m[1]) - 1}:${Number(m[2]) - 1}`);
+        else if (m[1]) refs.add(`mod:${Number(m[1]) - 1}`);
+      }
+    }
+    return refs;
+  }
+  const history = parsedInput.history ?? [];
+  const historyText = history.map((m) => m.content).join(" ");
+  const explicitRefs = parseExplicitModuleRefs(instruction + " " + historyText);
+
+  // Detect structural / high-reasoning operations that benefit from R1:
+  // - Structural: add/remove/merge/split/reorder modules
+  // - Academy-wide: objectives for all modules, notes for all lessons
+  // - Curriculum audit: overlap/duplication analysis across modules
+  const isStructuralOp = /\b(
+    add\s+a?\s*module|remove\s+module|delete\s+module|reorder\s+module|merge\s+module|
+    split\s+(?:lesson|module)|restructure|reorganize|rearrange|full\s+rewrite|rewrite\s+all|complete\s+overhaul|
+    add\s+(?:learning\s+)?objectives\s+to\s+all|add\s+(?:key\s+)?terms?\s+to\s+all|
+    rewrite\s+(?:notes|lessons?)\s+for\s+all|expand\s+all\s+(?:notes|lessons?)|
+    (?:check|identify|find|audit)\s+(?:overlap|duplicat|repeated\s+content|coverage)|
+    across\s+all\s+modules|every\s+module
+  )\b/ix.test(instruction);
+
   // closing the connection while DeepSeek is generating the response.
   const stream = new ReadableStream({
     async start(controller) {
@@ -150,19 +221,47 @@ export async function POST(req: NextRequest) {
     // Trim lesson notes to a short stub before serialising — the model doesn't
     // need to read 500-word prose to write a patch, and sending it bloats the
     // prompt beyond DeepSeek's reliable JSON-generation threshold in production.
+    // EXCEPTION: explicitly referenced lessons are sent at full length.
     const academyContext = {
       ...academy,
-      curriculum: academy.curriculum.map((mod) => ({
+      curriculum: academy.curriculum.map((mod, mi) => ({
         ...mod,
-        lessons: mod.lessons.map((l) => ({
-          ...l,
-          notes: l.notes ? l.notes.slice(0, 120) + (l.notes.length > 120 ? "…" : "") : "",
-        })),
+        lessons: mod.lessons.map((l, li) => {
+          const isExplicit = explicitRefs.has(`${mi}:${li}`) || explicitRefs.has(`mod:${mi}`);
+          return {
+            ...l,
+            notes: isExplicit
+              ? l.notes  // full notes for explicitly named lessons
+              : l.notes ? l.notes.slice(0, 120) + (l.notes.length > 120 ? "…" : "") : "",
+          };
+        }),
       })),
     };
 
+    // ── Concept Ownership Block ───────────────────────────────────────────
+    // Built from the live academy — injected into the system prompt so the LLM
+    // knows what each module owns and cannot duplicate across modules.
+    const conceptOwnershipBlock = moduleLedger.length > 1
+      ? `\n\n════════════════════════════════════════════
+CONCEPT OWNERSHIP MAP — NON-NEGOTIABLE
+════════════════════════════════════════════
+Each module OWNS its key terms and lesson concepts. Do NOT redefine, re-explain, or introduce in another module any concept that already belongs to a different module.
+${moduleLedger.map((e) =>
+  `Module ${e.moduleIndex + 1} "${e.moduleTitle}" OWNS:\n  Terms: ${e.keyTerms.length ? e.keyTerms.join(", ") : "(none)"}\n  Lessons: ${e.lessonTitles.join(" | ")}`
+).join("\n")}`
+      : "";
+
+    // ── Conversation history block ────────────────────────────────────────
+    const historyBlock = history.length > 0
+      ? `\n\nCONVERSATION HISTORY (oldest first — use this for follow-up instructions):\n${history.map((m) => `${m.role === "user" ? "USER" : "DIRECTOR"}: ${m.content}`).join("\n")}`
+      : "";
+
+    // Route structural operations to R1 (reasoning model) — they require
+    // multi-step thinking about concept ownership and curriculum coherence.
+    const selectedModel = isStructuralOp ? deepSeekReasonerModel : deepSeekModel;
+
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: selectedModel,
       schema: PatchResponseSchema,
       schemaName: "AcademyPatch",
       schemaDescription: "Patch object describing only the fields that need to change in the academy and/or site config.",
@@ -255,6 +354,7 @@ OUTPUT RULES
 - Always write a concise one-sentence "summary" of exactly what you changed
 - Never invent facts not grounded in the existing academy content or explicit user instruction
 - If the instruction is ambiguous, make the most useful interpretation and describe what you did in the summary
+- The CONCEPT OWNERSHIP MAP injected in the prompt is a hard constraint — do not duplicate a concept, term, or lesson topic across modules. If an edit requires touching content owned by another module, move that content to the owning module instead of duplicating it.
 
 ════════════════════════════════════════════
 OUTPUT FORMAT — patch only what changes
@@ -269,37 +369,83 @@ Return "siteConfigPatch" with ONLY the site config keys that need to change.
 
 Always write a concise one-sentence "summary" of exactly what changed.`,
       prompt: [
-        "CURRENT ACADEMY (notes trimmed for brevity — you have full write access when patching):",
+        "CURRENT ACADEMY (notes trimmed for brevity — explicitly named lessons sent at full length):",
         JSON.stringify(academyContext),
         "",
         "CURRENT SITE CONFIG:",
         JSON.stringify(siteConfig ?? {}),
+        conceptOwnershipBlock,
+        historyBlock,
         "",
         "USER INSTRUCTION:",
         instruction,
       ].join("\n"),
     });
 
-    // Merge patches server-side and return full objects to the client
-    let updatedAcademy: AcademyPackage | undefined;
-    let updatedSiteConfig: SiteConfig | undefined;
-
-    if (object.academyPatch) {
-      updatedAcademy = applyAcademyPatch(academy, object.academyPatch);
-    }
-
-    if (object.siteConfigPatch) {
-      updatedSiteConfig = applySiteConfigPatch(
-        siteConfig ?? SiteConfigSchema.parse({}),
-        object.siteConfigPatch,
-      );
-    }
-
         clearInterval(ping);
+
+        // ── Dry-run: return patch without applying ───────────────────────────
+        if (dryRun) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            dryRun: true,
+            patch:   object.academyPatch,
+            siteConfigPatch: object.siteConfigPatch,
+            summary: object.summary,
+            confidence: object.confidence,
+            ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
+            academyVersion: currentVersion,
+          })}\n\n`));
+          controller.close();
+          return;
+        }
+
+        // ── Confidence gate ─────────────────────────────────────────────
+        if (object.confidence === "low" && object.clarificationNeeded) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            needsClarification: true,
+            clarificationNeeded: object.clarificationNeeded,
+            summary: object.summary,
+            confidence: object.confidence,
+            academyVersion: currentVersion,
+          })}\n\n`));
+          controller.close();
+          return;
+        }
+
+        // Merge patches server-side and return full objects to the client
+        let updatedAcademy: AcademyPackage | undefined;
+        let updatedSiteConfig: SiteConfig | undefined;
+
+        if (object.academyPatch) {
+          updatedAcademy = applyAcademyPatch(academy, object.academyPatch);
+        }
+
+        if (object.siteConfigPatch) {
+          updatedSiteConfig = applySiteConfigPatch(
+            siteConfig ?? SiteConfigSchema.parse({}),
+            object.siteConfigPatch,
+          );
+        }
+
+        // ── Append audit trail entry ───────────────────────────────────────────
+        if (updatedAcademy) {
+          const entry = {
+            timestamp:   new Date().toISOString(),
+            instruction: instruction.slice(0, 200),
+            summary:     object.summary,
+            model:       (isStructuralOp ? "r1" : "v3") as "r1" | "v3",
+          };
+          const existing = (academy.changeLog ?? []) as typeof entry[];
+          updatedAcademy = { ...updatedAcademy, changeLog: [...existing, entry].slice(-50) };
+        }
+
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({
-          academy:    updatedAcademy,
-          siteConfig: updatedSiteConfig,
-          summary:    object.summary,
+          academy:        updatedAcademy,
+          siteConfig:     updatedSiteConfig,
+          summary:        object.summary,
+          confidence:     object.confidence,
+          academyVersion: updatedAcademy ? computeAcademyVersion(updatedAcademy) : currentVersion,
+          ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
         })}\n\n`));
       } catch (error) {
         clearInterval(ping);

@@ -99,6 +99,15 @@ function buildBookToc(manifest: EbookManifest): string {
       if ((text ?? "").trim()) lines.push(`  ${label} (${text!.trim().split(/\s+/).length.toLocaleString()} words)`);
     }
   }
+  if (manifest.backMatter) {
+    const bm = manifest.backMatter;
+    lines.push("");
+    lines.push("GENERATED BACK MATTER");
+    if ((bm.glossary?.length ?? 0) > 0) lines.push(`  Glossary — ${bm.glossary.length} terms`);
+    if ((bm.readingGroupGuide?.length ?? 0) > 0) lines.push(`  Reading Group Guide — ${bm.readingGroupGuide.length} chapters`);
+    if ((bm.scriptureIndex?.length ?? 0) > 0) lines.push(`  Scripture Index — ${bm.scriptureIndex.length} references`);
+    if ((bm.recommendedResources?.length ?? 0) > 0) lines.push(`  Recommended Resources — ${bm.recommendedResources.length} items`);
+  }
   return lines.join("\n");
 }
 
@@ -278,20 +287,53 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
             instruction: text,
             history: historyForApi,
             pipeline: ebookPipelineSnapshot ?? undefined,
+            manifestVersion: (ebookManifest as Record<string, unknown>).__version as string | undefined,
           }),
         });
-        const json = await res.json() as { manifest?: unknown; summary?: string; noChanges?: boolean; error?: string };
+        const json = await res.json() as {
+          manifest?: unknown;
+          summary?: string;
+          noChanges?: boolean;
+          error?: string;
+          code?: string;
+          needsClarification?: boolean;
+          clarificationNeeded?: string;
+          confidence?: "high" | "medium" | "low";
+          manifestVersion?: string;
+          libraryPatch?: { slug: string; title?: string; subtitle?: string; authorName?: string; synopsis?: string; coverAccent?: string };
+        };
+        if (res.status === 409) {
+          setMessages((prev) => [...prev, { role: "assistant", content: `⚠️ **Edit conflict** — the book was changed in another tab. Please reload the page and try again.` }]);
+          return;
+        }
         if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+        if (json.needsClarification && json.clarificationNeeded) {
+          setMessages((prev) => [...prev, { role: "assistant", content: `❓ I need a bit more detail before I can make this change:\n\n**${json.clarificationNeeded}**` }]);
+          return;
+        }
         if (json.noChanges) {
           setMessages((prev) => [...prev, { role: "assistant", content: `${json.summary ?? ""}
 
 ⚠️ No manuscript changes were applied. Please rephrase your instruction more specifically — e.g. name the exact chapter or section number you want changed.` }]);
           return;
         }
+        // Apply library catalog patch if the assistant updated published metadata
+        if (json.libraryPatch) {
+          await fetch("/api/ebook/publish", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(json.libraryPatch),
+          }).catch(() => { /* best-effort — don't block the manifest update */ });
+        }
         const parsed = EbookManifestSchema.safeParse(json.manifest);
         if (!parsed.success) throw new Error("Invalid ebook manifest returned from assistant");
-        onEbookUpdate(parsed.data, json.summary ?? "Book updated.");
-        setMessages((prev) => [...prev, { role: "assistant", content: json.summary ?? "Done." }]);
+        // Stash the version token on the manifest object so the next call can send it back
+        const manifestWithVersion = json.manifestVersion
+          ? { ...parsed.data, __version: json.manifestVersion }
+          : parsed.data;
+        onEbookUpdate(manifestWithVersion as typeof parsed.data, json.summary ?? "Book updated.");
+        const confidenceNote = json.confidence === "medium" ? " *(medium confidence — review before saving)*" : "";
+        setMessages((prev) => [...prev, { role: "assistant", content: (json.summary ?? "Done.") + confidenceNote }]);
         return;
       }
 
@@ -304,7 +346,13 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ academy, instruction: text, siteConfig }),
+        body: JSON.stringify({
+          academy,
+          instruction: text,
+          siteConfig,
+          history: messages.slice(-20).map((m) => ({ role: m.role, content: m.content })),
+          academyVersion: (academy as Record<string, unknown>).__version as string | undefined,
+        }),
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -319,7 +367,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
       }
-      let json: { academy?: unknown; siteConfig?: unknown; summary?: string; error?: string } | null = null;
+      let json: { academy?: unknown; siteConfig?: unknown; summary?: string; error?: string; code?: string; needsClarification?: boolean; clarificationNeeded?: string; confidence?: "high" | "medium" | "low"; academyVersion?: string } | null = null;
       for (const line of buffer.split("\n")) {
         if (line.startsWith("data: ")) {
           json = JSON.parse(line.slice(6)) as typeof json;
@@ -328,7 +376,15 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
       }
 
       if (!json) throw new Error("No response from assistant");
+      if (json.error && json.code === "VERSION_CONFLICT") {
+        setMessages((prev) => [...prev, { role: "assistant", content: `⚠️ **Edit conflict** — the academy was changed in another tab. Please reload and try again.` }]);
+        return;
+      }
       if (json.error) throw new Error(json.error);
+      if (json.needsClarification && json.clarificationNeeded) {
+        setMessages((prev) => [...prev, { role: "assistant", content: `❓ I need a bit more detail:\n\n**${json.clarificationNeeded}**` }]);
+        return;
+      }
 
       let changed = false;
 

@@ -105,6 +105,13 @@ export const AcademyPackageSchema = z.object({
     keywords: z.array(z.string()),
   }),
   onboardingSteps: z.array(z.string()),
+  /** Audit trail — rolling log of every assistant edit (max 50 entries, oldest dropped first) */
+  changeLog: z.array(z.object({
+    timestamp:   z.string().datetime(),
+    instruction: z.string(),
+    summary:     z.string(),
+    model:       z.enum(["v3", "r1"]),
+  })).max(50).optional(),
 });
 
 export type ProduceInput = z.infer<typeof ProduceInputSchema>;
