@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import type { EbookManifest, ChapterDraft } from "@/lib/schemas/ebook";
+import type { BackMatter } from "@/lib/schemas/ebook";
 import {
   getReadingPosition,
   saveReadingPosition,
@@ -682,6 +683,173 @@ function CopyrightView({
   );
 }
 
+// ── Back matter view ─────────────────────────────────────────────────────────
+
+function BackMatterView({
+  section, backMatter, theme, fontFamily, fontSize, lineHeight,
+}: {
+  section:    "glossary" | "guide" | "resources" | "scripture";
+  backMatter: BackMatter;
+  theme:      Theme;
+  fontFamily: string;
+  fontSize:   number;
+  lineHeight: number;
+}) {
+  const t = theme;
+  const titleStyle: React.CSSProperties = {
+    fontSize: "1.9em", fontWeight: 700, color: t.heading,
+    lineHeight: 1.2, letterSpacing: "-0.02em", marginBottom: "0.5em",
+    fontFamily: "Georgia, serif", textAlign: "center",
+  };
+  const dividerStyle: React.CSSProperties = {
+    width: "2.5em", height: "2px", background: t.accent, margin: "0.75em auto 3em", borderRadius: "1px",
+  };
+  const base: React.CSSProperties = { fontFamily, fontSize: `${fontSize}px`, lineHeight, color: t.text };
+
+  if (section === "glossary") {
+    return (
+      <article style={base}>
+        <header style={{ textAlign: "center", marginBottom: "3.5em" }}>
+          <h1 style={titleStyle}>Glossary</h1>
+          <div style={dividerStyle} />
+        </header>
+        {backMatter.glossary?.map((entry, i) => (
+          <div key={i} style={{ marginBottom: "1.75em" }}>
+            <p style={{ fontWeight: 700, color: t.heading, marginBottom: "0.25em" }}>{entry.term}</p>
+            <p style={{ color: t.text, marginBottom: "0.25em" }}>{entry.definition}</p>
+            {entry.firstAppearance && (
+              <p style={{ fontSize: "0.78em", color: t.muted, fontStyle: "italic" }}>
+                First appears: {entry.firstAppearance}
+              </p>
+            )}
+          </div>
+        ))}
+      </article>
+    );
+  }
+
+  if (section === "guide") {
+    return (
+      <article style={base}>
+        <header style={{ textAlign: "center", marginBottom: "3.5em" }}>
+          <h1 style={titleStyle}>Reading Group Guide</h1>
+          <div style={dividerStyle} />
+        </header>
+        {backMatter.readingGroupGuide?.map((ch, i) => (
+          <div key={i} style={{ marginBottom: "2.5em" }}>
+            <h2 style={{
+              fontSize: "0.65em", fontWeight: 700, letterSpacing: "0.18em",
+              textTransform: "uppercase", color: t.muted,
+              marginBottom: "1em", paddingBottom: "0.5em",
+              borderBottom: `1px solid ${t.border}`,
+              fontFamily,
+            }}>
+              Ch {ch.chapterNumber} · {ch.chapterTitle}
+            </h2>
+            <ol style={{ paddingLeft: "1.4em", margin: 0 }}>
+              {ch.questions.map((q, qi) => (
+                <li key={qi} style={{ marginBottom: "0.85em", lineHeight: 1.75 }}>{q}</li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </article>
+    );
+  }
+
+  if (section === "resources") {
+    return (
+      <article style={base}>
+        <header style={{ textAlign: "center", marginBottom: "3.5em" }}>
+          <h1 style={titleStyle}>Recommended Resources</h1>
+          <div style={dividerStyle} />
+        </header>
+        <ul style={{ paddingLeft: "1.4em", margin: 0 }}>
+          {backMatter.recommendedResources?.map((r, i) => (
+            <li key={i} style={{ marginBottom: "0.85em", lineHeight: 1.75 }}>{r}</li>
+          ))}
+        </ul>
+      </article>
+    );
+  }
+
+  if (section === "scripture") {
+    // Deduplicate: prefer named translation over "translation unspecified" for same base reference
+    const baseRef = (r: string) => r.replace(/\s*\([^)]+\)\s*$/, "").trim().toLowerCase();
+    const deduped = (backMatter.scriptureIndex ?? []).reduce<(typeof backMatter.scriptureIndex)[number][]>((acc, entry) => {
+      const key = baseRef(entry.reference);
+      const idx = acc.findIndex((e) => baseRef(e.reference) === key);
+      if (idx === -1) return [...acc, entry];
+      const isSpecific = entry.translation && entry.translation !== "translation unspecified";
+      const existingIsGeneric = !acc[idx].translation || acc[idx].translation === "translation unspecified";
+      if (isSpecific && existingIsGeneric) { const next = [...acc]; next[idx] = entry; return next; }
+      return acc;
+    }, []);
+
+    type ScriptureEntry = { reference: string; translation: string };
+
+    // Group by chapter; skip entries with no valid chapter — store full entry
+    const byChapter = new Map<number, ScriptureEntry[]>();
+    for (const entry of deduped) {
+      const validChs = (entry.chapters ?? []).filter((c) => c > 0);
+      for (const ch of validChs) {
+        const g = byChapter.get(ch) ?? [];
+        g.push({ reference: entry.reference, translation: entry.translation ?? "" });
+        byChapter.set(ch, g);
+      }
+    }
+
+    // Sort chapter keys numerically
+    const chapterKeys = [...byChapter.keys()].sort((a, b) => a - b);
+
+    const cleanRef = (r: string) =>
+      r.replace(/\s*\([^)]+\)\s*$/, "").trim();
+    const realTranslation = (t: string) =>
+      t && t.toLowerCase() !== "translation unspecified" ? t : null;
+
+    return (
+      <article style={base}>
+        <header style={{ textAlign: "center", marginBottom: "3.5em" }}>
+          <h1 style={titleStyle}>Scripture Index</h1>
+          <div style={dividerStyle} />
+        </header>
+        {chapterKeys.map((chKey) => {
+          const entries = [...(byChapter.get(chKey) ?? [])].sort((a, b) =>
+            a.reference.localeCompare(b.reference)
+          );
+          return (
+            <div key={chKey} style={{ marginBottom: "2.25em" }}>
+              <h2 style={{
+                fontSize: "0.65em", fontWeight: 700, letterSpacing: "0.18em",
+                textTransform: "uppercase", color: t.muted,
+                marginBottom: "0.85em", paddingBottom: "0.5em",
+                borderBottom: `1px solid ${t.border}`, fontFamily,
+              }}>
+                Chapter {chKey}
+              </h2>
+              {entries.map((entry, i) => {
+                const translation = realTranslation(entry.translation);
+                return (
+                  <div key={i} style={{ marginBottom: "0.6em", display: "flex", alignItems: "baseline", gap: "0.6em" }}>
+                    <span style={{ fontWeight: 600, color: t.heading }}>{cleanRef(entry.reference)}</span>
+                    {translation && (
+                      <span style={{ fontSize: "0.72em", fontWeight: 700, letterSpacing: "0.1em", color: t.accent }}>
+                        {translation}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </article>
+    );
+  }
+
+  return null;
+}
+
 // ── Selection popup — appears when user selects text in annotation mode ────────
 
 const ANNO_SWATCHES: { key: AnnotationColor; dot: string }[] = [
@@ -963,12 +1131,13 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
   }, [chapterIndex, containerW, containerH, settings]);
 
-  // ── Build virtual section list (copyright → preface → intro → chapters → conclusion → about) ──
+  // ── Build virtual section list (copyright → preface → intro → chapters → conclusion → about → backmatter) ──
   type VirtualSection =
     | { kind: "copyright" }
     | { kind: "frontmatter"; key: "preface" | "introduction" | "conclusion"; title: string; body: string }
     | { kind: "chapter"; chapter: ChapterDraft }
-    | { kind: "about"; body: string };
+    | { kind: "about"; body: string }
+    | { kind: "backmatter"; key: "glossary" | "guide" | "resources" | "scripture"; title: string };
 
   const virtualSections: VirtualSection[] = [];
   virtualSections.push({ kind: "copyright" });
@@ -982,6 +1151,14 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     virtualSections.push({ kind: "frontmatter", key: "conclusion", title: "Conclusion", body: manifest.frontMatter.conclusion });
   if (manifest.frontMatter.aboutAuthor?.trim())
     virtualSections.push({ kind: "about", body: manifest.frontMatter.aboutAuthor });
+  if ((manifest.backMatter?.glossary?.length ?? 0) > 0)
+    virtualSections.push({ kind: "backmatter", key: "glossary", title: "Glossary" });
+  if ((manifest.backMatter?.readingGroupGuide?.length ?? 0) > 0)
+    virtualSections.push({ kind: "backmatter", key: "guide", title: "Reading Group Guide" });
+  if ((manifest.backMatter?.recommendedResources?.length ?? 0) > 0)
+    virtualSections.push({ kind: "backmatter", key: "resources", title: "Recommended Resources" });
+  if ((manifest.backMatter?.scriptureIndex?.length ?? 0) > 0)
+    virtualSections.push({ kind: "backmatter", key: "scripture", title: "Scripture Index" });
 
   const totalSections = virtualSections.length;
   const currentSection = virtualSections[chapterIndex] ?? virtualSections[0];
@@ -1272,6 +1449,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     if (s.kind === "copyright")    return { label: "©",         title: "Copyright" };
     if (s.kind === "frontmatter")  return { label: s.title.slice(0, 5).toUpperCase(), title: s.title };
     if (s.kind === "about")        return { label: "ABOUT",     title: "About the Author" };
+    if (s.kind === "backmatter")   return { label: s.title.slice(0, 4).toUpperCase(), title: s.title };
     // chapter
     const chNum = (s as { kind: "chapter"; chapter: ChapterDraft }).chapter.number;
     return { label: `Ch ${chNum}`, title: (s as { kind: "chapter"; chapter: ChapterDraft }).chapter.title };
@@ -1282,6 +1460,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     if (currentSection.kind === "copyright")   return "Copyright";
     if (currentSection.kind === "frontmatter") return currentSection.title;
     if (currentSection.kind === "about")       return "About the Author";
+    if (currentSection.kind === "backmatter")  return currentSection.title;
     return `Ch ${currentSection.chapter.number} · ${currentSection.chapter.title}`;
   })();
 
@@ -1525,6 +1704,16 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
                 fontSize={fontSize}
                 lineHeight={lineHeight}
                 annotations={annotations}
+              />
+            )}
+            {currentSection.kind === "backmatter" && manifest.backMatter && (
+              <BackMatterView
+                section={currentSection.key}
+                backMatter={manifest.backMatter}
+                theme={theme}
+                fontFamily={fontFamily}
+                fontSize={fontSize}
+                lineHeight={lineHeight}
               />
             )}
             {currentSection.kind === "chapter" && (

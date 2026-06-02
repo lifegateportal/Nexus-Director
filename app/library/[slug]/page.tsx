@@ -290,25 +290,6 @@ export default async function BookLandingPage({
               </div>
             )}
 
-            {/* Scripture references */}
-            {manifest.frontMatter.scriptureIndex.length > 0 && (
-              <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-5">
-                <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                  Scripture References{" "}
-                  <span className="text-slate-600">({manifest.frontMatter.scriptureIndex.length})</span>
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {manifest.frontMatter.scriptureIndex.map((ref, i) => (
-                    <span
-                      key={i}
-                      className="rounded-full border border-slate-700/50 px-2 py-0.5 text-xs text-slate-400"
-                    >
-                      {ref}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
         </div>
