@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { FrontMatterRequestSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
-import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
+
+// LLM generates introduction + conclusion only — no preface
+const IntroConclSchema = FrontBackMatterSchema.omit({ preface: true, scriptureIndex: true });
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
@@ -25,53 +27,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const { object } = await generateObject({
-      model: deepSeekModel,
-      schema: FrontBackMatterSchema,
-      mode: "tool",
-      temperature: 0.2,
-      system: `You are an editorial assistant writing the front and back matter of a published teaching book.
+      model: deepSeekReasonerModel,
+      schema: IntroConclSchema,
+      mode: "json",
+      temperature: 1,  // reasoner requires temperature=1
+      system: `You are an editorial assistant writing the introduction and conclusion of a published teaching book.
 
 ABSOLUTE CONTENT RULE — ZERO FABRICATION:
 Every sentence must come verbatim-idea from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript — not even plausible extensions, inferred background, theological context the author "probably" knows, or biographical details you can reasonably assume. If you cannot point to the exact idea in the transcript text below, delete the sentence. Write shorter output rather than pad with invented content.
-
-════════════════════════════════════════════
-PREFACE — STRICT GUARDRAILS
-════════════════════════════════════════════
-The preface is an author's note to a reader holding the book — not an address to a congregation.
-
-WHAT THE PREFACE MUST BE:
-- Written in first person as the author speaking directly to an individual reader.
-- Grounded in what the author said about why this teaching matters, what prompted it, or what they hope it accomplishes.
-- Warm, personal, and purposeful — the author's own voice explaining what the reader is about to receive.
-
-OPENING SENTENCE — HARD PROHIBITION (the preface must NEVER begin with any of these patterns):
-- "There are moments in life when..."
-- "Every [pastor/leader/believer] knows..."
-- "What you hold in your hands..."
-- "The message you're about to read..."
-- "In the years I've spent..."
-- "Over the course of..."
-- "I believe that..."
-- "This book is about..."
-- "In this book, I want to..."
-- Any sentence that opens with a generic universal claim before establishing the author's specific story.
-
-The preface MUST open with something specific and concrete to this author's experience or this book's origin — a particular moment, a discovery, a tension the author felt — not a broad observation any author could make.
-
-HARD PROHIBITIONS — delete or rewrite every instance:
-- Any greeting to a crowd: "Good morning," "Welcome everyone," "Thank you for being here," "It's good to see you all."
-- Any acknowledgement of staff, choir, church workers, guests, or attendees.
-- Any room/stage reference: "as we gather today," "in this house," "this morning as you sit here," "those of you in the room."
-- Any sermon-opener command: "Turn with me to," "Open your Bibles to," "Let's pray," "Say amen."
-- Any plural-crowd address: "you all," "each of you here today," "everyone in this room," "those of you joining us."
-- Any live-event framing: "this series," "today's message," "last week we covered," "part 2 of our series."
-
-REWRITE RULES FOR THE PREFACE:
-- "You all" / "everyone here" → "you" (singular reader)
-- "This morning's message" → "this book" or "these pages"
-- "Those of you in the room" → "you, the reader"
-- "We as a church" → omit or rephrase as the author's own conviction
-- First-person plural "we" (as a congregation) → first-person singular "I" (as the author)
 
 ════════════════════════════════════════════
 INTRODUCTION
@@ -119,7 +82,7 @@ ${transcript.slice(-3000)}`,
 
     return NextResponse.json({
       ...object,
-      preface: stripAudienceLanguage(object.preface ?? ""),
+      preface: "",
       introduction: stripAudienceLanguage(object.introduction ?? ""),
       conclusion: stripAudienceLanguage(object.conclusion ?? ""),
       aboutAuthor: object.aboutAuthor ? stripAudienceLanguage(object.aboutAuthor) : null,
@@ -138,13 +101,12 @@ ${transcript.slice(-3000)}`,
       })(),
     }, { status: 200 });
   } catch (err) {
-    const opening = transcript.slice(0, 2600).trim();
-    const middle = transcript.slice(2600, 5200).trim();
+    const middle = transcript.slice(Math.floor(transcript.length * 0.05), 5200).trim();
     const closing = transcript.slice(-2200).trim();
     return NextResponse.json({
-      preface: stripAudienceLanguage(opening || "Preface unavailable."),
-      introduction: stripAudienceLanguage(middle || opening || "Introduction unavailable."),
-      conclusion: stripAudienceLanguage(closing || opening || "Conclusion unavailable."),
+      preface: "",
+      introduction: stripAudienceLanguage(middle || "Introduction unavailable."),
+      conclusion: stripAudienceLanguage(closing || "Conclusion unavailable."),
       aboutAuthor: null,
       resourcesList: [],
       scriptureIndex: [],

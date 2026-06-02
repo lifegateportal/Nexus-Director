@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ArchitectRequestSchema } from "@/lib/schemas/ebook";
+import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -127,6 +128,161 @@ const MinimalArchitectureSchema = z.object({
   chapters: z.array(MinimalChapterSchema).default([]),
 });
 
+// ── Deterministic section grouper (error fallback only) ─────────────────────
+// Used only when the per-audio LLM call fails.
+function groupSegmentsIntoSections(
+  segs: Array<{ id: string; topic: string; keyPoints: string[]; estimatedWordCount: number }>,
+  maxSections = 5,
+): Array<{ heading: string; sourceSegmentIds: string[]; targetWordCount: number }> {
+  if (segs.length === 0) return [];
+  if (segs.length <= maxSections) {
+    // Each segment gets its own section — derive heading from keyPoints
+    return segs.map((seg) => ({
+      heading: deriveSectionHeading(seg.topic, seg.keyPoints),
+      sourceSegmentIds: [seg.id],
+      targetWordCount: Math.max(seg.estimatedWordCount || 0, 250),
+    }));
+  }
+
+  // Greedily merge consecutive segments when they share topic keywords.
+  // Always produce between 3 and maxSections buckets.
+  const minSections = Math.min(3, segs.length);
+  const buckets: typeof segs[] = [];
+  let current: typeof segs = [segs[0]];
+
+  for (let i = 1; i < segs.length; i++) {
+    const seg = segs[i];
+    const remaining = segs.length - i;
+    const slotsLeft = maxSections - buckets.length - 1; // -1 for current open bucket
+
+    // Always merge if we'd exceed maxSections by splitting
+    const mustMerge = slotsLeft <= remaining;
+    // Split if the topic diverges enough AND we still have room for more sections
+    const shouldSplit = !mustMerge && sectionKeywordOverlap(
+      [current[0].topic, ...current[0].keyPoints].join(" "),
+      [seg.topic, ...seg.keyPoints].join(" ")
+    ) < 0.25;
+
+    if (shouldSplit && buckets.length + 1 < maxSections) {
+      buckets.push(current);
+      current = [seg];
+    } else {
+      current.push(seg);
+    }
+  }
+  buckets.push(current);
+
+  // If we ended up with fewer than minSections, split the largest bucket
+  while (buckets.length < minSections) {
+    const largestIdx = buckets.reduce((best, b, i) => b.length > buckets[best].length ? i : best, 0);
+    if (buckets[largestIdx].length < 2) break;
+    const half = Math.ceil(buckets[largestIdx].length / 2);
+    const [left, right] = [buckets[largestIdx].slice(0, half), buckets[largestIdx].slice(half)];
+    buckets.splice(largestIdx, 1, left, right);
+  }
+
+  return buckets.map((group) => {
+    const allKeyPoints = group.flatMap((s) => s.keyPoints ?? []);
+    const heading = deriveSectionHeading(group[0].topic, allKeyPoints);
+    const totalWords = group.reduce((sum, s) => sum + (s.estimatedWordCount || 0), 0);
+    return {
+      heading,
+      sourceSegmentIds: group.map((s) => s.id),
+      targetWordCount: Math.max(totalWords, 250),
+    };
+  });
+}
+
+/** Pick the best heading from a segment's topic + keyPoints — never fabricates, uses transcript data only. */
+function deriveSectionHeading(topic: string, keyPoints: string[]): string {
+  const BANNED = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
+  // Prefer a keyPoint over the raw topic if it's more specific (longer, no banned prefix)
+  const candidates = [topic, ...(keyPoints ?? [])]
+    .map((s) => s.replace(BANNED, "").trim())
+    .filter((s) => s.length > 10);
+  // Pick the longest candidate that doesn't start with a banned word (more specific = longer)
+  const best = candidates.sort((a, b) => b.length - a.length)[0];
+  return best || topic.replace(BANNED, "").trim() || "Core Teaching";
+}
+
+// ── Per-audio LLM chapter architect (oneChapterPerUpload) ────────────────────
+// One call per audio file, receiving the full rawText so the LLM can make
+// premium structural decisions grounded entirely in the actual transcript.
+// SOURCE_LOCK_RULES enforces zero fabrication.
+
+const SingleChapterPlanSchema = z.object({
+  title: z.string().default(""),
+  keyTheme: z.string().default(""),
+  sections: z.array(z.object({
+    heading: z.string().default(""),
+    sourceSegmentIds: z.array(z.string()).default([]),
+    targetWordCount: z.number().default(0),
+  })).default([]),
+});
+
+async function architectOneChapterFromTranscript(
+  segments: Array<{ id: string; topic: string; rawText: string; keyPoints: string[]; estimatedWordCount: number }>,
+  chapterHint: string,
+  coreThesis: string,
+  teachingArc: string,
+  voiceDNATone: string,
+): Promise<z.infer<typeof SingleChapterPlanSchema>> {
+  const MAX_RAW_WORDS_PER_SEGMENT = 1200;
+  const transcriptBlock = segments.map((seg) => {
+    const rawWords = (seg.rawText ?? "").split(/\s+/);
+    const rawTruncated = rawWords.length > MAX_RAW_WORDS_PER_SEGMENT
+      ? rawWords.slice(0, MAX_RAW_WORDS_PER_SEGMENT).join(" ") + " […]"
+      : (seg.rawText ?? "");
+    return [
+      `[SEGMENT ${seg.id}]`,
+      `TOPIC: ${seg.topic}`,
+      `KEY POINTS:\n${(seg.keyPoints ?? []).map((p) => `  • ${p}`).join("\n")}`,
+      `WORD COUNT: ${seg.estimatedWordCount}`,
+      `TRANSCRIPT:\n${rawTruncated}`,
+    ].join("\n");
+  }).join("\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n");
+
+  const { object } = await generateObject({
+    model: deepSeekModel,
+    schema: SingleChapterPlanSchema,
+    mode: "json",
+    temperature: 0.15,
+    system: `You are a senior structural editor turning one teaching message into a premium book chapter.
+
+SOURCE-LOCK — ABSOLUTE RULE:
+Every title, section heading, and key theme you write MUST derive word-for-word or idea-for-idea from the transcript segments below. You may NOT invent, assume, or extrapolate anything not explicitly present in the provided text.
+
+CHAPTER TITLE RULE:
+- Use the strongest single claim or overarching idea the speaker explicitly states
+- Use the speaker's actual words or a direct condensation of them
+- If the speaker states a clear thesis, that IS your chapter title
+
+SECTION HEADING RULES:
+- Each heading must be a specific teaching claim the speaker made, drawn directly from the keyPoints or transcript text
+- 3–9 words; name the SPECIFIC idea, not its category
+- BANNED prefixes: Introduction, Intro, Overview, Opening, Summary, Conclusion, Part, Chapter, Section
+- GOOD: "Prayer reveals the hidden glory within you" | BAD: "Introduction to Prayer"
+
+STRUCTURE RULES:
+- Produce exactly 3–5 sections
+- Group segments that develop the same point; split when the topic clearly shifts
+- sourceSegmentIds must ONLY reference IDs from the AVAILABLE SEGMENTS list
+- Every provided segment ID must appear in exactly one section — none may be skipped
+- targetWordCount = sum of assigned segments' word counts
+- Apply a natural teaching arc: Hook → Context → Core Mechanism → Application → Landing
+
+${SOURCE_LOCK_RULES}`,
+    prompt: `AVAILABLE SEGMENT IDs: ${segments.map((s) => s.id).join(", ")}
+CHAPTER THEME HINT: ${chapterHint}
+CORE THESIS: ${coreThesis}
+TEACHING ARC: ${teachingArc}
+VOICE TONE: ${voiceDNATone}
+
+${transcriptBlock}`,
+  });
+  return object;
+}
+
 function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
   // Group segments by sourceAudio to produce one chapter per message in series order
   const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6"];
@@ -140,29 +296,30 @@ function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
   const audioKeys = audioOrder.filter((k) => segmentsByAudio.has(k));
   const chapters = audioKeys.map((audioKey, chapterIndex) => {
     const segs = segmentsByAudio.get(audioKey)!;
-    const sections = segs.map((segment, sectionIndex) => ({
-      sectionNumber: sectionIndex + 1,
-      heading: (segment.topic || `Section ${sectionIndex + 1}`).replace(/^(introduction|intro|overview|opening|summary|conclusion)\s*:\s*/i, "").trim() || `Section ${sectionIndex + 1}`,
-      sourceSegmentIds: [segment.id],
-      targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
+    // Use the content-map theme for this audio slot as the chapter title (already extracted
+    // from the transcript by the content-map step — no fabrication risk).
+    const chapterTitle = (input.contentMap.overarchingThemes[chapterIndex] || "").trim()
+      || segs.map((s) => s.topic).sort((a, b) => b.length - a.length)[0]
+      || `Chapter ${chapterIndex + 1}`;
+    const keyTheme = chapterTitle;
+    // Group segments intelligently into 3–5 sections
+    const rawSections = groupSegmentsIntoSections(segs, 5);
+    const sections = rawSections.map((sec, i) => ({
+      sectionNumber: i + 1,
+      heading: sec.heading,
+      sourceSegmentIds: sec.sourceSegmentIds,
+      targetWordCount: sec.targetWordCount,
     }));
-    return {
-      number: chapterIndex + 1,
-      title: segs[0]?.topic || `Chapter ${chapterIndex + 1}`,
-      keyTheme: segs[0]?.topic || input.contentMap.overarchingThemes[chapterIndex] || "Core teaching",
-      sections,
-    };
+    return { number: chapterIndex + 1, title: chapterTitle, keyTheme, sections };
   });
 
   const fallbackChapters = chapters.length > 0 ? chapters : [{
     number: 1,
     title: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || "Core Teaching",
     keyTheme: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.teachingArc || "Core teaching",
-    sections: input.contentMap.segments.map((segment, index) => ({
-      sectionNumber: index + 1,
-      heading: (segment.topic || `Section ${index + 1}`).replace(/^(introduction|intro|overview|opening|summary|conclusion)\s*:\s*/i, "").trim() || `Section ${index + 1}`,
-      sourceSegmentIds: [segment.id],
-      targetWordCount: Math.max(segment.estimatedWordCount || 0, 250),
+    sections: groupSegmentsIntoSections(input.contentMap.segments, 5).map((sec, i) => ({
+      sectionNumber: i + 1,
+      ...sec,
     })),
   }];
 
@@ -246,10 +403,74 @@ export async function POST(req: NextRequest) {
   try {
     let minimal: z.infer<typeof MinimalArchitectureSchema>;
     try {
-      // Skip LLM when the user wants each upload to be exactly one chapter
       if (input.oneChapterPerUpload) {
-        minimal = fallbackArchitecture(input);
+        // ── Per-audio parallel LLM calls (oneChapterPerUpload) ────────────────
+        // Each audio file gets its own focused LLM call with full transcript text.
+        // The LLM produces premium structure entirely from the provided transcript.
+        const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6"] as const;
+        const segsByAudio = new Map<string, typeof input.contentMap.segments>();
+        for (const seg of input.contentMap.segments) {
+          const bucket = segsByAudio.get(seg.sourceAudio) ?? [];
+          bucket.push(seg);
+          segsByAudio.set(seg.sourceAudio, bucket);
+        }
+        const audioKeys = audioOrder.filter((k) => segsByAudio.has(k));
+
+        const chapterPlans = await Promise.all(
+          audioKeys.map((audioKey, idx) => {
+            const segs = segsByAudio.get(audioKey)!;
+            const chapterHint = (input.contentMap.overarchingThemes[idx] || "").trim()
+              || segs.map((s) => s.topic).sort((a, b) => b.length - a.length)[0]
+              || "";
+            return architectOneChapterFromTranscript(
+              segs,
+              chapterHint,
+              input.contentMap.coreThesis,
+              input.contentMap.teachingArc,
+              input.voiceDNA.toneProfile,
+            ).catch(() => null);
+          })
+        );
+
+        const validIds = new Set(input.contentMap.segments.map((s) => s.id));
+        const chapters = chapterPlans.map((plan, idx) => {
+          const segs = segsByAudio.get(audioKeys[idx])!;
+          const themeHint = (input.contentMap.overarchingThemes[idx] || segs[0]?.topic || `Chapter ${idx + 1}`).trim();
+          if (!plan || plan.sections.length === 0) {
+            const grouped = groupSegmentsIntoSections(segs, 5);
+            return {
+              number: idx + 1,
+              title: themeHint,
+              keyTheme: themeHint,
+              sections: grouped.map((sec, si) => ({ sectionNumber: si + 1, ...sec })),
+            };
+          }
+          return {
+            number: idx + 1,
+            title: (plan.title || themeHint).trim(),
+            keyTheme: (plan.keyTheme || plan.title || themeHint).trim(),
+            sections: plan.sections
+              .map((sec, si) => ({
+                sectionNumber: si + 1,
+                heading: sec.heading,
+                sourceSegmentIds: (sec.sourceSegmentIds ?? []).filter((id) => validIds.has(id)),
+                targetWordCount: sec.targetWordCount || 0,
+              }))
+              .filter((sec) => sec.sourceSegmentIds.length > 0),
+          };
+        });
+
+        minimal = {
+          bookTitle: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.segments[0]?.topic || "Untitled Teaching Manuscript",
+          subtitle: input.contentMap.targetAudience || input.contentMap.teachingArc || "Drawn directly from the source teaching",
+          authorName: "the Author",
+          estimatedTotalWords: chapters.flatMap((c) => c.sections).reduce((sum, s) => sum + (s.targetWordCount || 0), 0),
+          frontMatterNotes: input.contentMap.coreThesis || input.contentMap.segments[0]?.topic || "",
+          backMatterNotes: input.contentMap.teachingArc || input.contentMap.segments.at(-1)?.topic || "",
+          chapters,
+        };
       } else {
+      {
         const result = await generateObject({
         model: deepSeekReasonerModel,
         schema: MinimalArchitectureSchema,
@@ -295,7 +516,8 @@ This content is a sermon series. The author's preaching sequence IS the book's s
       ${JSON.stringify(segmentsLite)}`,
       });
       minimal = result.object;
-      } // end else (LLM path)
+      } // end LLM block
+      } // end else
     } catch {
       minimal = fallbackArchitecture(input);
     }

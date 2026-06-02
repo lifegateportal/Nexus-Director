@@ -171,6 +171,52 @@ export const SectionAssignmentSchema = z.object({
   scripturePositions: z.array(z.object({ reference: z.string(), excerptIndex: z.number().int() })).default([]),
   /** Seq-A7 — Last 2 sentences of the final excerpt from the previous section — the argument was mid-flow here */
   priorExcerptTail: z.string().optional(),
+  /** Prose dedup corpus — first sentence of every paragraph from all previously written sections.
+   *  Used by filterConsumedExcerpts and the planner prune for prose-vs-prose n-gram comparison.
+   *  This is the primary signal that the excerpt filter was missing: actual written text, not metadata. */
+  priorSectionsSample: z.array(z.string()).default([]),
+  /** Chapter-level pre-computed paragraph plan — produced by /api/ebook/chapter-plan before the
+   *  writing loop starts. When present, write-section skips its own per-section planner entirely
+   *  and uses this plan directly. This is the key dedup contract: the chapter planner assigns
+   *  each concept to exactly one section, so two sections can never plan the same content. */
+  assignedPlan: z.array(z.object({
+    purpose: z.string().default(""),
+    supportedExcerptNumbers: z.array(z.number().int().positive()).default([]),
+    minExcerptNumber: z.number().int().positive().optional(),
+  })).optional(),
+});
+
+// ─── Chapter Plan (input/output of /api/ebook/chapter-plan) ──────────────────
+
+export const ChapterPlanSectionInputSchema = z.object({
+  sectionNumber: z.number().int(),
+  heading: z.string(),
+  keyPoints: z.array(z.string()).default([]),
+  transcriptExcerpts: z.array(z.string()).default([]),
+  nextSectionHeading: z.string().optional(),
+  isLastSectionInChapter: z.boolean().optional(),
+});
+
+export const ChapterPlanRequestSchema = z.object({
+  chapterNumber: z.number().int(),
+  chapterTitle: z.string(),
+  nextChapterTitle: z.string().optional(),
+  coreThesis: z.string().optional(),
+  voiceDNA: VoiceDNASchema.optional(),
+  alreadyCoveredPoints: z.array(z.string()).default([]),
+  priorSectionsSample: z.array(z.string()).default([]),
+  sections: z.array(ChapterPlanSectionInputSchema),
+});
+
+export const ChapterPlanResponseSchema = z.object({
+  sectionPlans: z.array(z.object({
+    sectionNumber: z.number().int(),
+    paragraphPlan: z.array(z.object({
+      purpose: z.string().default(""),
+      supportedExcerptNumbers: z.array(z.number().int().positive()).default([]),
+      minExcerptNumber: z.number().int().positive().optional(),
+    })).default([]),
+  })),
 });
 
 // ─── Section Draft (output of write-section) ─────────────────────────────────
@@ -381,6 +427,47 @@ export const ExportRequestSchema = z.object({
   formats: z.object({ pdf: z.boolean(), epub: z.boolean(), docx: z.boolean() }).default({ pdf: true, epub: true, docx: true }),
   template: z.enum(["classic-academic", "modern-business", "devotional", "popular-nonfiction", "premium-literary"]).default("devotional"),
   printSpec: PrintSpecSchema.optional(),
+});
+
+// ─── Write-chapter (single-call chapter writer — Proposal 2) ────────────────
+
+export const WriteChapterSectionInputSchema = z.object({
+  sectionNumber: z.number().int(),
+  heading: z.string(),
+  transcriptExcerpts: z.array(z.string()).default([]),
+  keyPoints: z.array(z.string()).default([]),
+  quotes: z.array(QuoteSchema).default([]),
+  targetWordCount: z.number().default(500),
+  isLastSectionInChapter: z.boolean().default(false),
+  assignedPlan: z.array(z.object({
+    purpose: z.string().default(""),
+    supportedExcerptNumbers: z.array(z.number().int().positive()).default([]),
+  })).optional(),
+});
+
+export const WriteChapterRequestSchema = z.object({
+  chapterNumber: z.number().int(),
+  chapterTitle: z.string(),
+  chapterPremise: z.string().optional(),
+  nextChapterTitle: z.string().optional(),
+  coreThesis: z.string().optional(),
+  primaryTranslation: z.string().optional(),
+  voiceDNA: VoiceDNASchema.optional(),
+  authorConfig: AuthorConfigSchema.optional(),
+  sections: z.array(WriteChapterSectionInputSchema),
+  alreadyCoveredPoints: z.array(z.string()).default([]),
+  priorSectionsSample: z.array(z.string()).default([]),
+  bannedRecaps: z.array(z.string()).default([]),
+  alreadyQuotedRefs: z.array(z.string()).default([]),
+  forbiddenVerseTexts: z.array(z.string()).default([]),
+});
+
+export const WriteChapterOutputSchema = z.object({
+  sections: z.array(z.object({
+    sectionNumber: z.number().int(),
+    paragraphs: z.array(z.string()),
+    claimLedger: z.array(z.object({ claim: z.string() })).default([]),
+  })),
 });
 
 // ─── TypeScript exports ────────────────────────────────────────────────────────

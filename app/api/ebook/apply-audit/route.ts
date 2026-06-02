@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { VoiceDNASchema } from "@/lib/schemas/ebook";
+import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
 type VoiceDNAType = z.infer<typeof VoiceDNASchema>;
 
@@ -185,8 +186,8 @@ async function reviseSectionBody(
   let text = "";
   try {
     const result = await generateText({
-      model: deepSeekModel,
-      temperature: 0.3,
+      model: deepSeekReasonerModel,
+      temperature: 1,  // reasoner models require temperature=1
       maxTokens,
       system:
         "You are a surgical book editor. Make only the minimum changes required by the task. Return ONLY the revised section body as plain prose — no JSON, no markdown, no commentary.",
@@ -201,11 +202,13 @@ ${task}
 RULES:
 - Change ONLY what is necessary to address the task above
 - Preserve every scripture reference, quote, and theological teaching point exactly
-- WORD COUNT REQUIREMENT: The original section is ${originalWordCount} words. Your revised version MUST be between ${minWords} and ${maxWords} words. If the task requires removing or condensing duplicate content, you MUST replace the removed content with fresh supporting material, expanded explanation, or new illustrative detail on the same theme — never simply delete and leave a gap.
-- Do not add entirely new arguments or topics not already in the section; expand within the existing themes
+- WORD COUNT: The original section is ${originalWordCount} words. Target ${minWords}–${maxWords} words. If removing duplicate content shortens the section, that is correct — do NOT invent replacement material to pad it back up.
+- Do not add any argument, story, illustration, or detail not already present in the section body above
 - Keep the same sentence rhythm and paragraph structure
 - Never use an em dash (— or --)
-- Return the revised body as plain prose text only`,
+- Return the revised body as plain prose text only
+
+${SOURCE_LOCK_RULES}`,
     });
     text = result.text.trim();
   } catch (err) {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { EbookManifestSchema, BackMatterSchema } from "@/lib/schemas/ebook";
 import type { BackMatter } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
@@ -81,39 +81,66 @@ export async function POST(req: NextRequest) {
     return `Ch ${ch.number}: "${ch.title}"\n  Takeaways: ${keyTakeaways}\n  Sections: ${sectionHeadings}`;
   }).join("\n\n");
 
-  // Terms to define: prefer Voice DNA preferred terminology, then extract unique vocabulary
+  // Terms to define: prefer Voice DNA preferred terminology, then extract unique vocabulary.
+  // Exclude proper nouns — names of people, places, and organizations are not glossary terms.
+  const NAME_TITLE_RE = /\b(?:Pastor|Bishop|Prophet|Apostle|Elder|Deacon|Reverend|Rev|Dr|Mr|Mrs|Ms|Prof|Minister|Brother|Sister)\b/i;
   const preferredTerms = (voiceDNA?.preferredTerminology ?? []).slice(0, 15);
-  const uniqueVocab = (manifest.chapters
+
+  // Collect all section body text
+  const allBodyText = manifest.chapters
     .flatMap((ch) => ch.sections)
-    .flatMap((s) => (s.body ?? "").match(/\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\b/g) ?? [])
-    .filter((t) => t.length > 5)
-    .reduce((acc: Map<string, number>, t) => { acc.set(t, (acc.get(t) ?? 0) + 1); return acc; }, new Map())
-  );
-  const frequentTerms = Array.from(uniqueVocab.entries())
-    .filter(([, count]) => count >= 3)
+    .map((s) => s.body ?? "")
+    .join(" ");
+
+  // Extract repeated capitalized phrases (2+ words preferred) — then filter name-like candidates
+  const phraseFreq = new Map<string, number>();
+  for (const match of allBodyText.matchAll(/\b([A-Z][a-z]{2,}(?:\s[A-Z][a-z]{2,})+)\b/g)) {
+    const t = match[1];
+    phraseFreq.set(t, (phraseFreq.get(t) ?? 0) + 1);
+  }
+  // Also pick up single-word domain terms that appear in lowercase mid-sentence (strong signal = concept not name)
+  for (const match of allBodyText.matchAll(/(?<![.!?]\s)\b([a-z][a-z]{5,})\b/g)) {
+    const t = match[1].charAt(0).toUpperCase() + match[1].slice(1);
+    phraseFreq.set(t, (phraseFreq.get(t) ?? 0) + 1);
+  }
+
+  const frequentTerms = Array.from(phraseFreq.entries())
+    .filter(([t, count]) => {
+      if (count < 3) return false;
+      // Skip if the term itself looks like a personal name (two title-case words where the second looks like a surname)
+      if (/^[A-Z][a-z]+ [A-Z][a-z]+$/.test(t)) return false;
+      // Skip if the term appears near a personal title in the full text
+      const escapedTerm = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const contextRe = new RegExp(`${NAME_TITLE_RE.source}\\s+${escapedTerm}|${escapedTerm}\\s+${NAME_TITLE_RE.source}`, "i");
+      if (contextRe.test(allBodyText)) return false;
+      return true;
+    })
     .sort((a, b) => b[1] - a[1])
     .map(([t]) => t)
     .filter((t) => !preferredTerms.includes(t))
-    .slice(0, 10);
+    .slice(0, 12);
+
   const termsToDefine = [...new Set([...preferredTerms, ...frequentTerms])].slice(0, 20);
 
   const resourcesMentioned = (manifest.frontMatter.resourcesList ?? []).slice(0, 15);
 
   try {
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: deepSeekReasonerModel,
       schema: BackMatterSchema.omit({ scriptureIndex: true }),
       mode: "json",
-      temperature: 0.3,
+      temperature: 1,  // reasoner requires temperature=1
       system: `You are creating back matter for a published teaching book. Your job is three tasks:
 
 TASK 1 — GLOSSARY:
 Define the provided key terms EXACTLY as the author uses them in the book. Rules:
+- ONLY define concepts, key phrases, doctrinal terms, or domain-specific vocabulary — words that carry specific meaning within this author's teaching framework.
+- NEVER define a person's name, a place name, an organization name, or a proper noun that refers to an individual. If a submitted term is a person's name or a place, skip it entirely — do not include it in the glossary.
 - Definitions must be 2–3 sentences.
 - Drawn ENTIRELY from the book content. No external theological context.
 - Use the same vocabulary and register the author uses.
 - firstAppearance should name the chapter and section where the term first appears.
-- If a term cannot be defined from the book content, omit it.
+- If a term cannot be meaningfully defined as a concept from the book content, omit it.
 
 TASK 2 — READING GROUP GUIDE:
 Write 3–7 discussion questions per chapter. Rules:

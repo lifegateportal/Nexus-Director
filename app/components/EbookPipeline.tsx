@@ -197,7 +197,7 @@ function ngramOverlapRatio(a: string, b: string, n = 4): number {
 function detectDuplicateSentences(
   newBody: string,
   corpus: string,
-  threshold = 0.70
+  threshold = 0.55
 ): string[] {
   const corpusSentences = corpus.match(/[^.!?]+[.!?]+/g) ?? [];
   const newSentences = newBody.match(/[^.!?]+[.!?]+/g) ?? [];
@@ -248,6 +248,20 @@ function extractBannedRecaps(sections: SectionDraft[], maxPerSection = 4, hardCa
     if (all.length >= hardCap) break;
   }
   return all.slice(0, hardCap);
+}
+
+// ─── Prose Corpus Sample Builder ────────────────────────────────────────────
+// Extracts the first sentence of each paragraph from the accumulated written corpus.
+// This is the comparison corpus sent to write-section so filterConsumedExcerpts can
+// do prose-vs-prose n-gram overlap instead of excerpt-vs-metadata comparison.
+function buildProseCorpusSample(corpus: string, maxSentences = 120): string[] {
+  return corpus
+    .split(/\n{2,}/)
+    .map((p) =>
+      p.replace(/^[>\s#*\-]+/, "").split(/(?<=[.!?])\s+/)[0]?.trim()
+    )
+    .filter((s): s is string => Boolean(s) && s.split(/\s+/).length >= 8)
+    .slice(0, maxSentences);
 }
 
 // ─── Amendment 6: Lexical Fingerprint Extractor ───────────────────────────────
@@ -561,7 +575,7 @@ const STAGE_STEPS: { key: PipelineStage; label: string; description: string }[] 
   { key: "architecting", label: "Chapters",     description: "Designing chapter and section structure from the content" },
   { key: "writing",      label: "Writing",      description: "Drafting each section strictly from transcript source material" },
   { key: "polishing",    label: "Polish",       description: "Adding chapter intros, conclusions, and key takeaways" },
-  { key: "frontmatter",  label: "Front Matter", description: "Writing preface, introduction, and closing from your words" },
+  { key: "frontmatter",  label: "Front Matter", description: "Writing introduction and conclusion from your words" },
   { key: "exporting",    label: "Export",       description: "Generating PDF and EPUB files for download" },
 ];
 
@@ -1462,6 +1476,8 @@ export function EbookPipeline({
   const [authorInstructions, setAuthorInstructions] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
   const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
+  // Proposal 2: single-call chapter writer — set true to try, false to revert to per-section
+  const [useChapterWriter, setUseChapterWriter] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
@@ -2348,6 +2364,19 @@ export function EbookPipeline({
       // ── Upgrade 6: Corpus of all written text for similarity gating ──────
       let writtenCorpus = allSections.map((s) => s.body ?? "").join("\n\n");
 
+      // ── Chapter-level plan cache ──────────────────────────────────────────
+      // Keyed by sectionNumber, populated once per chapter before any section
+      // in that chapter is written. Each entry is the paragraph plan the writer
+      // must follow — computed by /api/ebook/chapter-plan so the planner sees
+      // ALL sections simultaneously and cannot assign the same concept twice.
+      const chapterPlanMap = new Map<number, Array<{ purpose: string; supportedExcerptNumbers: number[]; minExcerptNumber?: number }>>();
+      let chapterPlanBuiltForChapter = -1;
+
+      // Proposal 2: chapter-writer cache — keyed by "chapterNum-sectionNum"
+      // Populated at chapter rotation; consumed in the section loop instead of calling write-section.
+      const chapterWriteCache = new Map<string, { paragraphs: string[]; claimLedger: Array<{ claim: string }> }>();
+      let chapterWrittenForChapter = -1;
+
       if (completedCount > 0) {
         addLog(`↩ Resuming — ${completedCount} sections already written, continuing from section ${completedCount + 1}`);
         setProgress({ total: totalSections, completed: completedCount });
@@ -2374,6 +2403,135 @@ export function EbookPipeline({
           }
           coveredCurrentChapter = [];
           coveredCurrentChapterNum = assignment.chapterNumber;
+
+          // ── Chapter-level planner: plan ALL sections before writing any ──
+          // Builds the concept-ownership contract for this chapter in one call.
+          // Falls back gracefully (chapterPlanMap stays empty) if the call fails.
+          if (chapterPlanBuiltForChapter !== assignment.chapterNumber) {
+            chapterPlanBuiltForChapter = assignment.chapterNumber;
+            chapterPlanMap.clear();
+            const chapterAssignments = assignments.filter(
+              (a) => a.chapterNumber === assignment.chapterNumber &&
+                     !completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`)
+            );
+            if (chapterAssignments.length > 0) {
+              addLog(`  📋 Planning Chapter ${assignment.chapterNumber} (${chapterAssignments.length} sections)…`);
+              try {
+                const chapterPlanResult = await postJson<{ sectionPlans: Array<{ sectionNumber: number; paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[]; minExcerptNumber?: number }> }> }>(
+                  "/api/ebook/chapter-plan",
+                  {
+                    chapterNumber: assignment.chapterNumber,
+                    chapterTitle: assignment.chapterTitle,
+                    nextChapterTitle: (() => {
+                      const lastChapterAssignment = chapterAssignments[chapterAssignments.length - 1];
+                      const lastIdx = assignments.indexOf(lastChapterAssignment);
+                      return assignments[lastIdx + 1]?.chapterTitle;
+                    })(),
+                    coreThesis: contentMap.coreThesis || undefined,
+                    voiceDNA,
+                    alreadyCoveredPoints: buildCoveredKeyPoints(assignment.chapterNumber),
+                    priorSectionsSample: buildProseCorpusSample(writtenCorpus),
+                    sections: chapterAssignments.map((a) => ({
+                      sectionNumber: a.sectionNumber,
+                      heading: a.heading,
+                      keyPoints: a.keyPoints ?? [],
+                      transcriptExcerpts: (a.transcriptExcerpts ?? []).filter((_, idx) => {
+                        const segId = (a.sourceSegmentIds ?? [])[idx];
+                        return !segId || !consumedSegmentIds.has(segId);
+                      }),
+                      nextSectionHeading: (() => {
+                        const idx = assignments.indexOf(a);
+                        const next = assignments[idx + 1];
+                        return next?.chapterNumber === a.chapterNumber ? next.heading : undefined;
+                      })(),
+                      isLastSectionInChapter: (() => {
+                        const idx = assignments.indexOf(a);
+                        const next = assignments[idx + 1];
+                        return !next || next.chapterNumber !== a.chapterNumber;
+                      })(),
+                    })),
+                  }
+                );
+                for (const sp of chapterPlanResult.sectionPlans ?? []) {
+                  if ((sp.paragraphPlan ?? []).length > 0) {
+                    chapterPlanMap.set(sp.sectionNumber, sp.paragraphPlan);
+                  }
+                }
+                addLog(`  ✓ Chapter ${assignment.chapterNumber} plan ready (${chapterPlanMap.size} sections planned)`);
+              } catch (planErr) {
+                addLog(`  ⚠ Chapter plan call failed — falling back to per-section planner`);
+                console.warn("[chapter-plan] failed:", planErr);
+              }
+            }
+          }
+
+          // ── Proposal 2: single-call chapter writer ──────────────────────
+          // When useChapterWriter is on, write ALL sections of this chapter
+          // in one LLM call. Results cached — per-section loop reads from cache.
+          // Falls back to per-section writes if the call fails.
+          if (useChapterWriter && chapterWrittenForChapter !== assignment.chapterNumber) {
+            chapterWrittenForChapter = assignment.chapterNumber;
+            chapterWriteCache.clear();
+            const chapterAssignmentsForWrite = assignments.filter(
+              (a) => a.chapterNumber === assignment.chapterNumber &&
+                     !completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`)
+            );
+            if (chapterAssignmentsForWrite.length > 0) {
+              addLog(`  ✍ Writing Chapter ${assignment.chapterNumber} in one pass (${chapterAssignmentsForWrite.length} sections)…`);
+              try {
+                const chapterWriteResult = await postJson<{ sections: Array<{ sectionNumber: number; paragraphs: string[]; claimLedger: Array<{ claim: string }> }> }>(
+                  "/api/ebook/write-chapter",
+                  {
+                    chapterNumber: assignment.chapterNumber,
+                    chapterTitle: assignment.chapterTitle,
+                    chapterPremise: (architecture.chapters.find((ch) => ch.number === assignment.chapterNumber) as { chapterPremise?: string } | undefined)?.chapterPremise ?? undefined,
+                    nextChapterTitle: (() => {
+                      const last = chapterAssignmentsForWrite[chapterAssignmentsForWrite.length - 1];
+                      const lastIdx = assignments.indexOf(last);
+                      return assignments[lastIdx + 1]?.chapterTitle;
+                    })(),
+                    coreThesis: contentMap.coreThesis || undefined,
+                    primaryTranslation: chapterAssignmentsForWrite[0]?.primaryTranslation,
+                    voiceDNA,
+                    authorConfig: (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined,
+                    alreadyCoveredPoints: buildCoveredKeyPoints(assignment.chapterNumber),
+                    priorSectionsSample: buildProseCorpusSample(writtenCorpus),
+                    bannedRecaps: extractBannedRecaps(allSections),
+                    alreadyQuotedRefs: [...usedQuoteRefs],
+                    forbiddenVerseTexts: Array.from(quotedVerseTextsByRef.values()).filter(Boolean),
+                    sections: chapterAssignmentsForWrite.map((a) => {
+                      const filtered = (a.transcriptExcerpts ?? []).filter((_, idx) => {
+                        const segId = (a.sourceSegmentIds ?? [])[idx];
+                        return !segId || !consumedSegmentIds.has(segId);
+                      });
+                      const idx2 = assignments.indexOf(a);
+                      const next2 = assignments[idx2 + 1];
+                      return {
+                        sectionNumber: a.sectionNumber,
+                        heading: a.heading,
+                        transcriptExcerpts: filtered.length > 0 ? filtered : a.transcriptExcerpts,
+                        keyPoints: a.keyPoints ?? [],
+                        quotes: a.quotes ?? [],
+                        targetWordCount: a.targetWordCount ?? 500,
+                        isLastSectionInChapter: !next2 || next2.chapterNumber !== a.chapterNumber,
+                        assignedPlan: chapterPlanMap.get(a.sectionNumber),
+                      };
+                    }),
+                  }
+                );
+                for (const sec of chapterWriteResult.sections ?? []) {
+                  chapterWriteCache.set(`${assignment.chapterNumber}-${sec.sectionNumber}`, {
+                    paragraphs: sec.paragraphs ?? [],
+                    claimLedger: sec.claimLedger ?? [],
+                  });
+                }
+                addLog(`  ✓ Chapter ${assignment.chapterNumber} written (${chapterWriteCache.size} sections cached)`);
+              } catch (writeErr) {
+                addLog(`  ⚠ Chapter write call failed — falling back to per-section writes`);
+                console.warn("[write-chapter] failed:", writeErr);
+              }
+            }
+          }
         }
 
         // ── Upgrade 1: Filter excerpts whose source segments are consumed ──
@@ -2437,6 +2595,11 @@ export function EbookPipeline({
           scripturePositions: extractScripturePositions(filteredExcerpts.length > 0 ? filteredExcerpts : assignment.transcriptExcerpts),
           // Seq-A7: last 2 sentences of prev section's final excerpt — argument was mid-flow
           priorExcerptTail: previousExcerptTail || undefined,
+          // Prose dedup corpus: first sentence of every written paragraph — primary signal
+          // for filterConsumedExcerpts in the route (prose-vs-prose n-gram overlap)
+          priorSectionsSample: buildProseCorpusSample(writtenCorpus),
+          // Chapter-level pre-computed plan — skips per-section planner in write-section
+          assignedPlan: chapterPlanMap.get(assignment.sectionNumber),
         };
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
@@ -2454,10 +2617,26 @@ export function EbookPipeline({
           )
         );
 
-        let { body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
-          augmented,
-          (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
-        );
+        // Proposal 2 fast-path: use chapter-writer cached result if available
+        const _cacheKey = `${assignment.chapterNumber}-${assignment.sectionNumber}`;
+        const _cached = chapterWriteCache.get(_cacheKey);
+        let body: string;
+        let claimLedger: Array<{ claim: string }>;
+        let passiveVoiceCount: number;
+        let unfullfilledHook: string | null;
+        let sequenceBreakCount: number;
+        if (_cached && _cached.paragraphs.length > 0) {
+          body = _cached.paragraphs.join("\n\n");
+          claimLedger = _cached.claimLedger;
+          passiveVoiceCount = 0;
+          unfullfilledHook = null;
+          sequenceBreakCount = 0;
+        } else {
+          ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
+            augmented,
+            (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
+          ));
+        }
 
         // Quality gate: retry once if too short
         const wc = countWords(body);
@@ -2472,7 +2651,7 @@ export function EbookPipeline({
 
         // ── Upgrade 6: Post-write n-gram similarity gate ──────────────────
         if (writtenCorpus.length > 200) {
-          const dupSentences = detectDuplicateSentences(body, writtenCorpus, 0.70);
+          const dupSentences = detectDuplicateSentences(body, writtenCorpus);
           if (dupSentences.length > 0) {
             addLog(`  ↺ Upgrade 6: ${dupSentences.length} duplicate sentence(s) detected — redrafting with explicit exclusion…`);
             const redraftExclusion: SectionAssignment = {
@@ -2482,6 +2661,8 @@ export function EbookPipeline({
                 ...dupSentences.map((s) => `[EXACT DUPLICATE — DO NOT REPRODUCE]: "${s.slice(0, 120)}"`).
                   slice(0, 10),
               ],
+              // Refresh prose corpus so filterConsumedExcerpts strips covered excerpts on the redraft
+              priorSectionsSample: buildProseCorpusSample(writtenCorpus),
             };
             ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
               redraftExclusion,
@@ -2962,6 +3143,35 @@ export function EbookPipeline({
               <p className="text-sm font-medium text-slate-200 leading-tight">One chapter per upload</p>
               <p className="text-[10px] text-slate-500 mt-0.5">
                 When on, each audio file becomes exactly one chapter — the AI won't reorganize or split the content across chapter boundaries.
+              </p>
+            </div>
+          </div>
+
+          {/* Chapter Writer toggle (Proposal 2) */}
+          <div className="flex items-start gap-3 pt-2">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={useChapterWriter}
+              onClick={() => setUseChapterWriter((v) => !v)}
+              disabled={isRunning}
+              className={[
+                "mt-0.5 flex-shrink-0 w-9 h-5 rounded-full transition-colors",
+                useChapterWriter ? "bg-cyan-500" : "bg-slate-700",
+                isRunning ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5",
+                  useChapterWriter ? "translate-x-4" : "translate-x-0",
+                ].join(" ")}
+              />
+            </button>
+            <div>
+              <p className="text-sm font-medium text-slate-200 leading-tight">Single-pass chapter writer</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                When on, all sections in a chapter are written in one call so the model can see earlier sections while writing later ones — reduces intra-chapter repetition. Turns off to revert to the standard per-section writer.
               </p>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
@@ -9,26 +9,40 @@ import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-function fallbackSectionBody(input: z.infer<typeof WriteSectionRequestSchema>["assignment"]): string {
-  const cleanedExcerpts = input.transcriptExcerpts
-    .map((excerpt) => excerpt
-      .replace(/\r\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/[ \t]{2,}/g, " ")
-      .trim())
-    .filter(Boolean);
-
-  const bodyFromTranscript = cleanedExcerpts.join("\n\n").trim();
-  if (bodyFromTranscript) return bodyFromTranscript;
-
-  const bodyFromKeyPoints = input.keyPoints
-    .map((point) => point.trim())
+/** Emergency rewrite fallback — fires when the primary structured call fails or returns
+ *  empty paragraphs. Uses a simple generateText call to produce clean book prose from
+ *  the raw excerpts rather than dumping unedited transcript into the book. */
+async function fallbackSectionBody(input: z.infer<typeof WriteSectionRequestSchema>["assignment"]): Promise<string> {
+  const rawExcerpts = input.transcriptExcerpts
+    .map((e) => e.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").trim())
     .filter(Boolean)
-    .join(" ")
-    .trim();
-  if (bodyFromKeyPoints) return bodyFromKeyPoints;
+    .join("\n\n");
 
-  return input.heading.trim() || "Section content unavailable.";
+  if (!rawExcerpts) {
+    return (input.keyPoints.filter(Boolean).join(" ") || input.heading).trim();
+  }
+
+  try {
+    const { text } = await generateText({
+      model: deepSeekModel,
+      temperature: 0.5,
+      maxTokens: 1200,
+      system: `You are a professional book editor. Rewrite the raw spoken transcript below into clean, polished book prose.
+
+RULES:
+- Every idea must come from the transcript — zero fabrication
+- Remove all spoken-language artifacts: stutters, false starts ("I mean", "you know", "uh"), repeated words, filler phrases
+- Fix broken grammar and incomplete sentences into proper prose
+- Remove all live-event language: "look at your neighbor", "say amen", "here in this church"
+- Output 3–6 prose paragraphs separated by blank lines — no headings, no markdown
+- Write shorter output rather than invent content`,
+      prompt: `SECTION HEADING: ${input.heading}\n\nRAW TRANSCRIPT:\n${rawExcerpts.slice(0, 4000)}`,
+    });
+    return text.trim() || rawExcerpts;
+  } catch {
+    // Last resort: return the raw excerpts stripped of obvious live-event language
+    return rawExcerpts;
+  }
 }
 
 function normalizeReaderFacingProse(text: string): string {
@@ -534,9 +548,14 @@ Your opening paragraph must land where that argument was heading — do NOT re-e
     : "";
 
 
+  // Use actual written prose sentences when available (prose-vs-prose n-gram overlap fires;
+  // metadata-vs-prose was near-zero and is the root cause of the excerpt filter never removing anything).
+  const dedupCorpus = (assignment.priorSectionsSample ?? []).length > 0
+    ? assignment.priorSectionsSample ?? []
+    : assignment.alreadyCoveredPoints ?? [];
   const { filtered: dedupedExcerpts, removedCount: excerptRemovedCount } = filterConsumedExcerpts(
     assignment.transcriptExcerpts,
-    assignment.alreadyCoveredPoints ?? []
+    dedupCorpus
   );
   const effectiveExcerpts = excerptRemovedCount > 0 ? dedupedExcerpts : assignment.transcriptExcerpts;
 
@@ -705,6 +724,16 @@ Now write the section prose:`;
 
   try {
     let paragraphPlan: z.infer<typeof PlanSchema>["paragraphPlan"] = [];
+
+    // ── Chapter-level plan fast-path ────────────────────────────────────────
+    // When the pipeline pre-computed a chapter-level plan (via /api/ebook/chapter-plan),
+    // it is passed as assignment.assignedPlan. Skip the per-section planner entirely —
+    // the chapter planner already enforced concept ownership across all sections.
+    if ((assignment.assignedPlan ?? []).length > 0) {
+      paragraphPlan = assignment.assignedPlan!;
+      console.log(`[write-section] Using chapter-level plan (${paragraphPlan.length} entries) for Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
+    } else {
+    // ── Per-section planner fallback (used when chapter-plan was unavailable) ──
     const plannerDedup = (assignment.alreadyCoveredPoints ?? []).length > 0
       ? `\n\n════════════════════════════════════════════\nALREADY COVERED — HARD SKIP\n════════════════════════════════════════════\nThe following sections and ideas have already been written. Do NOT plan ANY paragraph that touches, references, or re-introduces them — not even one sentence. If an excerpt only contains already-covered content, plan zero paragraphs from it:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
       : "";
@@ -740,18 +769,26 @@ ${READER_NORMALIZATION_RULES}`,
       });
 
       // ── Upgrade 3: Planner prune pass ────────────────────────────────────
-      // Remove any planned paragraph whose stated purpose n-gram-overlaps heavily
-      // with already-covered content. This is a structural guard — the dedup
-      // constraint is enforced before the writer even sees the plan.
+      // Remove any planned paragraph whose stated purpose overlaps heavily with
+      // already-written prose. Use the prose corpus when available (4-gram overlap
+      // against actual sentences), falling back to word-bag against metadata.
+      const priorProseText = (assignment.priorSectionsSample ?? []).join(" ");
       const coveredPointsText = (assignment.alreadyCoveredPoints ?? []).join(" ");
+      const pruneCorpus = priorProseText.length > 100 ? priorProseText : coveredPointsText;
       const prunedPlan = (plan.paragraphPlan ?? []).filter((entry) => {
-        if (!entry.purpose || coveredPointsText.length < 50) return true;
+        if (!entry.purpose || pruneCorpus.length < 50) return true;
+        if (priorProseText.length > 100) {
+          // Prose corpus available: n-gram overlap (purpose-vs-prose)
+          const overlap = excerptOverlapWithCoveredContent(entry.purpose, pruneCorpus);
+          return overlap < 0.30; // prune if >30% of purpose 4-grams appear in written prose
+        }
+        // Metadata fallback: word-bag approach
         const purposeWords = entry.purpose.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
-        const coveredWords = new Set(coveredPointsText.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/));
+        const coveredWords = new Set(pruneCorpus.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/));
         if (purposeWords.length < 4) return true;
         const matchCount = purposeWords.filter((w) => coveredWords.has(w) && w.length > 4).length;
         const overlap = matchCount / purposeWords.length;
-        return overlap < 0.50; // prune if >50% of meaningful purpose words are in covered content
+        return overlap < 0.50;
       });
       paragraphPlan = prunedPlan.length > 0 ? prunedPlan : (plan.paragraphPlan ?? []);
 
@@ -769,6 +806,7 @@ ${READER_NORMALIZATION_RULES}`,
     } catch {
       paragraphPlan = [];
     }
+    } // end per-section planner fallback
 
     // Build a per-request system prompt: Voice DNA at the top (system-level weight),
     // then the dedup prohibition block if any points have already been covered.
@@ -879,7 +917,7 @@ ${READER_NORMALIZATION_RULES}`,
       }
     }
 
-    const rawBody = repairedParagraphs.join("\n\n") || fallbackSectionBody(assignment);
+    const rawBody = repairedParagraphs.join("\n\n") || await fallbackSectionBody(assignment);
     const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
     // ── Upgrade 8: Passive voice detection ───────────────────────────────
     const passiveHits = detectPassiveVoice(body);
@@ -901,7 +939,7 @@ ${READER_NORMALIZATION_RULES}`,
       sequenceBreakCount,
     }, { status: 200 });
   } catch (err) {
-    const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(fallbackSectionBody(assignment)));
+    const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(await fallbackSectionBody(assignment)));
     return NextResponse.json({
       body: fallbackBody,
       claimLedger: [],
