@@ -35,7 +35,7 @@ import React, {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type SegmentType = "chapter-title" | "heading" | "quote" | "body";
+export type SegmentType = "chapter-title" | "heading" | "quote" | "body" | "emphasis";
 export type AudioState  = "idle" | "playing" | "paused";
 
 export interface Segment {
@@ -58,14 +58,28 @@ export interface AudioChapterMeta {
 
 export const RATES = [0.75, 1.0, 1.25, 1.5, 2.0] as const;
 
+// ── Narrator personas ─────────────────────────────────────────────────────────
+// Each persona applies a global rate multiplier, pitch offset, and pause scale
+// on top of per-segment VOICE_TREATMENT values.  Stored in localStorage by
+// AudioReader so the choice persists across sessions.
+
+export const NARRATOR_PERSONAS = [
+  { name: "Balanced",    short: "BAL",  rateMultiplier: 1.00, pitchOffset:  0.00, pauseMultiplier: 1.00 },
+  { name: "Storyteller", short: "STRY", rateMultiplier: 0.88, pitchOffset: -0.04, pauseMultiplier: 1.35 },
+  { name: "Preacher",    short: "PRE",  rateMultiplier: 0.82, pitchOffset:  0.00, pauseMultiplier: 1.60 },
+  { name: "Podcast",     short: "POD",  rateMultiplier: 1.12, pitchOffset:  0.06, pauseMultiplier: 0.80 },
+] as const;
+
 const VOICE_TREATMENT: Record<
   SegmentType,
   { pitch: number; rate: number; volume: number; pauseBeforeMs: number; pauseAfterMs: number }
 > = {
-  "chapter-title": { pitch: 1.10, rate: 0.78, volume: 1.00, pauseBeforeMs: 600, pauseAfterMs: 700 },
-  "heading":       { pitch: 1.06, rate: 0.82, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 500 },
-  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.82, pauseBeforeMs:   0, pauseAfterMs: 380 },
-  "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 380 },
+  "chapter-title": { pitch: 1.10, rate: 0.78, volume: 1.00, pauseBeforeMs: 500, pauseAfterMs: 580 },
+  "heading":       { pitch: 1.06, rate: 0.82, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 420 },
+  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.82, pauseBeforeMs:   0, pauseAfterMs: 280 },
+  "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 220 },
+  // Emphasis — bold/italic markers detected by parseChapter
+  "emphasis":      { pitch: 1.15, rate: 0.90, volume: 1.00, pauseBeforeMs:   0, pauseAfterMs: 220 },
 };
 
 // ── Adaptive speed ───────────────────────────────────────────────────────────────
@@ -124,6 +138,7 @@ interface AudioPlayerContextValue {
   segIdx:              number;
   segTotal:            number;
   rateIdx:             number;
+  personaIdx:          number;
   chapterMeta:         AudioChapterMeta | null;
   setChapter:          (segs: Segment[], meta: AudioChapterMeta, onProgress?: (idx: number, key: string) => void) => void;
   play:                (fromIdx?: number) => void;
@@ -133,6 +148,7 @@ interface AudioPlayerContextValue {
   cycleRate:           () => void;
   seekTo:              (idx: number) => void;
   setVolumeMultiplier: (v: number) => void;
+  setPersona:          (idx: number) => void;
 }
 
 const AudioPlayerContext = createContext<AudioPlayerContextValue | null>(null);
@@ -152,6 +168,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const [segIdx,      setSegIdx]     = useState(0);
   const [segTotal,    setSegTotal]   = useState(0);
   const [rateIdx,     setRateIdx]    = useState(1);
+  const [personaIdx,  setPersonaIdx] = useState(0);
   const [chapterMeta, setChapterMeta]= useState<AudioChapterMeta | null>(null);
 
   // ── Stable refs ──────────────────────────────────────────────────────────
@@ -193,6 +210,18 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   // ── Volume multiplier — used by sleep timer fade-out ──────────────────────
   // Values from 1.0 (full) down to ~0.0 (silent). Applied per utterance.
   const volumeMultiplierRef = useRef(1.0);
+
+  // ── Narrator persona ref — mirrors personaIdx state for closure access ────
+  const personaIdxRef    = useRef(0);
+
+  // ── Breath rhythm counter ─────────────────────────────────────────────────
+  // Counts consecutive body/emphasis segments. Every 5, adds a 700 ms breath
+  // pause so the narration breathes like a real reader.  Resets at headings.
+  const breathCounterRef = useRef(0);
+
+  // ── Chapter arrival announcement ─────────────────────────────────────────
+  // Set on every chapter change; consumed (cleared) on the first play(0) call.
+  const pendingAnnouncementRef = useRef<string | null>(null);
 
   const ensureSilentAudio = useCallback((): HTMLAudioElement | null => {
     if (typeof window === "undefined") return null;
@@ -353,6 +382,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       pendingRef.current = false; // we are now actually speaking
       const voice    = pickVoice(voicesRef.current);
       const userRate = RATES[rateIdxRef.current];
+      const persona  = NARRATOR_PERSONAS[personaIdxRef.current];
       segIdxRef.current = idx;
       setCurrentSeg(seg);
       setCurrentWord(-1);
@@ -360,8 +390,8 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       onProgressRef.current?.(idx, seg.paraKey);
 
       const utt    = new SpeechSynthesisUtterance(seg.text);
-      utt.rate     = treatment.rate * userRate * segComplexity(seg.text, seg.type);
-      utt.pitch    = treatment.pitch;
+      utt.rate     = treatment.rate * userRate * segComplexity(seg.text, seg.type) * persona.rateMultiplier;
+      utt.pitch    = Math.max(0.1, Math.min(2, treatment.pitch + persona.pitchOffset));
       utt.volume   = treatment.volume * volumeMultiplierRef.current;
       utt.lang     = "en-US";
       if (voice) utt.voice = voice;
@@ -375,10 +405,32 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         // FIX A: only advance if our generation is still current
         if (gen !== genRef.current || stoppedRef.current) return;
         pendingRef.current = true; // briefly pending between sentences
+
+        // ── Breath rhythm pacing ─────────────────────────────────────────
+        // Every 4–6 consecutive body/emphasis segments add a small breath gap
+        // (random 320–560 ms) so the rhythm isn't a detectable metronome.
+        let breathMs = 0;
+        if (seg.type === "body" || seg.type === "emphasis") {
+          breathCounterRef.current += 1;
+          if (breathCounterRef.current >= 5) {
+            breathCounterRef.current = 0;
+            // Randomise the breath pause so it never sounds like a timer firing
+            breathMs = 320 + Math.floor(Math.random() * 240);
+          }
+        } else if (seg.type === "heading" || seg.type === "chapter-title") {
+          breathCounterRef.current = 0;
+        }
+
+        // ── Jitter — ±18% variation on every inter-sentence pause ────────
+        // Human narrators never pause for exactly the same duration twice.
+        const jitter = 0.82 + Math.random() * 0.36; // 0.82 – 1.18
+        const totalPauseMs = Math.round(
+          (treatment.pauseAfterMs + breathMs) * persona.pauseMultiplier * jitter
+        );
         setTimeout(() => {
           pendingRef.current = false;
           speakRef.current(idx + 1, gen);
-        }, treatment.pauseAfterMs);
+        }, totalPauseMs);
       };
 
       utt.onerror = (e) => {
@@ -399,10 +451,11 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
     if (treatment.pauseBeforeMs > 0) {
       pendingRef.current = true; // FIX B: block watchdog during lead-in silence
+      const jitteredBefore = Math.round(treatment.pauseBeforeMs * (0.85 + Math.random() * 0.30));
       setTimeout(() => {
         if (gen !== genRef.current) { pendingRef.current = false; return; }
         doSpeak();
-      }, treatment.pauseBeforeMs);
+      }, jitteredBefore);
     } else {
       doSpeak();
     }
@@ -502,6 +555,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       setState("idle"); stateRef.current = "idle";
       setCurrentSeg(null); setCurrentWord(-1); setSegIdx(0);
       updateMediaSession("idle");
+      // Feature: chapter arrival announcement — queued for next play(0) call
+      pendingAnnouncementRef.current = `Chapter ${meta.number}. ${meta.title}.`;
+      // Feature: breath rhythm — reset counter on chapter boundary
+      breathCounterRef.current = 0;
     }
 
     setSegTotal(segs.length);
@@ -523,7 +580,39 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setState("playing"); stateRef.current = "playing";
     startAudioCtx(); startWatchdog();
     updateMediaSession("playing");
-    speakRef.current(fromIdx, genRef.current);
+
+    // ── Chapter arrival announcement ────────────────────────────────────
+    // Plays "Chapter N. Title." once before the first segment whenever a fresh
+    // chapter starts from position 0, replicating the Audible handoff feel.
+    const announcement = (fromIdx === 0) ? pendingAnnouncementRef.current : null;
+    if (fromIdx === 0) pendingAnnouncementRef.current = null;
+
+    if (announcement) {
+      pendingRef.current = true;
+      const gen   = genRef.current;
+      const voice = pickVoice(voicesRef.current);
+      const persona = NARRATOR_PERSONAS[personaIdxRef.current];
+      const utt = new SpeechSynthesisUtterance(announcement);
+      utt.pitch  = Math.max(0.1, Math.min(2, 1.12 + persona.pitchOffset));
+      utt.rate   = 0.78 * persona.rateMultiplier;
+      utt.volume = volumeMultiplierRef.current;
+      utt.lang   = "en-US";
+      if (voice) utt.voice = voice;
+      utt.onend = () => {
+        if (gen !== genRef.current) return;
+        pendingRef.current = false;
+        // 600 ms dramatic pause after chapter announcement, then start segments
+        setTimeout(() => speakRef.current(fromIdx, gen), 600);
+      };
+      utt.onerror = () => {
+        if (gen !== genRef.current) return;
+        pendingRef.current = false;
+        speakRef.current(fromIdx, gen);
+      };
+      window.speechSynthesis.speak(utt);
+    } else {
+      speakRef.current(fromIdx, genRef.current);
+    }
   }, [startAudioCtx, startWatchdog, updateMediaSession]);
 
   const pause = useCallback(() => {
@@ -589,12 +678,30 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     volumeMultiplierRef.current = Math.max(0, Math.min(1, v));
   }, []);
 
+  // ── Narrator persona ─────────────────────────────────────────────────────
+  // AudioReader calls setPersona on mount (from localStorage) and on cycle.
+  // Restarts the current segment so the new pitch/rate/pause applies immediately.
+  const setPersona = useCallback((idx: number) => {
+    const clamped = Math.max(0, Math.min(NARRATOR_PERSONAS.length - 1, idx));
+    setPersonaIdx(clamped);
+    personaIdxRef.current = clamped;
+    if (stateRef.current === "playing") {
+      genRef.current += 1;
+      stoppedRef.current = false;
+      pendingRef.current = false;
+      window.speechSynthesis?.cancel();
+      const gen = genRef.current;
+      setTimeout(() => speakRef.current(segIdxRef.current, gen), 60);
+    }
+  }, []);
+
   return (
     <AudioPlayerContext.Provider
       value={{
         state, currentSeg, currentWord, segIdx, segTotal,
-        rateIdx, chapterMeta,
-        setChapter, play, pause, resume, stop, cycleRate, seekTo, setVolumeMultiplier,
+        rateIdx, personaIdx, chapterMeta,
+        setChapter, play, pause, resume, stop, cycleRate, seekTo,
+        setVolumeMultiplier, setPersona,
       }}
     >
       {children}
