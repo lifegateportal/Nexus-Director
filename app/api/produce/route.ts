@@ -245,6 +245,9 @@ GROUNDING — non-negotiable hard rules:
 - Quiz wrong-answer options must be plausible distractors from the source context, not invented facts`;
 
         const allModuleContents: z.infer<typeof SingleModuleContentSchema>[] = [];
+        // Track key terms defined in earlier modules so subsequent modules don't redefine them.
+        const definedTerms: Array<{ term: string; definedInModule: number }> = [];
+
         for (const [mi, mod] of shell.curriculum.entries()) {
           const theme = contentMap.themes[mi] ?? contentMap.themes[contentMap.themes.length - 1];
           const modOutline = [
@@ -253,6 +256,11 @@ GROUNDING — non-negotiable hard rules:
           ].join("\n");
           const themePassage = theme
             ? `THEME PASSAGES:\nTheme \u201c${theme.title}\u201d (${theme.sourceRegion}): ${theme.summary}\n  Passages: ${theme.keyPassages.map(p => `\u201c${p}\u201d`).join(" | ")}`
+            : "";
+
+          // Cross-module dedup: tell each module what terms are already owned by prior modules.
+          const priorTermsBlock = definedTerms.length > 0
+            ? `\nALREADY-DEFINED TERMS \u2014 DO NOT REDEFINE IN THIS MODULE:\nThe following terms were defined and explained in earlier modules. Do NOT add them to keyTerms and do NOT re-explain them in notes \u2014 at most reference them by name:\n${definedTerms.map((t) => `  \u2022 "${t.term}" (Module ${t.definedInModule + 1})`).join("\n")}`
             : "";
 
           const { object: modContent } = await generateObject({
@@ -269,12 +277,17 @@ GROUNDING — non-negotiable hard rules:
               modOutline,
               "",
               themePassage,
+              priorTermsBlock,
               "",
               phase1Source ? `SOURCE MATERIAL (sampled):\n${phase1Source}` : "",
               deliverySection,
             ].filter(Boolean).join("\n"),
           });
           allModuleContents.push(modContent);
+          // Register this module's key terms so subsequent modules can avoid redefining them.
+          for (const kt of modContent.keyTerms ?? []) {
+            definedTerms.push({ term: kt.term, definedInModule: mi });
+          }
         }
 
         // Merge Phase 2 content back onto the Phase 1 shell

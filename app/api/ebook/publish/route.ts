@@ -195,6 +195,83 @@ export async function POST(req: NextRequest) {
   }
 }
 
+// ── PATCH /api/ebook/publish — update catalog entry metadata without re-publishing ──
+
+const PatchCatalogRequestSchema = z.object({
+  slug:        z.string().min(1),
+  title:       z.string().optional(),
+  subtitle:    z.string().optional(),
+  authorName:  z.string().optional(),
+  synopsis:    z.string().optional(),
+  coverAccent: CoverAccentSchema.optional(),
+});
+
+export async function PATCH(req: NextRequest) {
+  let input;
+  try {
+    input = PatchCatalogRequestSchema.parse(await req.json() as unknown);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Invalid input" },
+      { status: 400 },
+    );
+  }
+
+  const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME } = env;
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
+    return NextResponse.json({ error: "R2 storage not configured." }, { status: 503 });
+  }
+
+  const { slug, ...fields } = input;
+  const s3  = makeS3Client(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
+  const now = new Date().toISOString();
+
+  try {
+    // Read current catalog
+    let catalog: PublishedCatalog = { updatedAt: now, books: [] };
+    try {
+      const existing = await s3.send(
+        new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: "published/index.json" }),
+      );
+      const raw = await existing.Body?.transformToString();
+      if (raw) {
+        const parsed = PublishedCatalogSchema.safeParse(JSON.parse(raw));
+        if (parsed.success) catalog = parsed.data;
+      }
+    } catch { /* index may not exist yet */ }
+
+    const idx = catalog.books.findIndex((b) => b.slug === slug);
+    if (idx === -1) {
+      return NextResponse.json({ error: `Book with slug "${slug}" not found in catalog.` }, { status: 404 });
+    }
+
+    // Merge patch
+    catalog.books[idx] = PublishedBookEntrySchema.parse({
+      ...catalog.books[idx],
+      ...fields,
+      updatedAt: now,
+    });
+    catalog.updatedAt = now;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket:       R2_BUCKET_NAME,
+        Key:          "published/index.json",
+        Body:         JSON.stringify(catalog),
+        ContentType:  "application/json",
+        CacheControl: "public, max-age=30",
+      }),
+    );
+
+    revalidatePath("/library");
+
+    return NextResponse.json({ slug, updatedAt: now }, { status: 200 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Patch failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
 // ── DELETE /api/ebook/publish — remove a book from the library catalog ────────
 
 const DeleteRequestSchema = z.object({ slug: z.string().min(1) });
