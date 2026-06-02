@@ -215,15 +215,13 @@ interface Props {
   };
   fontFamily: string;
   onClose:     () => void;
-  /** Called each time a new segment starts speaking. Used for in-page highlighting. */
-  onProgress?: (segIdx: number, paraKey: string) => void;
   /** Jump to this segment index (e.g. from a tap-to-start paragraph click). */
   startFrom?:  number;
 }
 
 export function AudioReader({
   chapter, bookTitle, readerHref, theme, fontFamily,
-  onClose, onProgress, startFrom,
+  onClose, startFrom,
 }: Props) {
   const {
     state, currentSeg, currentWord, segIdx, segTotal,
@@ -242,13 +240,9 @@ export function AudioReader({
       bookTitle,
       readerHref,
     };
-    setChapter(segs, meta, onProgress);
+    setChapter(segs, meta);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapter, bookTitle, readerHref]);
-
-  // Keep onProgress callback fresh without triggering a chapter reset
-  const onProgressRef = useRef(onProgress);
-  useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
 
   // Jump to a specific segment when startFrom prop changes
   useEffect(() => {

@@ -821,8 +821,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   // Inline highlights — reloaded whenever chapter or slug changes
   const [annotations,    setAnnotations]    = useState<Pick<Annotation, "selectedText" | "color">[]>([]);
 
-  // Global audio context — used for tap-to-start paragraph seek
-  const { seekTo: audioSeekTo } = useAudioPlayer();
+  // Global audio context — seekTo for tap-to-start; currentSeg drives auto-flip
+  const { seekTo: audioSeekTo, currentSeg: audioCurrentSeg } = useAudioPlayer();
 
   const containerRef    = useRef<HTMLDivElement>(null);
   const columnTrackRef  = useRef<HTMLDivElement>(null);
@@ -953,18 +953,37 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     paraKeyMapRef.current = map;
   }, [audioOpen, currentSection]);
 
-  // ── Reset audio tracking state on chapter change or audio close ──────────
-  useEffect(() => { setAudioParaKey(null); }, [chapterIndex]);
+  // ── Derive audioParaKey from the global audio context directly ─────────────
+  // This is more reliable than the onProgress callback chain because it doesn't
+  // depend on the callback being kept fresh across re-renders.
+  useEffect(() => {
+    if (!audioOpen || !audioCurrentSeg) { setAudioParaKey(null); return; }
+    setAudioParaKey(audioCurrentSeg.paraKey);
+  }, [audioOpen, audioCurrentSeg]);
   useEffect(() => { if (!audioOpen) setAudioParaKey(null); }, [audioOpen]);
+  useEffect(() => { setAudioParaKey(null); }, [chapterIndex]);
 
   // ── Auto-flip page when audio advances to a paragraph on another page ─────
+  // Uses getBoundingClientRect() instead of offsetLeft because CSS multi-column
+  // offsetLeft is unreliable in Safari/iOS — it returns the position within the
+  // current column, not the absolute offset across the full column track.
   useEffect(() => {
     if (!audioParaKey || !columnTrackRef.current || !containerW) return;
     const raf = requestAnimationFrame(() => {
-      const el = columnTrackRef.current?.querySelector(`[data-pkey="${audioParaKey}"]`) as HTMLElement | null;
+      const track = columnTrackRef.current;
+      if (!track) return;
+      const el = track.querySelector(`[data-pkey="${audioParaKey}"]`) as HTMLElement | null;
       if (!el) return;
-      const targetPage = Math.floor(el.offsetLeft / containerW);
-      if (targetPage !== pageIndexRef.current) setPageIndex(targetPage);
+      // Un-do the track's translateX to get the element's natural column position.
+      // trackRect.left = containerLeft - pageIndex * containerW (due to transform)
+      // elNaturalLeft = elRect.left - trackRect.left  (cancels the transform)
+      const trackLeft = track.getBoundingClientRect().left;
+      const elLeft    = el.getBoundingClientRect().left;
+      const naturalLeft = elLeft - trackLeft;
+      const targetPage  = Math.floor(naturalLeft / containerW);
+      if (targetPage !== pageIndexRef.current && targetPage >= 0) {
+        setPageIndex(targetPage);
+      }
     });
     return () => cancelAnimationFrame(raf);
   }, [audioParaKey, containerW]);
@@ -1483,7 +1502,6 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           theme={theme}
           fontFamily={fontFamily}
           onClose={() => setAudioOpen(false)}
-          onProgress={(_segIdx, paraKey) => setAudioParaKey(paraKey)}
         />
       )}
 
