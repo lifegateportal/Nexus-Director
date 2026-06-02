@@ -17,6 +17,7 @@ import { ProgressBar } from "./ProgressBar";
 import { AudioReader, parseChapter } from "./AudioReader";
 import { AnnotationsPanel, saveAnnotation, loadAnnotations, ANNO_COLOR_MAP } from "./AnnotationsPanel";
 import type { AnnotationColor, Annotation } from "./AnnotationsPanel";
+import { useAudioPlayer } from "@/lib/audio-player-context";
 
 // ── Reader theme palette ──────────────────────────────────────────────────────
 
@@ -813,13 +814,15 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [annotationMode, setAnnotationMode] = useState(false);
   const [audioOpen,      setAudioOpen]      = useState(false);
   const [audioParaKey,   setAudioParaKey]   = useState<string | null>(null);
-  const [audioStartSeg,  setAudioStartSeg]  = useState<number | undefined>(undefined);
   const [annoPanelOpen,  setAnnoPanelOpen]  = useState(false);
   const [selection,      setSelection]      = useState<{ text: string; rect: DOMRect } | null>(null);
   const [annoColor,      setAnnoColor]      = useState<AnnotationColor>("amber");
   const [annoNote,       setAnnoNote]       = useState("");
   // Inline highlights — reloaded whenever chapter or slug changes
   const [annotations,    setAnnotations]    = useState<Pick<Annotation, "selectedText" | "color">[]>([]);
+
+  // Global audio context — used for tap-to-start paragraph seek
+  const { seekTo: audioSeekTo } = useAudioPlayer();
 
   const containerRef    = useRef<HTMLDivElement>(null);
   const columnTrackRef  = useRef<HTMLDivElement>(null);
@@ -951,7 +954,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   }, [audioOpen, currentSection]);
 
   // ── Reset audio tracking state on chapter change or audio close ──────────
-  useEffect(() => { setAudioParaKey(null); setAudioStartSeg(undefined); }, [chapterIndex]);
+  useEffect(() => { setAudioParaKey(null); }, [chapterIndex]);
   useEffect(() => { if (!audioOpen) setAudioParaKey(null); }, [audioOpen]);
 
   // ── Auto-flip page when audio advances to a paragraph on another page ─────
@@ -1160,7 +1163,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       const pkey = (e.target as HTMLElement).closest("[data-pkey]")?.getAttribute("data-pkey");
       if (pkey) {
         const segIdx = paraKeyMapRef.current[pkey];
-        if (segIdx !== undefined) { setAudioStartSeg(segIdx); return; }
+        if (segIdx !== undefined) { audioSeekTo(segIdx); return; }
       }
     }
     const x = e.clientX;
@@ -1475,11 +1478,12 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       {audioOpen && currentSection.kind === "chapter" && (
         <AudioReader
           chapter={currentSection.chapter}
+          bookTitle={manifest.bookTitle}
+          readerHref={`/library/${slug}/read`}
           theme={theme}
           fontFamily={fontFamily}
           onClose={() => setAudioOpen(false)}
           onProgress={(_segIdx, paraKey) => setAudioParaKey(paraKey)}
-          startFrom={audioStartSeg}
         />
       )}
 

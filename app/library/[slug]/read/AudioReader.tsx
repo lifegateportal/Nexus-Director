@@ -1,17 +1,20 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import type { ChapterDraft } from "@/lib/schemas/ebook";
+import {
+  useAudioPlayer,
+  RATES,
+  type Segment,
+  type SegmentType,
+  type AudioChapterMeta,
+} from "@/lib/audio-player-context";
 
-// ── Content segment types ─────────────────────────────────────────────────────
+// Re-export types so existing imports in ReaderClient don't break
+export type { Segment, SegmentType };
 
-type SegmentType = "chapter-title" | "heading" | "quote" | "body";
-
-export interface Segment {
-  type: SegmentType;
-  text: string;
-  paraKey: string;
-}
+// AudioState is used by the UI render below
+type AudioState = "idle" | "playing" | "paused";
 
 // ── 1. Text pre-processing — clean abbreviations, punctuation, noise ──────────
 
@@ -139,51 +142,14 @@ export function parseChapter(chapter: ChapterDraft): Segment[] {
 
 // ── 5. Voice selection — prefers enhanced/neural voices ──────────────────────
 
-function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
-  // Exact-match priority: Enhanced/neural macOS voices first, then Online (Windows neural)
-  const preferredNames = [
-    "Samantha (Enhanced)", "Samantha",
-    "Karen (Enhanced)",    "Karen",
-    "Alex",
-    "Victoria",
-    "Fiona",
-    "Moira",
-    "Daniel",
-    "Microsoft Aria Online (Natural)", "Microsoft Aria Online",
-    "Microsoft Jenny Online (Natural)", "Microsoft Jenny Online",
-    "Microsoft Aria",  "Microsoft Jenny",
-    "Google US English",
-  ];
-  for (const name of preferredNames) {
-    const v = voices.find(v => v.name === name && v.lang.startsWith("en"));
-    if (v) return v;
-  }
-  // Fallback: any "Online" voice (Windows neural) → any en-US
-  const online = voices.find(v => v.name.includes("Online") && v.lang.startsWith("en"));
-  if (online) return online;
-  return voices.find(v => v.lang === "en-US" || v.lang === "en_US") ?? voices[0] ?? null;
-}
-
-// ── 3 & 4. Voice treatment — volume, pitch, rate, lead-in + post pause ───────
-
-const VOICE_TREATMENT: Record<SegmentType, {
-  pitch:        number;
-  rate:         number;
-  volume:       number;
-  pauseBeforeMs: number;
-  pauseAfterMs:  number;
-}> = {
-  "chapter-title": { pitch: 1.10, rate: 0.78, volume: 1.00, pauseBeforeMs: 600, pauseAfterMs: 700 },
-  "heading":       { pitch: 1.06, rate: 0.82, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 500 },
-  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.82, pauseBeforeMs:   0, pauseAfterMs: 300 },
-  "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs:  80 },
-};
-
-const RATES = [0.75, 1.0, 1.25, 1.5, 2.0] as const;
-type AudioState = "idle" | "playing" | "paused";
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
   chapter:    ChapterDraft;
+  /** Book-level metadata forwarded to the global audio context. */
+  bookTitle:  string;
+  /** Absolute pathname back to this reader, e.g. /library/my-book/read */
+  readerHref: string;
   theme: {
     muted:        string;
     accent:       string;
@@ -201,142 +167,48 @@ interface Props {
   startFrom?:  number;
 }
 
-export function AudioReader({ chapter, theme, fontFamily, onClose, onProgress, startFrom }: Props) {
-  const [state,        setState]       = useState<AudioState>("idle");
-  const [rateIdx,      setRateIdx]     = useState(1);
-  const [voices,       setVoices]      = useState<SpeechSynthesisVoice[]>([]);
-  const [currentSeg,   setCurrentSeg]  = useState<Segment | null>(null);
-  const [currentWord,  setCurrentWord] = useState(-1);
-  const [segIdx,       setSegIdx]       = useState(0);
+export function AudioReader({
+  chapter, bookTitle, readerHref, theme, fontFamily,
+  onClose, onProgress, startFrom,
+}: Props) {
+  const {
+    state, currentSeg, currentWord, segIdx, segTotal,
+    rateIdx, setChapter, play, pause, resume, stop, cycleRate, seekTo,
+  } = useAudioPlayer();
 
-  const segsRef         = useRef<Segment[]>([]);
-  const segIdxRef       = useRef(0);
-  const rateIdxRef      = useRef(1);
-  const voicesRef       = useRef<SpeechSynthesisVoice[]>([]);
-  const stoppedRef      = useRef(false);
-  const onProgressRef   = useRef(onProgress);
-  const prevStartFrom   = useRef<number | undefined>(undefined);
+  const prevStartFrom = useRef<number | undefined>(undefined);
 
-  useEffect(() => { rateIdxRef.current   = rateIdx;     }, [rateIdx]);
-  useEffect(() => { voicesRef.current    = voices;      }, [voices]);
-  useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
-
+  // Register chapter with the global engine when chapter changes
   useEffect(() => {
-    const load = () => setVoices(window.speechSynthesis.getVoices());
-    load();
-    window.speechSynthesis.onvoiceschanged = load;
-    return () => { window.speechSynthesis.onvoiceschanged = null; };
-  }, []);
-
-  useEffect(() => {
-    window.speechSynthesis?.cancel();
-    stoppedRef.current = true;
-    segsRef.current    = parseChapter(chapter);
-    segIdxRef.current  = 0;
-    setState("idle");
-    setCurrentSeg(null);
-    setCurrentWord(-1);
-    setSegIdx(0);
-  }, [chapter]);
-
-  useEffect(() => () => { window.speechSynthesis?.cancel(); }, []);
-
-  const speakSegment = useCallback((idx: number) => {
-    const segs = segsRef.current;
-    if (stoppedRef.current || idx >= segs.length) {
-      setState("idle"); setCurrentSeg(null); setCurrentWord(-1);
-      return;
-    }
-    const seg       = segs[idx];
-    const treatment = VOICE_TREATMENT[seg.type];
-
-    const doSpeak = () => {
-      if (stoppedRef.current) return;
-      const userRate = RATES[rateIdxRef.current];
-      const voice    = pickVoice(voicesRef.current);
-
-      segIdxRef.current = idx;
-      setCurrentSeg(seg);
-      setCurrentWord(-1);
-      setSegIdx(idx);
-      onProgressRef.current?.(idx, seg.paraKey);
-
-      const utt    = new SpeechSynthesisUtterance(seg.text);
-      utt.rate     = treatment.rate * userRate;
-      utt.pitch    = treatment.pitch;
-      utt.volume   = treatment.volume;   // 3. volume variation per type
-      utt.lang     = "en-US";
-      if (voice) utt.voice = voice;
-
-      utt.onboundary = (e) => {
-        if (e.name !== "word") return;
-        // sentence-level split keeps charIndex small → more accurate highlight
-        const wordIdx = (seg.text.slice(0, e.charIndex).match(/\S+/g) ?? []).length;
-        setCurrentWord(wordIdx);
-      };
-      utt.onend = () => {
-        if (stoppedRef.current) return;
-        setTimeout(() => speakSegment(idx + 1), treatment.pauseAfterMs);
-      };
-      utt.onerror = (e) => {
-        if (e.error === "interrupted" || e.error === "canceled") return;
-        setTimeout(() => speakSegment(idx + 1), 50);
-      };
-
-      window.speechSynthesis.speak(utt);
+    const segs: Segment[] = parseChapter(chapter);
+    const meta: AudioChapterMeta = {
+      chapterKey: `ch-${chapter.number}`,
+      title:      chapter.title,
+      number:     chapter.number,
+      bookTitle,
+      readerHref,
     };
+    setChapter(segs, meta, onProgress);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapter, bookTitle, readerHref]);
 
-    // 4. Lead-in silence (chapter title gets a 600ms breath before speaking)
-    if (treatment.pauseBeforeMs > 0) {
-      setTimeout(doSpeak, treatment.pauseBeforeMs);
-    } else {
-      doSpeak();
-    }
-  }, []);
-
-  const play = useCallback((fromIdx = 0) => {
-    stoppedRef.current = false;
-    setState("playing");
-    speakSegment(fromIdx);
-  }, [speakSegment]);
+  // Keep onProgress callback fresh without triggering a chapter reset
+  const onProgressRef = useRef(onProgress);
+  useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
 
   // Jump to a specific segment when startFrom prop changes
   useEffect(() => {
     if (startFrom === undefined) return;
     if (startFrom === prevStartFrom.current) return;
     prevStartFrom.current = startFrom;
-    stoppedRef.current = true;
-    window.speechSynthesis?.cancel();
-    setTimeout(() => {
-      stoppedRef.current = false;
-      setState("playing");
-      speakSegment(startFrom);
-    }, 80);
-  }, [startFrom, speakSegment]);
-
-  const stop = useCallback(() => {
-    stoppedRef.current = true;
-    window.speechSynthesis?.cancel();
-    segIdxRef.current = 0;
-    setState("idle"); setCurrentSeg(null); setCurrentWord(-1);
-  }, []);
+    seekTo(startFrom);
+  }, [startFrom, seekTo]);
 
   const togglePlay = () => {
     if (!window.speechSynthesis) return;
-    if      (state === "idle")    play(segIdxRef.current);
-    else if (state === "playing") { window.speechSynthesis.pause();  setState("paused");  }
-    else if (state === "paused")  { window.speechSynthesis.resume(); setState("playing"); }
-  };
-
-  const cycleRate = () => {
-    const next = (rateIdx + 1) % RATES.length;
-    setRateIdx(next);
-    rateIdxRef.current = next;
-    if (state === "playing") {
-      stoppedRef.current = false;
-      window.speechSynthesis.cancel();
-      setTimeout(() => speakSegment(segIdxRef.current), 60);
-    }
+    if      (state === "idle")    play();
+    else if (state === "playing") pause();
+    else if (state === "paused")  resume();
   };
 
   const wordTokens = currentSeg
@@ -363,8 +235,8 @@ export function AudioReader({ chapter, theme, fontFamily, onClose, onProgress, s
       <div style={{ height: "2px", background: `${theme.accent}18`, overflow: "hidden" }}>
         <div style={{
           height: "100%",
-          width: segsRef.current.length
-            ? `${Math.round((segIdx / segsRef.current.length) * 100)}%`
+          width: segTotal > 0
+            ? `${Math.round((segIdx / segTotal) * 100)}%`
             : "0%",
           background: `linear-gradient(to right, ${theme.accent}bb, ${theme.accent})`,
           transition: "width 0.5s ease",
@@ -418,7 +290,7 @@ export function AudioReader({ chapter, theme, fontFamily, onClose, onProgress, s
             <span style={{ fontSize: "0.575rem", letterSpacing: "0.04em", fontFamily, color: theme.muted }}>
               {segIdx + 1}{" "}
               <span style={{ opacity: 0.4 }}>/</span>{" "}
-              {segsRef.current.length}
+              {segTotal}
             </span>
           </div>
 
