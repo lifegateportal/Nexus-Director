@@ -3,6 +3,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { createHash } from "crypto";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
+import { normalizeInstruction } from "@/lib/instruction-normalizer";
 import {
   EbookManifestSchema,
   SectionDraftSchema,
@@ -95,8 +96,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { manifest, instruction, history, pipeline } = input;
-  const dryRun       = input.dryRun ?? false;
+  const { manifest, history, pipeline } = input;
+  const dryRun = input.dryRun ?? false;
+  // Pre-process the instruction to canonicalize notation, expand synonyms,
+  // and disambiguate scope before sending to the LLM.
+  const { normalized: instruction } = normalizeInstruction(input.instruction);
 
   // ── Optimistic locking ───────────────────────────────────────────────
   // Hash the mutable content fields so concurrent edits from multiple tabs
@@ -151,7 +155,29 @@ export async function POST(req: NextRequest) {
   // Book-wide: operations touching every chapter simultaneously
   // Quality-fix: resolving a failed quality report across the manuscript
   // Back matter generation: building glossary/scripture index from scratch
-  const isStructuralOp = /\b(reorder\s+chapter|move\s+(?:chapter|section)|merge\s+chapter|split\s+chapter|add\s+a?\s*chapter|remove\s+chapter|delete\s+chapter|restructure|reorganize|rearrange\s+chapter|add\s+a?\s*section|swap\s+chapter|fix\s+all|remove\s+all|add\s+(?:takeaways|questions|conclusions?)\s+to\s+all|book[- ]wide|across\s+all\s+chapters|every\s+chapter|fix\s+(?:the\s+)?(?:quality|issues?|errors?|problems?)|resolve\s+(?:quality|issues?)|build\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter|reading\s+guide)|generate\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)|create\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter))\b/i.test(instruction);
+  const isStructuralOp = /\b(
+    reorder\s+(?:the\s+)?(?:chapter|section)s?|
+    move\s+(?:chapter|section)|
+    (?:should\s+be|needs?\s+to\s+be|must\s+be|can\s+be)\s+moved|
+    moved?\s+(?:chapter|section|\d+[.\-§]\d+)\s+to|
+    (?:chapter|section)\s+\d+[.\-§]\d+\s+(?:should\s+be\s+)?(?:moved?|goes?|belongs?|transferred?)\s+to|
+    put\s+(?:chapter|section)\s+\d|
+    transfer\s+(?:chapter|section)|
+    merge\s+chapter|
+    split\s+(?:chapter|section)|
+    add\s+a?\s*chapter|
+    remove\s+chapter|delete\s+chapter|
+    restructure|reorganize|reorganise|rearrange|
+    add\s+a?\s*section|swap\s+(?:chapter|section)|
+    fix\s+all|remove\s+all|
+    add\s+(?:takeaways|questions|conclusions?)\s+to\s+all|
+    book[- ]wide|across\s+all\s+chapters|every\s+chapter|
+    fix\s+(?:the\s+)?(?:quality|issues?|errors?|problems?)|
+    resolve\s+(?:quality|issues?)|
+    build\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter|reading\s+guide)|
+    generate\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)|
+    create\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)
+  )\b/ix.test(instruction);
   const selectedModel = isStructuralOp ? deepSeekReasonerModel : deepSeekModel;
 
   // Track which sections are truncated so we can restore original content if the AI loses words
@@ -251,41 +277,60 @@ BOOK-SAFETY RULE — ALWAYS APPLY
 - Keep only reader-appropriate teaching prose.
 
 ════════════════════════════════════════════
+NOTATION GUIDE — numbered references
+════════════════════════════════════════════
+"Chapter 1.4" / "Ch 1.4" / "section 1.4" / "1.4" all refer to SECTION 4 of CHAPTER 1.
+"Chapter 1.4 should be moved to section 3" means: move section 4 of chapter 1 into chapter 3.
+"Chapter 1.4 should be moved to chapter 3" means: move section 4 of chapter 1 into chapter 3.
+When a user writes "Chapter X.Y", treat it as chapterNumber=X, sectionNumber=Y.
+
+════════════════════════════════════════════
 NATURAL LANGUAGE MAPPINGS — interpret these colloquial phrases correctly
 ════════════════════════════════════════════
+LIVE-AUDIENCE LANGUAGE:
 "take out the church talk" / "remove pulpit language" / "congregation chatter" / "audience talk" / "live service language" / "speaker talking to audience"
   → fix live-audience language (updatedSections for affected sections)
 
+CONCLUSION / ENDINGS:
 "the ending is weak" / "fix the ending" / "the conclusion drags" / "wrap up chapter X better" / "chapter X needs a better close"
   → rewrite chapterPatches: conclusion for the named chapter
-
 "remove the conclusions" / "take out the chapter endings" / "no need for summaries" / "cut the chapter summaries"
   → chapterPatches: conclusion: "" for named chapters
 
+INTRO / OPENINGS:
 "the intro is weak" / "fix the opening" / "chapter X needs a better hook" / "the start is slow" / "strengthen the beginning"
   → rewrite chapterPatches: intro (and/or premiseLine) for the named chapter
 
+PROSE QUALITY:
 "tighten up section X" / "clean it up" / "section X flows badly" / "make it read better" / "improve the writing"
   → updatedSections: rewrite body with tighter prose, same content
-
 "make section X shorter" / "trim section X" / "condense section X" / "too long"
   → updatedSections: condensed body
 
+FRONT MATTER:
 "update the author bio" / "change the about section" / "author section needs updating"
   → frontMatter: update aboutAuthor
-
 "take out the resources" / "remove the reading list" / "delete the resources section"
   → frontMatter: resourcesList: []
 
+SCRIPTURE:
 "the scripture is repeated" / "same verse appears twice" / "duplicate Bible verses"
   → updatedSections: remove the duplicate scripture reference from the later section
 
+SECTION MOVES — all phrasings mean the same restructure (chapters array):
 "move section X to chapter Y" / "transfer section X" / "section X belongs in chapter Y"
-  → chapters array restructure: remove from source chapter, add to target chapter
+"chapter X.Y should be moved to chapter Z" / "chapter X.Y needs to go to chapter Z"
+"move chapter X.Y to section Z" / "put section X.Y in chapter Z"
+"section X.Y should be moved" / "chapter X.Y should be in chapter Z"
+  → chapters array restructure: remove section from source chapter, insert into target chapter at the appropriate position
 
+CHAPTER RESTRUCTURE:
+"restructure chapter X" / "reorganise chapter X" / "rearrange chapter X" / "reorder chapter X"
+  → chapters array with sections reordered logically within that chapter
+
+TAKEAWAYS / QUESTIONS:
 "chapter X needs reflection questions" / "add questions at the end of chapter X"
   → chapterPatches: reflectionQuestions for that chapter
-
 "chapter X needs takeaways" / "key points for chapter X" / "summarise chapter X"
   → chapterPatches: keyTakeaways for that chapter
 
