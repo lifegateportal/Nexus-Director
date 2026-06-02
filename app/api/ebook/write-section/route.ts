@@ -123,6 +123,55 @@ function hookFulfilled(hook: string, body: string): boolean {
   return overlap / hookGrams.size >= 0.15;
 }
 
+// ── Seq-A2 post-write reorder ────────────────────────────────────────────────
+// When the LLM writes paragraphs out of the speaker's transcript order, this
+// function stable-sorts them back into the correct excerpt sequence.
+// Paragraphs with no strong excerpt match inherit the index of their preceding
+// matched neighbour so they stay contextually attached to the right argument block.
+function reorderParagraphsByExcerptSequence(
+  paragraphs: string[],
+  excerpts: string[],
+  overlapThreshold = 0.08
+): { paragraphs: string[]; reorderedCount: number } {
+  if (excerpts.length === 0) return { paragraphs, reorderedCount: 0 };
+
+  // 1. Map each paragraph to its best-matching excerpt index.
+  const assignments: Array<{ para: string; excerptIdx: number }> = paragraphs.map((para) => {
+    if (para.split(/\s+/).length < 15) return { para, excerptIdx: -1 }; // short/transitional — defer
+    let bestMatch = -1;
+    let bestScore = 0;
+    for (let ei = 0; ei < excerpts.length; ei++) {
+      const score = excerptOverlapScore(para, excerpts[ei]);
+      if (score > bestScore) { bestScore = score; bestMatch = ei; }
+    }
+    return { para, excerptIdx: bestScore >= overlapThreshold ? bestMatch : -1 };
+  });
+
+  // 2. Unmatched paragraphs (-1) inherit the excerpt index of their preceding matched
+  //    neighbour so they stay in their contextual position after sorting.
+  let lastAssigned = 0;
+  for (let i = 0; i < assignments.length; i++) {
+    if (assignments[i].excerptIdx >= 0) {
+      lastAssigned = assignments[i].excerptIdx;
+    } else {
+      assignments[i].excerptIdx = lastAssigned;
+    }
+  }
+
+  // 3. Check if already in order — skip sort if no fix needed.
+  let needsSort = false;
+  for (let i = 1; i < assignments.length; i++) {
+    if (assignments[i].excerptIdx < assignments[i - 1].excerptIdx) { needsSort = true; break; }
+  }
+  if (!needsSort) return { paragraphs, reorderedCount: 0 };
+
+  // 4. Stable sort by excerpt index (Array.sort is stable in V8 / Node 11+).
+  const original = assignments.map((a) => a.para);
+  const sorted = [...assignments].sort((a, b) => a.excerptIdx - b.excerptIdx);
+  const reorderedCount = sorted.filter((a, i) => a.para !== original[i]).length;
+  return { paragraphs: sorted.map((a) => a.para), reorderedCount };
+}
+
 // ── S5: Post-write paragraph length validation ────────────────────────────
 // Detects orphaned long sentences that are not deliberate fragments (≤12 words).
 // Merges them with the following paragraph when the next para starts with a
@@ -894,14 +943,14 @@ ${READER_NORMALIZATION_RULES}`,
       }
     }
 
-    // ── Seq-A2: Sentence-level sequence watermark ─────────────────────────
-    // For each paragraph, find closest matching excerpt by 4-gram overlap and
-    // verify the matched excerpt indices advance monotonically. Sequence
-    // inversions (writing from excerpt 2 after already using excerpt 4) are logged.
+    // ── Seq-A2: Sentence-level sequence watermark + auto-reorder ────────────
+    // Map each paragraph to its best-matching excerpt by 4-gram overlap and
+    // verify the indices advance monotonically. When inversions are found,
+    // reorder the paragraphs so the output always follows the speaker's sequence.
     let lastExcerptIdx = -1;
     for (let pi = 0; pi < repairedParagraphs.length; pi++) {
       const para = repairedParagraphs[pi];
-      if (para.split(/\s+/).length < 15) continue; // skip very short transitional paragraphs
+      if (para.split(/\s+/).length < 15) continue;
       let bestMatch = -1;
       let bestScore = 0;
       for (let ei = 0; ei < effectiveExcerpts.length; ei++) {
@@ -917,7 +966,21 @@ ${READER_NORMALIZATION_RULES}`,
       }
     }
 
-    const rawBody = repairedParagraphs.join("\n\n") || await fallbackSectionBody(assignment);
+    // ── Seq-A2 correction: if any inversions were detected, stable-sort the
+    // paragraphs back into the speaker's transcript order before joining them.
+    let finalParagraphs = repairedParagraphs;
+    if (sequenceBreakCount > 0) {
+      const { paragraphs: reordered, reorderedCount } = reorderParagraphsByExcerptSequence(
+        repairedParagraphs,
+        effectiveExcerpts
+      );
+      if (reorderedCount > 0) {
+        finalParagraphs = reordered;
+        console.log(`[write-section] Seq-A2 corrected: reordered ${reorderedCount} paragraph(s) back into transcript sequence in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
+      }
+    }
+
+    const rawBody = finalParagraphs.join("\n\n") || await fallbackSectionBody(assignment);
     const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
     // ── Upgrade 8: Passive voice detection ───────────────────────────────
     const passiveHits = detectPassiveVoice(body);
