@@ -155,29 +155,7 @@ export async function POST(req: NextRequest) {
   // Book-wide: operations touching every chapter simultaneously
   // Quality-fix: resolving a failed quality report across the manuscript
   // Back matter generation: building glossary/scripture index from scratch
-  const isStructuralOp = /\b(
-    reorder\s+(?:the\s+)?(?:chapter|section)s?|
-    move\s+(?:chapter|section)|
-    (?:should\s+be|needs?\s+to\s+be|must\s+be|can\s+be)\s+moved|
-    moved?\s+(?:chapter|section|\d+[.\-§]\d+)\s+to|
-    (?:chapter|section)\s+\d+[.\-§]\d+\s+(?:should\s+be\s+)?(?:moved?|goes?|belongs?|transferred?)\s+to|
-    put\s+(?:chapter|section)\s+\d|
-    transfer\s+(?:chapter|section)|
-    merge\s+chapter|
-    split\s+(?:chapter|section)|
-    add\s+a?\s*chapter|
-    remove\s+chapter|delete\s+chapter|
-    restructure|reorganize|reorganise|rearrange|
-    add\s+a?\s*section|swap\s+(?:chapter|section)|
-    fix\s+all|remove\s+all|
-    add\s+(?:takeaways|questions|conclusions?)\s+to\s+all|
-    book[- ]wide|across\s+all\s+chapters|every\s+chapter|
-    fix\s+(?:the\s+)?(?:quality|issues?|errors?|problems?)|
-    resolve\s+(?:quality|issues?)|
-    build\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter|reading\s+guide)|
-    generate\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)|
-    create\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)
-  )\b/ix.test(instruction);
+  const isStructuralOp = /\b(reorder\s+(?:the\s+)?(?:chapter|section)s?|move\s+(?:chapter|section)|(?:should\s+be|needs?\s+to\s+be|must\s+be|can\s+be)\s+moved|moved?\s+(?:chapter|section|\d+[.\-§]\d+)\s+to|(?:chapter|section)\s+\d+[.\-§]\d+\s+(?:should\s+be\s+)?(?:moved?|goes?|belongs?|transferred?)\s+to|put\s+(?:chapter|section)\s+\d|transfer\s+(?:chapter|section)|merge\s+chapter|split\s+(?:chapter|section)|add\s+a?\s*chapter|remove\s+chapter|delete\s+chapter|restructure|reorganize|reorganise|rearrange|add\s+a?\s*section|swap\s+(?:chapter|section)|fix\s+all|remove\s+all|add\s+(?:takeaways|questions|conclusions?)\s+to\s+all|book[- ]wide|across\s+all\s+chapters|every\s+chapter|fix\s+(?:the\s+)?(?:quality|issues?|errors?|problems?)|resolve\s+(?:quality|issues?)|build\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter|reading\s+guide)|generate\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)|create\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter))\b/i.test(instruction);
   const selectedModel = isStructuralOp ? deepSeekReasonerModel : deepSeekModel;
 
   // Track which sections are truncated so we can restore original content if the AI loses words
