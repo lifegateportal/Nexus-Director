@@ -9,6 +9,7 @@ import type { AudioPin } from "@/lib/reader-store";
 import {
   useAudioPlayer,
   RATES,
+  NARRATOR_PERSONAS,
   type Segment,
   type SegmentType,
   type AudioChapterMeta,
@@ -107,6 +108,10 @@ function sanitizeForSpeech(text: string): string {
     .replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
     .replace(/\*\*([^*]+)\*\*/g,     "$1")
     .replace(/\*([^*]+)\*/g,          "$1")
+    // Normalize question marks → period so TTS doesn't apply rising pitch
+    // inflection. A narrator reads rhetorical and genuine questions with an
+    // even, measured tone — the exaggerated upswing sounds robotic.
+    .replace(/\?+/g, ".")
     .trim();
 }
 
@@ -122,6 +127,31 @@ function splitSentences(text: string): string[] {
 // ── Parse chapter into typed segments ─────────────────────────────────────────
 // Also exported so ReaderClient can build a paraKey→segIdx map for click-to-start.
 
+// ── Emphasis detection ───────────────────────────────────────────────────────
+// Splits raw markdown text into alternating normal / emphasis spans BEFORE
+// markdown is stripped.  Emphasis sources:
+//   • ***bold-italic*** / **bold** / *italic*
+//   • ALL-CAPS runs of 3+ characters (e.g. "GOD", "LOVE", "THE TRUTH")
+// Returns an array of { text, emph } objects.  The caller creates "emphasis"
+// segments for emph=true spans so the TTS engine pitches them higher.
+
+// Only markdown markers are detected — no ALL-CAPS heuristic.
+const EMPH_RE = /(\*{1,3}[^*\n]+?\*{1,3})/g;
+
+function splitEmphasis(raw: string): { text: string; emph: boolean }[] {
+  const parts: { text: string; emph: boolean }[] = [];
+  let last = 0;
+  for (const m of raw.matchAll(EMPH_RE)) {
+    if (m.index! > last) parts.push({ text: raw.slice(last, m.index!), emph: false });
+    // Strip surrounding asterisks to get the plain text
+    const text = m[1].replace(/^\*{1,3}/, "").replace(/\*{1,3}$/, "");
+    if (text.trim()) parts.push({ text, emph: true });
+    last = m.index! + m[0].length;
+  }
+  if (last < raw.length) parts.push({ text: raw.slice(last), emph: false });
+  return parts.filter((p) => p.text.trim().length > 0);
+}
+
 export function parseChapter(chapter: ChapterDraft): Segment[] {
   const segs: Segment[] = [];
 
@@ -132,13 +162,20 @@ export function parseChapter(chapter: ChapterDraft): Segment[] {
      .trim();
 
   const pushSentences = (type: SegmentType, raw: string, paraKey: string) => {
-    const clean = sanitizeForSpeech(stripMd(raw));
-    if (!clean) return;
     if (type === "heading" || type === "chapter-title") {
-      segs.push({ type, text: clean, paraKey });
-    } else {
+      const clean = sanitizeForSpeech(stripMd(raw));
+      if (clean) segs.push({ type, text: clean, paraKey });
+      return;
+    }
+    // Split on emphasis markers/ALL-CAPS before stripping markdown so the
+    // prosody treatment is preserved per span.
+    const parts = splitEmphasis(raw);
+    for (const { text, emph } of parts) {
+      const clean = sanitizeForSpeech(stripMd(text));
+      if (!clean.trim()) continue;
+      const segType: SegmentType = emph ? "emphasis" : type;
       for (const sentence of splitSentences(clean)) {
-        if (sentence.trim()) segs.push({ type, text: sentence.trim(), paraKey });
+        if (sentence.trim()) segs.push({ type: segType, text: sentence.trim(), paraKey });
       }
     }
   };
@@ -232,10 +269,29 @@ export function AudioReader({
   const {
     state, currentSeg, currentWord, segIdx, segTotal,
     rateIdx, setChapter, play, pause, resume, stop, cycleRate, seekTo,
-    setVolumeMultiplier,
+    setVolumeMultiplier, setPersona,
   } = useAudioPlayer();
 
   const prevStartFrom = useRef<number | undefined>(undefined);
+
+  // ── Narrator persona — persisted to localStorage ─────────────────────────
+  // localPersonaIdx drives the UI; a useEffect syncs it into the engine.
+  const [localPersonaIdx, setLocalPersonaIdx] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    const v = parseInt(localStorage.getItem("nd_narrator_persona") ?? "0", 10);
+    return isNaN(v) ? 0 : Math.max(0, Math.min(NARRATOR_PERSONAS.length - 1, v));
+  });
+
+  // Sync to engine whenever the local value changes (includes initial mount)
+  useEffect(() => {
+    setPersona(localPersonaIdx);
+  }, [localPersonaIdx, setPersona]);
+
+  const handleCyclePersona = useCallback(() => {
+    const next = (localPersonaIdx + 1) % NARRATOR_PERSONAS.length;
+    setLocalPersonaIdx(next);
+    localStorage.setItem("nd_narrator_persona", String(next));
+  }, [localPersonaIdx]);
 
   // ── Sleep timer ────────────────────────────────────────────────────────
   const SLEEP_OPTIONS = [0, 10, 20, 30, 60] as const;
@@ -358,6 +414,7 @@ export function AudioReader({
     "heading":       { label: "Section",   color: theme.accent },
     "quote":         { label: "Quote",     color: "#0ea5e9"    },
     "body":          { label: "Narration", color: theme.muted  },
+    "emphasis":      { label: "Emphasis",  color: "#f59e0b"    },
   };
 
   return (
@@ -515,6 +572,38 @@ export function AudioReader({
           flexShrink: 0,
         }}>
           {RATES[rateIdx]}×
+        </button>
+
+        {/* Narrator persona — cycles Balanced → Storyteller → Preacher → Podcast */}
+        <button
+          onClick={handleCyclePersona}
+          aria-label={`Narrator style: ${NARRATOR_PERSONAS[localPersonaIdx].name}`}
+          title={NARRATOR_PERSONAS[localPersonaIdx].name}
+          style={{
+            position: "relative",
+            width: "2.25rem", height: "2.25rem",
+            background: localPersonaIdx > 0 ? `${theme.accent}18` : "none",
+            border: `1px solid ${localPersonaIdx > 0 ? theme.accent : theme.border}`,
+            borderRadius: "50%", cursor: "pointer",
+            color: localPersonaIdx > 0 ? theme.accent : theme.muted,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0,
+            transition: "border-color 0.2s, background 0.2s, color 0.2s",
+          }}
+        >
+          {/* Microphone icon */}
+          <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.8rem", height: "0.8rem" }}>
+            <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm7 10a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.08A7 7 0 0 0 19 11z" />
+          </svg>
+          {/* Persona indicator dot — hidden when on default Balanced */}
+          {localPersonaIdx > 0 && (
+            <span style={{
+              position: "absolute", top: 3, right: 3,
+              width: 5, height: 5, borderRadius: "50%",
+              background: theme.accent,
+              pointerEvents: "none",
+            }} />
+          )}
         </button>
 
         {/* Sleep timer — moon button */}
