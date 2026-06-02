@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
       JSON.stringify({ error: "Conflict: the academy has been modified since you last loaded it. Please reload before editing.", code: "VERSION_CONFLICT" }),
       { status: 409, headers: { "Content-Type": "application/json" } }
     );
-  } ─────────────────────────────────────────────
+  } 
   // Build a module-level concept map before sending anything to the LLM.
   // Each module OWNS its terms and lesson concepts — the AI must not redefine
   // or re-explain a concept that already belongs to another module.
@@ -197,17 +197,10 @@ export async function POST(req: NextRequest) {
   const explicitRefs = parseExplicitModuleRefs(instruction + " " + historyText);
 
   // Detect structural / high-reasoning operations that benefit from R1:
-  // - Structural: add/remove/merge/split/reorder modules
-  // - Academy-wide: objectives for all modules, notes for all lessons
-  // - Curriculum audit: overlap/duplication analysis across modules
-  const isStructuralOp = /\b(
-    add\s+a?\s*module|remove\s+module|delete\s+module|reorder\s+module|merge\s+module|
-    split\s+(?:lesson|module)|restructure|reorganize|rearrange|full\s+rewrite|rewrite\s+all|complete\s+overhaul|
-    add\s+(?:learning\s+)?objectives\s+to\s+all|add\s+(?:key\s+)?terms?\s+to\s+all|
-    rewrite\s+(?:notes|lessons?)\s+for\s+all|expand\s+all\s+(?:notes|lessons?)|
-    (?:check|identify|find|audit)\s+(?:overlap|duplicat|repeated\s+content|coverage)|
-    across\s+all\s+modules|every\s+module
-  )\b/ix.test(instruction);
+  // Structural: add/remove/merge/split/reorder modules
+  // Academy-wide: objectives for all modules, notes for all lessons
+  // Curriculum audit: overlap/duplication analysis across modules
+  const isStructuralOp = /\b(add\s+a?\s*module|remove\s+module|delete\s+module|reorder\s+module|merge\s+module|split\s+(?:lesson|module)|restructure|reorganize|rearrange|full\s+rewrite|rewrite\s+all|complete\s+overhaul|add\s+(?:learning\s+)?objectives\s+to\s+all|add\s+(?:key\s+)?terms?\s+to\s+all|rewrite\s+(?:notes|lessons?)\s+for\s+all|expand\s+all\s+(?:notes|lessons?)|(?:check|identify|find|audit)\s+(?:overlap|duplicat|repeated\s+content|coverage)|across\s+all\s+modules|every\s+module)\b/i.test(instruction);
 
   // closing the connection while DeepSeek is generating the response.
   const stream = new ReadableStream({
