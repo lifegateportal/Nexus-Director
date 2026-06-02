@@ -8,8 +8,11 @@ import {
   saveReadingPosition,
   getReaderSettings,
   saveReaderSettings,
+  getBookmarks,
+  addBookmark,
+  removeBookmark,
 } from "@/lib/reader-store";
-import type { ReaderSettings } from "@/lib/reader-store";
+import type { ReaderSettings, ReaderBookmark } from "@/lib/reader-store";
 import { ChapterDrawer } from "./ChapterDrawer";
 import type { TocItem } from "./ChapterDrawer";
 import { ReaderSettingsPanel } from "./ReaderSettings";
@@ -67,6 +70,30 @@ const FONT_FAMILIES = {
 } as const;
 
 const CHROME_H = "3.25rem";
+
+// ── Bionic reading — bold fixation-point prefix of each word ─────────────────
+// The first ~45% of each word is bolded; the rest rendered at normal weight.
+// This guides the eye to the fixation point and increases reading speed.
+
+function BionicText({ text }: { text: string }) {
+  const tokens = text.split(/(\s+)/);
+  return (
+    <>
+      {tokens.map((tok, i) => {
+        if (/^\s+$/.test(tok) || tok.length === 0) return <span key={i}>{tok}</span>;
+        // Strip markdown that may still be in raw text
+        const clean = tok.replace(/\*+/g, "");
+        const boldLen = Math.max(1, Math.ceil(clean.length * 0.45));
+        return (
+          <span key={i}>
+            <strong style={{ fontWeight: 750 }}>{clean.slice(0, boldLen)}</strong>
+            <span style={{ fontWeight: 400, opacity: 0.8 }}>{clean.slice(boldLen)}</span>
+          </span>
+        );
+      })}
+    </>
+  );
+}
 
 // ── Inline markdown renderer ──────────────────────────────────────────────────
 
@@ -181,6 +208,7 @@ function renderBody(
   paraKeyPrefix?: string,
   audioParaKey?: string | null,
   audioOpen?: boolean,
+  bionicMode?: boolean,
 ): React.ReactNode[] {
   const lines = text.split("\n");
   const nodes: React.ReactNode[] = [];
@@ -380,10 +408,15 @@ function renderBody(
             >
               {line.charAt(0)}
             </span>
-            <HighlightedLine text={line.slice(1)} annotations={annotations} />
+            {bionicMode
+              ? <BionicText text={line.slice(1)} />
+              : <HighlightedLine text={line.slice(1)} annotations={annotations} />
+            }
           </>
         ) : (
-          <HighlightedLine text={line} annotations={annotations} />
+          bionicMode
+            ? <BionicText text={line} />
+            : <HighlightedLine text={line} annotations={annotations} />
         )}
       </p>,
     );
@@ -397,7 +430,7 @@ function renderBody(
 
 function ChapterView({
   chapter, theme, fontFamily, fontSize, lineHeight, annotations,
-  audioParaKey, audioOpen,
+  audioParaKey, audioOpen, bionicMode,
 }: {
   chapter:      ChapterDraft;
   theme:        Theme;
@@ -407,6 +440,7 @@ function ChapterView({
   annotations:  { selectedText: string; color: AnnotationColor }[];
   audioParaKey?: string | null;
   audioOpen?:   boolean;
+  bionicMode?:  boolean;
 }) {
   const [showExtras, setShowExtras] = useState(false);
 
@@ -477,7 +511,7 @@ function ChapterView({
             cursor:       audioOpen ? "pointer" : undefined,
           } as React.CSSProperties}
         >
-          {renderBody(chapter.intro, theme, false, annotations, "intro", audioParaKey, audioOpen)}
+          {renderBody(chapter.intro, theme, false, annotations, "intro", audioParaKey, audioOpen, bionicMode)}
         </div>
       )}
 
@@ -507,7 +541,7 @@ function ChapterView({
               {section.heading}
             </h2>
           )}
-          <div>{renderBody(section.body, theme, idx === 0, annotations, `s${idx}`, audioParaKey, audioOpen)}</div>
+          <div>{renderBody(section.body, theme, idx === 0, annotations, `s${idx}`, audioParaKey, audioOpen, bionicMode)}</div>
         </section>
       ))}
 
@@ -818,6 +852,15 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [selection,      setSelection]      = useState<{ text: string; rect: DOMRect } | null>(null);
   const [annoColor,      setAnnoColor]      = useState<AnnotationColor>("amber");
   const [annoNote,       setAnnoNote]       = useState("");
+
+  // ── Bookmark / dog-ear state ─────────────────────────────────────────────
+  const [bookmarks,      setBookmarks]      = useState<ReaderBookmark[]>([]);
+
+  // Load bookmarks for this slug whenever slug or chapter changes
+  useEffect(() => {
+    setBookmarks(getBookmarks(slug));
+  }, [slug, chapterIndex]);
+
   // Inline highlights — reloaded whenever chapter or slug changes
   const [annotations,    setAnnotations]    = useState<Pick<Annotation, "selectedText" | "color">[]>([]);
 
@@ -942,6 +985,27 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
 
   const totalSections = virtualSections.length;
   const currentSection = virtualSections[chapterIndex] ?? virtualSections[0];
+
+  // ── Dog-ear bookmark helpers (depend on currentSection) ─────────────────
+  const isBookmarked = bookmarks.some((b) => b.chapterIndex === chapterIndex);
+
+  const toggleDogEar = useCallback(() => {
+    const existing = bookmarks.find((b) => b.chapterIndex === chapterIndex);
+    if (existing) {
+      removeBookmark(slug, existing.id);
+    } else {
+      const label = currentSection.kind === "chapter"
+        ? currentSection.chapter.title
+        : `${manifest.bookTitle} · Part ${chapterIndex + 1}`;
+      addBookmark(slug, {
+        id: crypto.randomUUID(),
+        chapterIndex,
+        label,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    setBookmarks(getBookmarks(slug));
+  }, [slug, chapterIndex, bookmarks, currentSection, manifest.bookTitle]);
 
   // ── Build paraKey→segIdx map whenever audio opens for a chapter ──────────
   // (placed here because it depends on currentSection, declared above)
@@ -1368,6 +1432,30 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
+        {/* Dog-ear bookmark corner ─────────────────────────────────────────── */}
+        {/* 48×48 tap target; CSS triangle border trick */}
+        <button
+          onClick={(e) => { e.stopPropagation(); toggleDogEar(); }}
+          aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
+          style={{
+            position: "absolute", top: 0, right: 0, zIndex: 20,
+            width: 48, height: 48,
+            background: "none", border: "none", padding: 0,
+            cursor: "pointer",
+            // Inner triangle
+            display: "flex", alignItems: "flex-start", justifyContent: "flex-end",
+          }}
+        >
+          <span style={{
+            display: "block",
+            width: 0, height: 0,
+            borderStyle: "solid",
+            borderWidth: "0 36px 36px 0",
+            borderColor: `transparent ${isBookmarked ? theme.accent : theme.border} transparent transparent`,
+            opacity: isBookmarked ? 1 : 0.45,
+            transition: "border-color 0.2s, opacity 0.2s",
+          }} />
+        </button>
         {/* Invisible tap-zone hints */}
         <div style={{ position: "absolute", inset: 0, display: "flex", pointerEvents: "none", zIndex: 2 }}>
           <div style={{ width: "30%", height: "100%" }} />
@@ -1449,6 +1537,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
                 annotations={annotations}
                 audioParaKey={audioOpen ? audioParaKey : null}
                 audioOpen={audioOpen}
+                bionicMode={settings.bionicMode}
               />
             )}
             {/* Sentinel: measures how many columns content spans */}
@@ -1499,6 +1588,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           chapter={currentSection.chapter}
           bookTitle={manifest.bookTitle}
           readerHref={`/library/${slug}/read`}
+          slug={slug}
           theme={theme}
           fontFamily={fontFamily}
           onClose={() => setAudioOpen(false)}
@@ -1549,8 +1639,20 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
               : totalPages > 1
               ? `Page ${pageIndex + 1} of ${totalPages} · ${chapterIndex + 1}/${totalSections}`
               : `${chapterIndex + 1} of ${totalSections}`}
-            {currentSection.kind === "chapter" && currentSection.chapter.totalWordCount
-              ? ` · ~${Math.ceil(currentSection.chapter.totalWordCount / 200)} min` : ""}
+            {" · "}
+            {(() => {
+              // Count words in current chapter from actual content
+              const sec = currentSection;
+              const chWordCount = sec.kind === "chapter"
+                ? [sec.chapter.title, sec.chapter.intro ?? "", ...sec.chapter.sections.map(s => s.body)]
+                    .join(" ").split(/\s+/).filter(Boolean).length
+                : 0;
+              if (chWordCount < 50) return null;
+              const chPct = (pageIndex + 1) / Math.max(1, totalPages);
+              const wordsLeft = Math.round(chWordCount * (1 - chPct));
+              const minsLeft  = Math.ceil(wordsLeft / 200);
+              return minsLeft <= 1 ? "< 1 min left" : `~${minsLeft} min left`;
+            })()}
           </p>
         </div>
 

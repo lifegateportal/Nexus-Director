@@ -159,6 +159,56 @@ export function ReaderSettingsPanel({ settings, open, onClose, onChange, t, font
             </button>
           </div>
         </div>
+
+        {/* Bionic reading mode */}
+        <div>
+          <p style={{ fontFamily, fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.2em", textTransform: "uppercase", color: t.muted, marginBottom: "0.6rem" }}>
+            Reading Mode
+          </p>
+          <button
+            onClick={() => onChange({ bionicMode: !settings.bionicMode })}
+            style={{
+              width: "100%", display: "flex", alignItems: "center",
+              justifyContent: "space-between",
+              minHeight: "2.75rem", padding: "0 0.875rem",
+              borderRadius: "0.625rem",
+              border: `1px solid ${settings.bionicMode ? t.accent : t.border}`,
+              background: settings.bionicMode ? `${t.accent}22` : "transparent",
+              cursor: "pointer",
+              transition: "all 0.15s",
+            }}
+          >
+            <span style={{
+              fontFamily: "Georgia, serif", fontSize: "0.82rem",
+              color: settings.bionicMode ? t.accent : t.muted,
+            }}>
+              <strong style={{ fontWeight: 800 }}>Bio</strong>
+              <span style={{ opacity: 0.65 }}>nic</span>{" "}
+              <strong style={{ fontWeight: 800 }}>Rea</strong>
+              <span style={{ opacity: 0.65 }}>ding</span>
+            </span>
+            {/* Toggle pill */}
+            <span style={{
+              display: "inline-flex", alignItems: "center",
+              width: "2.25rem", height: "1.25rem",
+              borderRadius: "999px",
+              background: settings.bionicMode ? t.accent : t.border,
+              transition: "background 0.2s",
+              padding: "0.15rem",
+              flexShrink: 0,
+            }}>
+              <span style={{
+                display: "block", width: "0.9rem", height: "0.9rem",
+                borderRadius: "50%", background: "#fff",
+                transform: settings.bionicMode ? "translateX(1rem)" : "translateX(0)",
+                transition: "transform 0.2s",
+              }} />
+            </span>
+          </button>
+          <p style={{ fontSize: "0.58rem", color: t.muted, fontFamily, marginTop: "0.45rem", opacity: 0.7 }}>
+            Bold fixation points guide your eye for faster reading.
+          </p>
+        </div>
       </aside>
     </>
   );

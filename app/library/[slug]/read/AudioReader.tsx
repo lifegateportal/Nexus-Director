@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { ChapterDraft } from "@/lib/schemas/ebook";
+import {
+  getAudioPins, addAudioPin, removeAudioPin,
+} from "@/lib/reader-store";
+import type { AudioPin } from "@/lib/reader-store";
 import {
   useAudioPlayer,
   RATES,
@@ -204,6 +208,8 @@ interface Props {
   bookTitle:  string;
   /** Absolute pathname back to this reader, e.g. /library/my-book/read */
   readerHref: string;
+  /** Book slug — used to persist audio pins. */
+  slug:       string;
   theme: {
     muted:        string;
     accent:       string;
@@ -220,15 +226,99 @@ interface Props {
 }
 
 export function AudioReader({
-  chapter, bookTitle, readerHref, theme, fontFamily,
+  chapter, bookTitle, readerHref, slug, theme, fontFamily,
   onClose, startFrom,
 }: Props) {
   const {
     state, currentSeg, currentWord, segIdx, segTotal,
     rateIdx, setChapter, play, pause, resume, stop, cycleRate, seekTo,
+    setVolumeMultiplier,
   } = useAudioPlayer();
 
   const prevStartFrom = useRef<number | undefined>(undefined);
+
+  // ── Sleep timer ────────────────────────────────────────────────────────
+  const SLEEP_OPTIONS = [0, 10, 20, 30, 60] as const;
+  type SleepMins = typeof SLEEP_OPTIONS[number];
+
+  const [sleepMins,     setSleepMins]     = useState<SleepMins>(0);
+  const [sleepSecsLeft, setSleepSecsLeft] = useState(0);
+  const sleepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cycle through sleep options
+  const cycleSleep = useCallback(() => {
+    setSleepMins((prev) => {
+      const idx = SLEEP_OPTIONS.indexOf(prev);
+      const next = SLEEP_OPTIONS[(idx + 1) % SLEEP_OPTIONS.length];
+      if (next === 0) {
+        setSleepSecsLeft(0);
+        setVolumeMultiplier(1);
+      } else {
+        setSleepSecsLeft(next * 60);
+      }
+      return next;
+    });
+  }, [setVolumeMultiplier]);
+
+  // Countdown tick
+  useEffect(() => {
+    if (sleepMins === 0) {
+      if (sleepIntervalRef.current) { clearInterval(sleepIntervalRef.current); sleepIntervalRef.current = null; }
+      return;
+    }
+    sleepIntervalRef.current = setInterval(() => {
+      setSleepSecsLeft((prev) => {
+        const next = prev - 1;
+        if (next <= 0) {
+          pause();
+          setVolumeMultiplier(1);
+          setSleepMins(0);
+          return 0;
+        }
+        // Fade volume in last 90 seconds
+        setVolumeMultiplier(next <= 90 ? next / 90 : 1);
+        return next;
+      });
+    }, 1000);
+    return () => { if (sleepIntervalRef.current) clearInterval(sleepIntervalRef.current); };
+  // Only re-run when sleepMins changes (not on every re-render)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sleepMins]);
+
+  // Sleep timer display label
+  const sleepFading = sleepMins > 0 && sleepSecsLeft <= 90;
+  const sleepLabel = sleepMins === 0
+    ? null
+    : sleepFading
+      ? `${sleepSecsLeft}s`
+      : `${Math.ceil(sleepSecsLeft / 60)}m`;
+
+  // ── Audio pins ────────────────────────────────────────────────────────
+  const chapterKey = `ch-${chapter.number}`;
+
+  const [pins, setPins] = useState<AudioPin[]>([]);
+
+  // Load pins for this chapter
+  useEffect(() => {
+    setPins(getAudioPins(slug, chapterKey));
+  }, [slug, chapterKey]);
+
+  const isPinnedHere = pins.some((p) => p.segIdx === segIdx);
+
+  const togglePin = useCallback(() => {
+    const existing = pins.find((p) => p.segIdx === segIdx);
+    if (existing) {
+      removeAudioPin(slug, chapterKey, existing.id);
+    } else {
+      addAudioPin(slug, chapterKey, {
+        id: crypto.randomUUID(),
+        segIdx,
+        label: currentSeg?.text?.slice(0, 60) ?? `Segment ${segIdx + 1}`,
+        addedAt: new Date().toISOString(),
+      });
+    }
+    setPins(getAudioPins(slug, chapterKey));
+  }, [slug, chapterKey, segIdx, pins, currentSeg]);
 
   // Register chapter with the global engine when chapter changes
   useEffect(() => {
@@ -279,16 +369,35 @@ export function AudioReader({
         @keyframes nxEqC { 0%,100%{height:5px} 60%{height:12px} }
       `}</style>
 
-      {/* ── Chapter progress bar ── */}
-      <div style={{ height: "2px", background: `${theme.accent}18`, overflow: "hidden" }}>
+      {/* ── Chapter progress bar + pin markers ── */}
+      <div style={{ position: "relative", height: "4px", background: `${theme.accent}18` }}>
+        {/* Fill bar */}
         <div style={{
-          height: "100%",
+          position: "absolute", top: 0, left: 0, height: "100%",
           width: segTotal > 0
             ? `${Math.round((segIdx / segTotal) * 100)}%`
             : "0%",
           background: `linear-gradient(to right, ${theme.accent}bb, ${theme.accent})`,
           transition: "width 0.5s ease",
         }} />
+        {/* Pin markers — clickable amber diamonds */}
+        {segTotal > 0 && pins.map((pin) => (
+          <button
+            key={pin.id}
+            onClick={() => seekTo(pin.segIdx)}
+            title={pin.label}
+            aria-label={`Jump to: ${pin.label}`}
+            style={{
+              position: "absolute", top: "50%", transform: "translate(-50%, -50%) rotate(45deg)",
+              left: `${Math.round((pin.segIdx / segTotal) * 100)}%`,
+              width: 8, height: 8,
+              background: "#f59e0b",
+              border: "none", cursor: "pointer",
+              borderRadius: "1px",
+              zIndex: 2,
+            }}
+          />
+        ))}
       </div>
 
       {/* ── Now-reading strip ── */}
@@ -406,6 +515,52 @@ export function AudioReader({
           flexShrink: 0,
         }}>
           {RATES[rateIdx]}×
+        </button>
+
+        {/* Sleep timer — moon button */}
+        <button
+          onClick={cycleSleep}
+          aria-label={sleepMins === 0 ? "Set sleep timer" : `Sleep timer: ${sleepLabel}`}
+          title={sleepMins === 0 ? "Sleep timer off" : `Sleep in ${sleepLabel}`}
+          style={{
+            minWidth: "2.25rem", height: "2.25rem",
+            paddingInline: sleepLabel ? "0.5rem" : undefined,
+            background: "none",
+            border: `1px solid ${sleepMins > 0 ? (sleepFading ? "#f59e0b" : theme.accent) : theme.border}`,
+            borderRadius: "999px", cursor: "pointer",
+            color: sleepMins > 0 ? (sleepFading ? "#f59e0b" : theme.accent) : theme.muted,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: "0.2rem",
+            fontSize: "0.65rem", fontFamily, fontWeight: 600,
+            flexShrink: 0,
+            transition: "border-color 0.2s, color 0.2s",
+          }}
+        >
+          {/* Moon icon */}
+          <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.8rem", height: "0.8rem", flexShrink: 0 }}>
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+          {sleepLabel && <span>{sleepLabel}</span>}
+        </button>
+
+        {/* Pin / bookmark current position */}
+        <button
+          onClick={togglePin}
+          aria-label={isPinnedHere ? "Remove audio pin" : "Pin current position"}
+          title={isPinnedHere ? "Remove pin" : "Pin position"}
+          style={{
+            width: "2.25rem", height: "2.25rem",
+            background: isPinnedHere ? `${theme.accent}20` : "none",
+            border: `1px solid ${isPinnedHere ? theme.accent : theme.border}`,
+            borderRadius: "50%", cursor: "pointer",
+            color: isPinnedHere ? theme.accent : theme.muted,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0,
+            transition: "border-color 0.15s, background 0.15s, color 0.15s",
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.8rem", height: "0.8rem" }}>
+            <path d="M17 4a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7.382l-1 .5V14h5v6l1 1 1-1v-6h5v-2.118l-1-.5V4z" />
+          </svg>
         </button>
 
         {/* Stop */}

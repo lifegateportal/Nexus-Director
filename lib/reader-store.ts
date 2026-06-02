@@ -21,6 +21,7 @@ export type ReaderSettings = {
   fontSize:   ReaderFontSize;
   lineHeight: ReaderLineHeight;
   fontFamily: ReaderFontFamily;
+  bionicMode: boolean;
 };
 
 // ── Key builders ─────────────────────────────────────────────────────────────
@@ -93,6 +94,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize:   3,
   lineHeight: 2,
   fontFamily: "serif",
+  bionicMode: false,
 };
 
 export function getReaderSettings(): ReaderSettings {
@@ -109,4 +111,46 @@ export function saveReaderSettings(settings: ReaderSettings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch { /* ignore */ }
+}
+
+// ── Audio timestamp pins ─────────────────────────────────────────────────────
+
+export type AudioPin = {
+  id:      string;
+  segIdx:  number;
+  label:   string;   // first ~12 words of segment text
+  addedAt: string;
+};
+
+const AP_KEY = (slug: string, chapterKey: string) =>
+  `nd_audio_pins_${slug}_${chapterKey}`;
+
+export function getAudioPins(slug: string, chapterKey: string): AudioPin[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(AP_KEY(slug, chapterKey));
+    return raw ? (JSON.parse(raw) as AudioPin[]) : [];
+  } catch { return []; }
+}
+
+export function addAudioPin(
+  slug: string,
+  chapterKey: string,
+  pin: Omit<AudioPin, "id" | "addedAt">,
+): void {
+  if (typeof window === "undefined") return;
+  const pins = getAudioPins(slug, chapterKey);
+  // Prevent duplicate pins on the same segment
+  if (pins.some((p) => p.segIdx === pin.segIdx)) return;
+  pins.push({ ...pin, id: `pin-${Date.now()}`, addedAt: new Date().toISOString() });
+  pins.sort((a, b) => a.segIdx - b.segIdx);
+  try { localStorage.setItem(AP_KEY(slug, chapterKey), JSON.stringify(pins.slice(0, 50))); }
+  catch { /* ignore */ }
+}
+
+export function removeAudioPin(slug: string, chapterKey: string, id: string): void {
+  if (typeof window === "undefined") return;
+  const filtered = getAudioPins(slug, chapterKey).filter((p) => p.id !== id);
+  try { localStorage.setItem(AP_KEY(slug, chapterKey), JSON.stringify(filtered)); }
+  catch { /* ignore */ }
 }

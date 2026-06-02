@@ -68,6 +68,32 @@ const VOICE_TREATMENT: Record<
   "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 380 },
 };
 
+// ── Adaptive speed ───────────────────────────────────────────────────────────────
+// Returns a rate multiplier 0.72–1.0 for a segment based on linguistic density.
+// Applied on top of the user’s chosen speed and the segment voice treatment.
+// • Short titles and headings are already slow in VOICE_TREATMENT — no extra factor.
+// • Long average word length, many polysyllabic words, expanded scripture verse
+//   references, and long sentence word count all add moderate slowdown.
+
+function segComplexity(text: string, type: SegmentType): number {
+  if (type === "chapter-title" || type === "heading") return 1.0;
+  const words   = text.trim().split(/\s+/);
+  const wc      = Math.max(words.length, 1);
+  const avgLen  = words.reduce((s, w) => s + w.replace(/[^a-z]/gi, "").length, 0) / wc;
+  const polyPct = words.filter((w) => w.replace(/[^a-z]/gi, "").length >= 9).length / wc;
+  const hasVerse = /chapter \d+ verse/i.test(text);  // expanded scripture ref
+
+  let factor = 1.0;
+  if (avgLen  > 6.5) factor -= 0.06;
+  if (avgLen  > 7.5) factor -= 0.07;
+  if (polyPct > 0.25) factor -= 0.07;
+  if (polyPct > 0.40) factor -= 0.06;
+  if (hasVerse)       factor -= 0.06;
+  if (wc      > 25)   factor -= 0.05;
+  if (wc      > 40)   factor -= 0.05;
+  return Math.max(0.72, Math.min(1.0, factor));
+}
+
 // ── Voice selection ───────────────────────────────────────────────────────────
 
 export function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
@@ -92,20 +118,21 @@ export function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice 
 // ── Context shape ─────────────────────────────────────────────────────────────
 
 interface AudioPlayerContextValue {
-  state:       AudioState;
-  currentSeg:  Segment | null;
-  currentWord: number;
-  segIdx:      number;
-  segTotal:    number;
-  rateIdx:     number;
-  chapterMeta: AudioChapterMeta | null;
-  setChapter:  (segs: Segment[], meta: AudioChapterMeta, onProgress?: (idx: number, key: string) => void) => void;
-  play:        (fromIdx?: number) => void;
-  pause:       () => void;
-  resume:      () => void;
-  stop:        () => void;
-  cycleRate:   () => void;
-  seekTo:      (idx: number) => void;
+  state:               AudioState;
+  currentSeg:          Segment | null;
+  currentWord:         number;
+  segIdx:              number;
+  segTotal:            number;
+  rateIdx:             number;
+  chapterMeta:         AudioChapterMeta | null;
+  setChapter:          (segs: Segment[], meta: AudioChapterMeta, onProgress?: (idx: number, key: string) => void) => void;
+  play:                (fromIdx?: number) => void;
+  pause:               () => void;
+  resume:              () => void;
+  stop:                () => void;
+  cycleRate:           () => void;
+  seekTo:              (idx: number) => void;
+  setVolumeMultiplier: (v: number) => void;
 }
 
 const AudioPlayerContext = createContext<AudioPlayerContextValue | null>(null);
@@ -162,6 +189,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   // no large inline base64).
   const silentAudioRef    = useRef<HTMLAudioElement | null>(null);
   const silentBlobUrlRef  = useRef<string | null>(null);
+
+  // ── Volume multiplier — used by sleep timer fade-out ──────────────────────
+  // Values from 1.0 (full) down to ~0.0 (silent). Applied per utterance.
+  const volumeMultiplierRef = useRef(1.0);
 
   const ensureSilentAudio = useCallback((): HTMLAudioElement | null => {
     if (typeof window === "undefined") return null;
@@ -329,9 +360,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       onProgressRef.current?.(idx, seg.paraKey);
 
       const utt    = new SpeechSynthesisUtterance(seg.text);
-      utt.rate     = treatment.rate * userRate;
+      utt.rate     = treatment.rate * userRate * segComplexity(seg.text, seg.type);
       utt.pitch    = treatment.pitch;
-      utt.volume   = treatment.volume;
+      utt.volume   = treatment.volume * volumeMultiplierRef.current;
       utt.lang     = "en-US";
       if (voice) utt.voice = voice;
 
@@ -554,12 +585,16 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     }, 80);
   }, [startAudioCtx, startWatchdog, updateMediaSession]);
 
+  const setVolumeMultiplier = useCallback((v: number) => {
+    volumeMultiplierRef.current = Math.max(0, Math.min(1, v));
+  }, []);
+
   return (
     <AudioPlayerContext.Provider
       value={{
         state, currentSeg, currentWord, segIdx, segTotal,
         rateIdx, chapterMeta,
-        setChapter, play, pause, resume, stop, cycleRate, seekTo,
+        setChapter, play, pause, resume, stop, cycleRate, seekTo, setVolumeMultiplier,
       }}
     >
       {children}
