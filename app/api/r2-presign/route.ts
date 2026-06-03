@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 const RequestSchema = z.object({
   filename:    z.string().min(1).max(255),
   contentType: z.string().min(1),
-  prefix:      z.enum(["videos", "images"]).default("videos"),
+  prefix:      z.enum(["videos", "images", "voice-samples"]).default("videos"),
 });
 
 export async function POST(req: NextRequest) {
