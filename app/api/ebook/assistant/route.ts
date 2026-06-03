@@ -67,13 +67,34 @@ const LibraryPatchSchema = z.object({
   coverAccent:  CoverAccentSchema.optional(),
 });
 
+// Back matter patch must be partial and must not default missing keys to []
+// (otherwise glossary-only edits can wipe reading guide/resources/scripture index).
+const BackMatterPatchSchema = z.object({
+  scriptureIndex: z.array(z.object({
+    reference: z.string(),
+    translation: z.string(),
+    chapters: z.array(z.number()),
+  })).optional(),
+  glossary: z.array(z.object({
+    term: z.string(),
+    definition: z.string(),
+    firstAppearance: z.string(),
+  })).optional(),
+  readingGroupGuide: z.array(z.object({
+    chapterNumber: z.number(),
+    chapterTitle: z.string(),
+    questions: z.array(z.string()),
+  })).optional(),
+  recommendedResources: z.array(z.string()).optional(),
+});
+
 // The agent returns only what changed — undefined fields = no change
 const EbookChangeSchema = z.object({
   bookTitle:     z.string().optional(),
   subtitle:      z.string().optional(),
   authorName:    z.string().optional(),
   frontMatter:   FrontBackMatterSchema.optional(),
-  backMatter:    BackMatterSchema.optional(),                 // glossary, reading guide, scripture index, resources
+  backMatter:    BackMatterPatchSchema.optional(),            // partial back matter patch only
   chapters:      z.array(ChapterDraftSchema).optional(),     // ONLY for section reorders / full restructures
   chapterPatches: z.array(ChapterPatchSchema).optional(),    // preferred for chapter-level field edits
   updatedSections: z.array(SectionDraftSchema).optional(),   // targeted section edits
@@ -483,15 +504,53 @@ OUTPUT RULES
       });
     }
 
-    // Merge back matter patch — only overwrite the sub-fields the AI returned
+    const lowerInstruction = instruction.toLowerCase();
+    const clearIntent = /\b(clear|remove|delete|wipe|reset)\b/i;
+    const glossaryIntent = /\bglossary\b/i;
+    const scriptureIntent = /\bscripture\s*index|index\s+of\s+scripture\b/i;
+    const guideIntent = /\breading\s+group\s+guide|discussion\s+questions?|study\s+guide\b/i;
+    const resourcesIntent = /\brecommended\s+resources?|resources\b/i;
+
+    // Merge back matter patch — only overwrite keys explicitly returned,
+    // and do not treat empty arrays as destructive unless user asked to clear that box.
     let mergedBackMatter = manifest.backMatter ?? null;
     if (object.backMatter !== undefined) {
-      mergedBackMatter = {
-        scriptureIndex:      object.backMatter.scriptureIndex      ?? mergedBackMatter?.scriptureIndex      ?? [],
-        glossary:            object.backMatter.glossary            ?? mergedBackMatter?.glossary            ?? [],
-        readingGroupGuide:   object.backMatter.readingGroupGuide   ?? mergedBackMatter?.readingGroupGuide   ?? [],
-        recommendedResources: object.backMatter.recommendedResources ?? mergedBackMatter?.recommendedResources ?? [],
+      const next = {
+        scriptureIndex: mergedBackMatter?.scriptureIndex ?? [],
+        glossary: mergedBackMatter?.glossary ?? [],
+        readingGroupGuide: mergedBackMatter?.readingGroupGuide ?? [],
+        recommendedResources: mergedBackMatter?.recommendedResources ?? [],
       };
+
+      const hasOwn = (k: keyof z.infer<typeof BackMatterPatchSchema>) =>
+        Object.prototype.hasOwnProperty.call(object.backMatter, k);
+
+      if (hasOwn("scriptureIndex")) {
+        const v = object.backMatter.scriptureIndex;
+        if (v !== undefined && (v.length > 0 || (v.length === 0 && clearIntent.test(lowerInstruction) && scriptureIntent.test(lowerInstruction)))) {
+          next.scriptureIndex = v;
+        }
+      }
+      if (hasOwn("glossary")) {
+        const v = object.backMatter.glossary;
+        if (v !== undefined && (v.length > 0 || (v.length === 0 && clearIntent.test(lowerInstruction) && glossaryIntent.test(lowerInstruction)))) {
+          next.glossary = v;
+        }
+      }
+      if (hasOwn("readingGroupGuide")) {
+        const v = object.backMatter.readingGroupGuide;
+        if (v !== undefined && (v.length > 0 || (v.length === 0 && clearIntent.test(lowerInstruction) && guideIntent.test(lowerInstruction)))) {
+          next.readingGroupGuide = v;
+        }
+      }
+      if (hasOwn("recommendedResources")) {
+        const v = object.backMatter.recommendedResources;
+        if (v !== undefined && (v.length > 0 || (v.length === 0 && clearIntent.test(lowerInstruction) && resourcesIntent.test(lowerInstruction)))) {
+          next.recommendedResources = v;
+        }
+      }
+
+      mergedBackMatter = next;
     }
 
     const updatedManifest = {

@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
@@ -178,7 +178,28 @@ ${excerptPayload}`;
         // ── Post-process: prune low-quality entries and enforce monotonicity ──
         const priorProseText = priorSectionsSample.join(" ");
         const cleanedPlans = (object.sectionPlans ?? []).map((sp) => {
+          const sectionInput = sections.find((s) => s.sectionNumber === sp.sectionNumber);
+          const maxExcerpt = Math.max(1, sectionInput?.transcriptExcerpts?.length ?? 0);
           let entries = sortAndPruneEntries(sp.paragraphPlan ?? []);
+
+          // Keep only valid excerpt anchors for this section.
+          // This prevents cross-section bleed caused by out-of-range excerpt numbers.
+          entries = entries
+            .map((entry) => {
+              const supportedExcerptNumbers = Array.from(new Set(
+                (entry.supportedExcerptNumbers ?? [])
+                  .filter((n) => Number.isInteger(n) && n >= 1 && n <= maxExcerpt)
+              ));
+              return {
+                ...entry,
+                supportedExcerptNumbers,
+                minExcerptNumber: supportedExcerptNumbers.length > 0
+                  ? Math.min(...supportedExcerptNumbers)
+                  : undefined,
+              };
+            })
+            .filter((entry) => entry.supportedExcerptNumbers.length > 0);
+
           if (priorProseText.length > 100) {
             entries = entries.filter((entry) => {
               if (!entry.purpose || entry.purpose.length < 20) return true;
@@ -186,6 +207,9 @@ ${excerptPayload}`;
               return ngramOverlap(entry.purpose, priorProseText) < 0.30;
             });
           }
+
+          // Enforce monotonic excerpt flow within each section plan.
+          entries.sort((a, b) => (a.minExcerptNumber ?? 0) - (b.minExcerptNumber ?? 0));
           return { sectionNumber: sp.sectionNumber, paragraphPlan: entries };
         });
 

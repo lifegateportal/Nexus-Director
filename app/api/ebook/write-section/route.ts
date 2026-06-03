@@ -292,6 +292,32 @@ function filterConsumedExcerpts(
   return { filtered: filtered.length > 0 ? filtered : excerpts.slice(0, 1), removedCount };
 }
 
+type ExcerptEntry = { text: string; sourceNumber: number };
+
+function filterConsumedExcerptEntries(
+  entries: ExcerptEntry[],
+  alreadyCoveredPoints: string[],
+  threshold = 0.40
+): { filtered: ExcerptEntry[]; removedCount: number } {
+  if (alreadyCoveredPoints.length === 0) return { filtered: entries, removedCount: 0 };
+  const coveredText = alreadyCoveredPoints.join(" ");
+  const filtered: ExcerptEntry[] = [];
+  let removedCount = 0;
+
+  for (const entry of entries) {
+    const excerpt = entry.text;
+    const wordCount = excerpt.trim().split(/\s+/).length;
+    if (wordCount < 40) { filtered.push(entry); continue; }
+    if (containsScripture(excerpt)) { filtered.push(entry); continue; }
+    const overlap = excerptOverlapWithCoveredContent(excerpt, coveredText);
+    if (overlap >= threshold) removedCount++;
+    else filtered.push(entry);
+  }
+
+  // Always keep at least one excerpt so the section has source material
+  return { filtered: filtered.length > 0 ? filtered : entries.slice(0, 1), removedCount };
+}
+
 const EDITORIAL_SYSTEM = `# ROLE AND OBJECTIVE
 You are an elite, New York Times-bestselling ghostwriter and developmental editor. Your task is to synthesize raw, unstructured audio transcripts into a highly polished, premium book chapter.
 
@@ -602,17 +628,40 @@ Your opening paragraph must land where that argument was heading — do NOT re-e
   const dedupCorpus = (assignment.priorSectionsSample ?? []).length > 0
     ? assignment.priorSectionsSample ?? []
     : assignment.alreadyCoveredPoints ?? [];
-  const { filtered: dedupedExcerpts, removedCount: excerptRemovedCount } = filterConsumedExcerpts(
-    assignment.transcriptExcerpts,
+  const excerptEntries: ExcerptEntry[] = (assignment.transcriptExcerpts ?? []).map((text, idx) => ({
+    text,
+    sourceNumber: idx + 1,
+  }));
+  const { filtered: dedupedExcerptEntries, removedCount: excerptRemovedCount } = filterConsumedExcerptEntries(
+    excerptEntries,
     dedupCorpus
   );
-  const effectiveExcerpts = excerptRemovedCount > 0 ? dedupedExcerpts : assignment.transcriptExcerpts;
+  let effectiveExcerptEntries = excerptRemovedCount > 0 ? dedupedExcerptEntries : excerptEntries;
+
+  // When chapter-plan is available, enforce its excerpt anchors surgically.
+  // This prevents section bodies from drifting into prior/adjacent subtitle material.
+  if ((assignment.assignedPlan ?? []).length > 0) {
+    const anchored = new Set<number>();
+    for (const step of assignment.assignedPlan ?? []) {
+      for (const n of step.supportedExcerptNumbers ?? []) {
+        if (Number.isInteger(n) && n > 0) anchored.add(n);
+      }
+    }
+    if (anchored.size > 0) {
+      const anchoredEntries = effectiveExcerptEntries.filter((e) => anchored.has(e.sourceNumber));
+      if (anchoredEntries.length > 0) {
+        effectiveExcerptEntries = anchoredEntries;
+      }
+    }
+  }
+
+  const effectiveExcerpts = effectiveExcerptEntries.map((e) => e.text);
 
   // ── Seq-A1: Label each excerpt with its position "of N" so the LLM knows
   // the total sequence and cannot pretend later excerpts come first.
   const totalExcerpts = assignment.transcriptExcerpts.length; // use original count so numbering is stable
-  const excerptBlock = effectiveExcerpts
-    .map((t, i) => `[EXCERPT ${i + 1} of ${totalExcerpts}]\n${t}`)
+  const excerptBlock = effectiveExcerptEntries
+    .map((e) => `[EXCERPT ${e.sourceNumber} of ${totalExcerpts}]\n${e.text}`)
     .join("\n\n---\n\n");
 
   const quoteBlock =
@@ -729,7 +778,7 @@ ${bannedRecapsBlock}
 ${lexicalFingerprintBlock}
 ${diminishingPermissionBlock}${sequenceTurnsBlock}${storyPayoffBlock}${scripturePositionsBlock}${priorExcerptTailBlock}
 
-TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these — numbered EXCERPT 1 of ${totalExcerpts} through EXCERPT ${effectiveExcerpts.length} of ${totalExcerpts}):
+TRANSCRIPT EXCERPTS TO WRITE FROM (use ONLY these — excerpt numbers are original and may be non-contiguous after surgical filtering):
 ${excerptBlock}
 
 SECTION SCOPE RULE — READ BEFORE WRITING:
