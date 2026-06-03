@@ -136,34 +136,33 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
     try { localStorage.setItem(storageKey, JSON.stringify(state)); } catch { /* storage full */ }
   }, [storageKey]);
 
-  // ── Upload voice sample to R2 via presign route ───────────────────────────
+  // ── Upload voice sample to R2 via server-side route ──────────────────────
+  // Using server-side upload (not presigned PUT) to avoid browser CORS issues.
 
   async function uploadSampleToR2(file: File): Promise<string> {
     setUploadingR2(true);
     try {
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "wav";
-      // Use the existing r2-presign endpoint to get an upload URL
-      const presignRes = await fetch("/api/r2-presign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: `voice-samples/${Date.now()}-sample.${ext}`,
-          contentType: file.type || "audio/wav",
-        }),
-      });
-      if (!presignRes.ok) {
-        const err = await presignRes.json() as { error?: string };
-        throw new Error(err.error ?? `R2 presign failed (${presignRes.status})`);
-      }
-      const { presignedUrl, publicUrl } = await presignRes.json() as { presignedUrl: string; publicUrl: string };
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("prefix", "voice-samples");
+      formData.append("ext", ext);
 
-      // Upload file directly to R2
-      const uploadRes = await fetch(presignedUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "audio/wav" },
-        body: file,
-      });
-      if (!uploadRes.ok) throw new Error(`R2 upload failed (${uploadRes.status})`);
+      const res = await fetch("/api/r2-upload", { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        throw new Error(err.error ?? `Upload failed (${res.status})`);
+      }
+      const { publicUrl, key } = await res.json() as { publicUrl: string | null; key: string };
+
+      // publicUrl is null when R2_PUBLIC_URL env var is not configured.
+      // Fall back to the object key so the clone route can fetch via presigned GET.
+      if (!publicUrl) {
+        throw new Error(
+          "R2_PUBLIC_URL is not set — RunPod cannot reach the sample without a public URL. " +
+          "Add R2_PUBLIC_URL to your environment variables."
+        );
+      }
 
       return publicUrl;
     } finally {
@@ -319,7 +318,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
             <input
               ref={fileInputRef}
               type="file"
-              accept="audio/*,.mp3,.wav,.m4a,.flac,.aac,.ogg"
+              accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.aac,.ogg,.mov,.mp4"
               onChange={(e) => {
                 const f = e.target.files?.[0] ?? null;
                 setSampleFile(f);
