@@ -79,23 +79,83 @@ function BookCover({ book, className }: { book: PublishedBookEntry; className?: 
 function NewReleasesHero({ books }: { books: PublishedBookEntry[] }) {
   const recent = [...books]
     .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
-    .slice(0, 3);
+    .slice(0, 5);
 
-  const [featured, ...rest] = recent;
+  const [featured, ...shelf] = recent;
 
   return (
-    <section className="border-b border-slate-800/50 py-10 lg:py-14">
-      <p className="mb-6 text-[10px] font-bold uppercase tracking-[0.28em] text-amber-500">
+    <section className="border-b border-slate-800/50 pb-10 pt-6 lg:py-14">
+      <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.28em] text-amber-500 lg:mb-6">
         New Releases
       </p>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      {/* ── Mobile: cinematic portrait card ───────────────────────────────── */}
+      <div className="lg:hidden">
+        <Link href={`/library/${featured.slug}`} className="group relative block overflow-hidden rounded-2xl border border-slate-800/60">
+          {/* Full-bleed cover */}
+          <div className={`relative h-[58vw] min-h-[220px] w-full bg-gradient-to-br ${COVER_GRADIENT[featured.coverAccent] ?? COVER_GRADIENT.amber}`}>
+            {featured.coverImageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={featured.coverImageUrl} alt={featured.title} className="h-full w-full object-cover" />
+            ) : (
+              <>
+                <div className="absolute inset-y-0 left-0 w-3 bg-black/25" />
+                <div className="absolute inset-y-2 right-2 w-2 rounded-sm bg-white/[0.06]" />
+              </>
+            )}
+            {/* Gradient overlay — text lives here */}
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/60 to-transparent" />
+            <div className="absolute bottom-0 left-0 right-0 p-5">
+              <span className={`mb-3 inline-block rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${ACCENT_BADGE[featured.coverAccent] ?? ACCENT_BADGE.amber}`}>
+                Latest Release
+              </span>
+              <h2 className="mb-1 text-xl font-bold leading-tight tracking-tight text-white" style={{ fontFamily: "Georgia, serif" }}>
+                {featured.title}
+              </h2>
+              {featured.subtitle && <p className="mb-2 text-sm text-slate-400">{featured.subtitle}</p>}
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-slate-300">{featured.authorName}</p>
+                <span className="text-slate-600">·</span>
+                <p className="text-xs text-slate-500">{featured.chapterCount} chapters</p>
+              </div>
+            </div>
+          </div>
+          {/* Synopsis below */}
+          <div className="bg-slate-900/80 px-5 py-4">
+            <p className="line-clamp-2 text-sm leading-relaxed text-slate-400">{featured.synopsis}</p>
+          </div>
+        </Link>
 
+        {/* Horizontal shelf */}
+        {shelf.length > 0 && (
+          <div className="mt-4">
+            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Also New</p>
+            <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory", WebkitOverflowScrolling: "touch" }}>
+              {shelf.map((book) => (
+                <Link
+                  key={book.slug}
+                  href={`/library/${book.slug}`}
+                  className="group flex-shrink-0"
+                  style={{ scrollSnapAlign: "start", width: "38vw", maxWidth: "160px" }}
+                >
+                  <BookCover book={book} className="mb-2.5 h-[25vw] max-h-[110px] w-full" />
+                  <p className="line-clamp-2 text-xs font-semibold leading-tight text-slate-200" style={{ fontFamily: "Georgia, serif" }}>
+                    {book.title}
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] text-slate-500">{book.authorName}</p>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Desktop: 3-col grid ───────────────────────────────────────────── */}
+      <div className="hidden gap-4 lg:grid lg:grid-cols-3">
         <Link
           href={`/library/${featured.slug}`}
-          className="group relative col-span-1 overflow-hidden rounded-2xl border border-slate-800/60 bg-slate-900/60 transition hover:border-slate-700 lg:col-span-2"
+          className="group relative col-span-2 overflow-hidden rounded-2xl border border-slate-800/60 bg-slate-900/60 transition hover:border-slate-700"
         >
-          {/* Dim cover bleed background */}
           {featured.coverImageUrl && (
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -103,15 +163,13 @@ function NewReleasesHero({ books }: { books: PublishedBookEntry[] }) {
               <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/85 to-slate-950/40" />
             </>
           )}
-
-          <div className="relative flex flex-col gap-6 p-6 lg:flex-row lg:items-end lg:p-8">
-            <BookCover book={featured} className="h-52 w-36 self-start transition-transform duration-300 group-hover:scale-[1.03] lg:h-64 lg:w-44" />
-
-            <div className="flex-1">
+          <div className="relative flex items-end gap-8 p-8">
+            <BookCover book={featured} className="h-64 w-44 flex-shrink-0 self-start transition-transform duration-300 group-hover:scale-[1.03]" />
+            <div className="flex-1 pb-2">
               <span className={`mb-4 inline-block rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ${ACCENT_BADGE[featured.coverAccent] ?? ACCENT_BADGE.amber}`}>
                 Latest Release
               </span>
-              <h2 className="mb-1 text-2xl font-bold leading-tight tracking-tight text-white lg:text-3xl" style={{ fontFamily: "Georgia, serif" }}>
+              <h2 className="mb-1 text-3xl font-bold leading-tight tracking-tight text-white" style={{ fontFamily: "Georgia, serif" }}>
                 {featured.title}
               </h2>
               {featured.subtitle && <p className="mb-3 text-sm text-slate-400">{featured.subtitle}</p>}
@@ -125,9 +183,8 @@ function NewReleasesHero({ books }: { books: PublishedBookEntry[] }) {
           </div>
         </Link>
 
-        {/* ── Secondary cards ── */}
         <div className="flex flex-col gap-4">
-          {rest.map((book) => (
+          {shelf.slice(0, 2).map((book) => (
             <Link
               key={book.slug}
               href={`/library/${book.slug}`}
@@ -141,12 +198,12 @@ function NewReleasesHero({ books }: { books: PublishedBookEntry[] }) {
                 </>
               )}
               <div className="relative flex items-center gap-4 p-4">
-                <BookCover book={book} className="h-24 w-16" />
+                <BookCover book={book} className="h-24 w-16 flex-shrink-0" />
                 <div className="min-w-0 flex-1">
                   <span className={`mb-2 inline-block rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest ${ACCENT_BADGE[book.coverAccent] ?? ACCENT_BADGE.amber}`}>
                     New
                   </span>
-                  <h3 className="mb-1 truncate font-bold leading-tight text-white" style={{ fontFamily: "Georgia, serif" }}>
+                  <h3 className="mb-1 line-clamp-2 font-bold leading-tight text-white" style={{ fontFamily: "Georgia, serif" }}>
                     {book.title}
                   </h3>
                   <p className="line-clamp-2 text-xs leading-relaxed text-slate-400">{book.synopsis}</p>
@@ -156,7 +213,6 @@ function NewReleasesHero({ books }: { books: PublishedBookEntry[] }) {
             </Link>
           ))}
         </div>
-
       </div>
     </section>
   );
