@@ -255,4 +255,8 @@ def handler(job: dict) -> dict:
 
 
 if __name__ == "__main__":
+    # Pre-load model at startup so the first job doesn't cold-start
+    log.info("Pre-loading XTTS v2 model at worker startup…")
+    get_tts()
+    log.info("Worker ready.")
     runpod.serverless.start({"handler": handler})
