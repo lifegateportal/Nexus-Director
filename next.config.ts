@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory", "pdfkit"],
+  experimental: {
+    serverActions: { bodySizeLimit: "30mb" },
+  },
   outputFileTracingIncludes: {
     "/api/ebook/export": ["./node_modules/pdfkit/js/data/**/*"],
   },
