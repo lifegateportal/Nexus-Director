@@ -11,8 +11,8 @@ transferring
 # Next app source is not needed for the voice worker image.
 app
 lib
-/[[]auth[]]
-/[[]internal[]]
+/\[auth\]
+/\[internal\]
 
 # Keep only the voice worker assets that the Dockerfile copies.
 scripts
