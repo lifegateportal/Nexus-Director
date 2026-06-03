@@ -467,6 +467,7 @@ export const WriteChapterRequestSchema = z.object({
   bannedRecaps: z.array(z.string()).default([]),
   alreadyQuotedRefs: z.array(z.string()).default([]),
   forbiddenVerseTexts: z.array(z.string()).default([]),
+  overusedPhrases: z.array(z.string()).default([]),
 });
 
 export const WriteChapterOutputSchema = z.object({

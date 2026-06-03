@@ -1,6 +1,6 @@
 # ── Nexus Director Voice Worker ───────────────────────────────────────────────
-# Base: RunPod PyTorch 2.1 image with CUDA 12.1 (RTX 3090 / A5000 compatible)
-FROM runpod/pytorch:2.1.0-py3.10-cuda12.1.1-devel-ubuntu22.04
+# Base: official PyTorch 2.1 + CUDA 12.1 (works on RunPod RTX 3090 / A5000)
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel
 
 WORKDIR /app
 

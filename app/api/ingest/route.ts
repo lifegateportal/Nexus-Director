@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
       schema: IngestResultSchema,
       schemaName: "IngestResult",
       schemaDescription: "Structured blueprint extracted from source content",
+      mode: "json",
       maxTokens: 4_000,
       system:
         "You are the Nexus Director Analyst. Extract a concise structured blueprint from the source. Be brief — every field should be the shortest accurate value. Do not pad or invent.",

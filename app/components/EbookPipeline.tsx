@@ -2480,9 +2480,11 @@ export function EbookPipeline({
             if (chapterAssignmentsForWrite.length > 0) {
               addLog(`  ✍ Writing Chapter ${assignment.chapterNumber} in one pass (${chapterAssignmentsForWrite.length} sections)…`);
               try {
-                const chapterWriteResult = await postJson<{ sections: Array<{ sectionNumber: number; paragraphs: string[]; claimLedger: Array<{ claim: string }> }> }>(
-                  "/api/ebook/write-chapter",
-                  {
+                // G6: route now returns SSE — read the stream and parse the data: line
+                const chapterWriteRes = await fetch("/api/ebook/write-chapter", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
                     chapterNumber: assignment.chapterNumber,
                     chapterTitle: assignment.chapterTitle,
                     chapterPremise: (architecture.chapters.find((ch) => ch.number === assignment.chapterNumber) as { chapterPremise?: string } | undefined)?.chapterPremise ?? undefined,
@@ -2500,6 +2502,7 @@ export function EbookPipeline({
                     bannedRecaps: extractBannedRecaps(allSections),
                     alreadyQuotedRefs: [...usedQuoteRefs],
                     forbiddenVerseTexts: Array.from(quotedVerseTextsByRef.values()).filter(Boolean),
+                    overusedPhrases: extractOverusedPhrases(writtenCorpus, 10), // G4
                     sections: chapterAssignmentsForWrite.map((a) => {
                       const filtered = (a.transcriptExcerpts ?? []).filter((_, idx) => {
                         const segId = (a.sourceSegmentIds ?? [])[idx];
@@ -2518,13 +2521,36 @@ export function EbookPipeline({
                         assignedPlan: chapterPlanMap.get(a.sectionNumber),
                       };
                     }),
+                  }),
+                });
+                // Read SSE buffer, extract the data: JSON line
+                const reader = chapterWriteRes.body!.getReader();
+                const dec = new TextDecoder();
+                let buf = "";
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  buf += dec.decode(value, { stream: true });
+                }
+                let chapterWriteResult: { sections: Array<{ sectionNumber: number; paragraphs: string[]; claimLedger: Array<{ claim: string }> }>; error?: string } | null = null;
+                for (const line of buf.split("\n")) {
+                  if (line.startsWith("data: ")) {
+                    chapterWriteResult = JSON.parse(line.slice(6));
+                    break;
                   }
-                );
+                }
+                if (!chapterWriteResult || chapterWriteResult.error) throw new Error(chapterWriteResult?.error ?? "Empty response from write-chapter");
+
                 for (const sec of chapterWriteResult.sections ?? []) {
                   chapterWriteCache.set(`${assignment.chapterNumber}-${sec.sectionNumber}`, {
                     paragraphs: sec.paragraphs ?? [],
                     claimLedger: sec.claimLedger ?? [],
                   });
+                  // G3: Feed claims from chapter-writer back into coveredCurrentChapter
+                  // so subsequent chapters' alreadyCoveredPoints includes these claims.
+                  for (const c of sec.claimLedger ?? []) {
+                    if (c.claim) coveredCurrentChapter.push(c.claim);
+                  }
                 }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} written (${chapterWriteCache.size} sections cached)`);
               } catch (writeErr) {

@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     chapterNumber, chapterTitle, chapterPremise, nextChapterTitle, coreThesis,
     primaryTranslation, voiceDNA, authorConfig, sections,
     alreadyCoveredPoints, priorSectionsSample, bannedRecaps,
-    alreadyQuotedRefs, forbiddenVerseTexts,
+    alreadyQuotedRefs, forbiddenVerseTexts, overusedPhrases,
   } = input;
 
   // ── Voice DNA block ────────────────────────────────────────────────────────
@@ -72,6 +72,14 @@ SCRIPTURE DEDUP
 ════════════════════════════════════════════${alreadyQuotedRefs.length > 0 ? `\nAlready quoted in full — reference only, do NOT reprint: ${alreadyQuotedRefs.join(", ")}` : ""}${forbiddenVerseTexts.length > 0 ? `\nForbidden verse texts (exact text already printed — hard ban): ${forbiddenVerseTexts.slice(0, 5).map((t) => `"${t.slice(0, 60)}…"`).join(" | ")}` : ""}`
     : "";
 
+  // G4: Lexical fingerprint — top overused phrases across the written corpus
+  const lexicalBlock = overusedPhrases.length > 0
+    ? `\n\n════════════════════════════════════════════
+LEXICAL FINGERPRINT — FIND FRESHER LANGUAGE
+════════════════════════════════════════════
+These 3-gram constructions are already overused across prior chapters. Avoid them — find different phrasing for the same ideas:\n${overusedPhrases.slice(0, 15).map((p) => `• "${p}"`).join("\n")}`
+    : "";
+
   const translationBlock = primaryTranslation
     ? `\n\nPRIMARY TRANSLATION: Default to ${primaryTranslation} for any verse where the speaker did not specify a translation.`
     : "";
@@ -91,8 +99,14 @@ SCRIPTURE DEDUP
     const keyPointsText = (sec.keyPoints ?? []).length > 0
       ? `\nKEY POINTS:\n${sec.keyPoints.map((k) => `• ${k}`).join("\n")}`
       : "";
+    // G5: Include assigned quotes so the LLM knows which scriptures belong in this section
+    const quotesText = (sec.quotes ?? []).length > 0
+      ? `\nASSIGNED QUOTES FOR THIS SECTION:\n${sec.quotes.map((q) =>
+          `  • ${q.reference}${q.translation ? ` (${q.translation})` : ""}: "${q.text.slice(0, 200)}${q.text.length > 200 ? "…" : ""}"`
+        ).join("\n")}`
+      : "";
     const lastFlag = sec.isLastSectionInChapter ? " [LAST SECTION — hard chapter boundary: do NOT develop the next chapter's themes]" : "";
-    return `══ SECTION ${idx + 1} of ${sections.length}: §${sec.sectionNumber} — "${sec.heading}" (~${sec.targetWordCount ?? 500} words)${lastFlag} ══${keyPointsText}${planBlock}\n\nTRANSCRIPT EXCERPTS:\n${excerpts}`;
+    return `══ SECTION ${idx + 1} of ${sections.length}: §${sec.sectionNumber} — "${sec.heading}" (~${sec.targetWordCount ?? 500} words)${lastFlag} ══${keyPointsText}${quotesText}${planBlock}\n\nTRANSCRIPT EXCERPTS:\n${excerpts}`;
   }).join("\n\n────────────────────────────────────────────\n\n");
 
   // ── System prompt ──────────────────────────────────────────────────────────
@@ -140,7 +154,7 @@ Each section is sealed. Do NOT preview the next section's content from within th
 • Transitional banter that has no teaching content: "moving on", "next point", "back to our text", "as I was saying"
 • Incomplete or broken sentences that trail off without a point
 • Any sentence beginning with a markdown heading symbol (#, ##, ###)
-${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${priorProseBlock}${quoteDedupBlock}${translationBlock}
+${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${priorProseBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
 ${READER_NORMALIZATION_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}`;
 
@@ -161,34 +175,54 @@ Return a JSON object with a "sections" array. Each element:
 
 ${sectionPayload}`;
 
-  try {
-    const { object } = await generateObject({
-      model: deepSeekModel,
-      schema: WriteChapterOutputSchema,
-      mode: "json",
-      temperature: 0.7,
-      system,
-      prompt,
-    });
+  // G6: SSE stream with heartbeat — prevents proxy read-timeout on long chapters
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const ping = setInterval(() => {
+        try { controller.enqueue(encoder.encode(": ping\n\n")); } catch { /* closed */ }
+      }, 15_000);
+      try {
+        const { object } = await generateObject({
+          model: deepSeekModel,
+          schema: WriteChapterOutputSchema,
+          mode: "json",
+          maxTokens: 16_000, // G2: explicit ceiling for full-chapter output
+          temperature: 0.55, // G1: lower temp for cross-section coherence
+          system,
+          prompt,
+        });
 
-    // Clean each section's paragraphs — two passes:
-    // 1. stripAudienceLanguage (deterministic regex — catches any banter the LLM slipped through)
-    // 2. Drop heading-prefixed lines and empty results
-    const cleaned = {
-      sections: (object.sections ?? []).map((sec) => ({
-        ...sec,
-        paragraphs: (sec.paragraphs ?? [])
-          .map((p) => stripAudienceLanguage(p.trim()))
-          .filter(Boolean)
-          .filter((p) => !(/^#{1,6}\s/.test(p))),
-      })),
-    };
+        // Clean each section's paragraphs — two passes:
+        // 1. stripAudienceLanguage (deterministic regex)
+        // 2. Drop heading-prefixed lines and empty results
+        const cleaned = {
+          sections: (object.sections ?? []).map((sec) => ({
+            ...sec,
+            paragraphs: (sec.paragraphs ?? [])
+              .map((p) => stripAudienceLanguage(p.trim()))
+              .filter(Boolean)
+              .filter((p) => !(/^#{1,6}\s/.test(p))),
+          })),
+        };
 
-    return NextResponse.json(cleaned, { status: 200 });
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Chapter write failed" },
-      { status: 500 }
-    );
-  }
+        clearInterval(ping);
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(cleaned)}\n\n`));
+      } catch (err) {
+        clearInterval(ping);
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: err instanceof Error ? err.message : "Chapter write failed" })}\n\n`));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
