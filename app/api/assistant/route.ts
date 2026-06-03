@@ -28,6 +28,7 @@ const RequestSchema = z.object({
 
 const LessonPatchSchema = z.object({
   lessonIndex:    z.number().int().min(0),
+  operation:      z.enum(["update", "delete"]).default("update").optional(), // Explicit delete op
   title:          z.string().optional(),
   type:           z.enum(["video", "reading", "quiz", "exercise"]).optional(),
   durationMinutes:z.number().optional(),
@@ -44,10 +45,13 @@ const LessonPatchSchema = z.object({
 
 const ModulePatchSchema = z.object({
   moduleIndex:       z.number().int().min(0),
+  operation:         z.enum(["update", "delete", "insert"]).default("update").optional(), // Explicit ops
+  insertAfterIndex:  z.number().int().min(-1).optional(), // For insert: -1 = beginning
   moduleTitle:       z.string().optional(),
   moduleDescription: z.string().optional(),
   learningObjectives:z.array(z.string()).optional(),
   keyTerms: z.array(z.object({ term: z.string(), definition: z.string() })).optional(),
+  lessons: z.array(z.any()).optional(), // Full lessons array for new modules
   lessonPatches: z.array(LessonPatchSchema).optional(),
 });
 
@@ -100,24 +104,71 @@ function applyAcademyPatch(
   const updated: AcademyPackage = { ...academy, ...topLevel };
 
   if (landingPage)     updated.landingPage    = { ...academy.landingPage,    ...landingPage };
-  if (pricing)         updated.pricing        = pricing;
-  if (onboardingSteps) updated.onboardingSteps = onboardingSteps;
+  // SAFEGUARD: Only replace arrays if they're non-empty or explicitly null
+  if (pricing !== undefined) {
+    if (pricing === null) updated.pricing = []; // explicit clear
+    else if (pricing.length > 0) updated.pricing = pricing;
+    // else: empty array in patch = ignored (prevents accidental wipes)
+  }
+  if (onboardingSteps !== undefined) {
+    if (onboardingSteps === null) updated.onboardingSteps = [];
+    else if (onboardingSteps.length > 0) updated.onboardingSteps = onboardingSteps;
+  }
   if (seoMeta)         updated.seoMeta        = { ...academy.seoMeta, ...seoMeta };
 
   if (curriculumPatches?.length) {
-    const curriculum = academy.curriculum.map((m) => ({ ...m, lessons: m.lessons.map((l) => ({ ...l })) }));
-    for (const mp of curriculumPatches) {
-      const { moduleIndex, lessonPatches, ...modFields } = mp;
+    let curriculum = academy.curriculum.map((m) => ({ ...m, lessons: m.lessons.map((l) => ({ ...l })) }));
+    
+    // Sort patches: deletes last, inserts first, updates middle
+    const deletes = curriculumPatches.filter((p) => p.operation === "delete");
+    const inserts = curriculumPatches.filter((p) => p.operation === "insert");
+    const updates = curriculumPatches.filter((p) => !p.operation || p.operation === "update");
+
+    // 1. Apply inserts
+    for (const mp of inserts) {
+      const { insertAfterIndex = -1, lessons: newLessons, ...modFields } = mp;
+      if (!newLessons || newLessons.length === 0) continue;
+      const newModule = { ...modFields, lessons: newLessons } as typeof curriculum[0];
+      if (insertAfterIndex === -1) curriculum.unshift(newModule);
+      else curriculum.splice(insertAfterIndex + 1, 0, newModule);
+    }
+
+    // 2. Apply updates
+    for (const mp of updates) {
+      const { moduleIndex, lessonPatches, operation, insertAfterIndex, lessons: _, ...modFields } = mp;
       if (moduleIndex < 0 || moduleIndex >= curriculum.length) continue;
       Object.assign(curriculum[moduleIndex], modFields);
+      
       if (lessonPatches) {
-        for (const lp of lessonPatches) {
-          const { lessonIndex, ...lessonFields } = lp;
-          if (lessonIndex < 0 || lessonIndex >= curriculum[moduleIndex].lessons.length) continue;
-          Object.assign(curriculum[moduleIndex].lessons[lessonIndex], lessonFields);
+        let lessons = curriculum[moduleIndex].lessons;
+        const lessonDeletes = lessonPatches.filter((lp) => lp.operation === "delete");
+        const lessonUpdates = lessonPatches.filter((lp) => !lp.operation || lp.operation === "update");
+        
+        // Apply lesson updates
+        for (const lp of lessonUpdates) {
+          const { lessonIndex, operation: _, ...lessonFields } = lp;
+          if (lessonIndex < 0 || lessonIndex >= lessons.length) continue;
+          Object.assign(lessons[lessonIndex], lessonFields);
         }
+        
+        // Apply lesson deletes (reverse order to maintain indices)
+        for (const lp of lessonDeletes.sort((a, b) => b.lessonIndex - a.lessonIndex)) {
+          if (lp.lessonIndex >= 0 && lp.lessonIndex < lessons.length) {
+            lessons.splice(lp.lessonIndex, 1);
+          }
+        }
+        
+        curriculum[moduleIndex].lessons = lessons;
       }
     }
+
+    // 3. Apply module deletes (reverse order to maintain indices)
+    for (const mp of deletes.sort((a, b) => b.moduleIndex - a.moduleIndex)) {
+      if (mp.moduleIndex >= 0 && mp.moduleIndex < curriculum.length) {
+        curriculum.splice(mp.moduleIndex, 1);
+      }
+    }
+
     updated.curriculum = curriculum;
   }
 
@@ -268,27 +319,49 @@ You are the Nexus Director AI — a precise, powerful academy editor with full c
 Analyse the user's instruction carefully, determine what needs to change, then return only the updated objects.
 
 ════════════════════════════════════════════
+CRITICAL: SURGICAL EDITS ONLY
+════════════════════════════════════════════
+⚠️  NEVER delete, remove, or modify content unless the user EXPLICITLY requests it with clear language like:
+    - "delete module 2"
+    - "remove the lesson about X"
+    - "clear the pricing tiers"
+    
+⚠️  When the user says "add", "update", "improve", "rewrite", "expand", or "fix" content:
+    - ONLY modify the SPECIFIC item they mention
+    - PRESERVE all other modules, lessons, and fields untouched
+    - Do NOT reorder, restructure, or reorganize unless explicitly told to
+
+⚠️  If the instruction is vague or could affect multiple items:
+    - Choose the MOST CONSERVATIVE interpretation
+    - Modify the LEAST amount of content possible
+    - When in doubt, ask for clarification using the "clarificationNeeded" field
+
+════════════════════════════════════════════
 ACADEMY CONTENT CHANGES
 ════════════════════════════════════════════
 Triggers: anything about curriculum, modules, lessons, notes, quizzes, takeaways, difficulty, theme, layout, hours, certificate
 
 CURRICULUM OPERATIONS:
-- "add a module" → add a full module with lessons, learningObjectives, keyTerms
-- "remove/delete module X" → remove that module entirely
-- "reorder modules" → rearrange module array per instruction
-- "add a lesson to module X" → append a complete lesson with notes, takeaways, quiz
-- "merge modules X and Y" → combine into one with all lessons
-- "split lesson X" → divide one lesson into two logical halves
+- "add a module" → Use operation="insert" with full module data (moduleTitle, lessons, learningObjectives, keyTerms)
+- "remove/delete module X" → Use operation="delete" on that specific moduleIndex ONLY (requires explicit "delete" or "remove" in instruction)
+- "reorder modules" → Return full curriculumPatches array with all modules in new order (requires explicit "reorder" in instruction)
+- "add a lesson to module X" → Update that module's lessons array by appending new lesson
+- "merge modules X and Y" → Delete one module, update the other with combined lessons (requires explicit "merge" in instruction)
+- "split lesson X" → Replace one lesson with two new lessons (requires explicit "split" in instruction)
 
 LESSON OPERATIONS:
-- "rewrite notes for..." → produce full, dense markdown notes grounded in source material
-- "add key takeaways to all lessons" → generate 5–7 per lesson from existing notes
-- "add action items to all lessons" → generate 3–4 concrete actions per lesson
-- "add quiz questions to..." → add/replace quiz for specific or all lessons
-- "add learning objectives to all modules" → generate 3–5 per module
-- "expand the glossary for module X" → add 4–8 keyTerms entries
-- "format all notes" → reformat every lesson's notes with proper markdown structure
-- "improve the notes for..." → rewrite specific lesson notes to be more thorough
+- "rewrite notes for lesson X" → Update ONLY that specific lesson's notes field with full, dense markdown
+- "add key takeaways to lesson X" → Update ONLY that lesson's keyTakeaways field (5–7 items from existing notes)
+- "add action items to all lessons" → Update keyTakeaways for ALL lessons (but preserve all other lesson fields)
+- "add quiz questions to lesson X" → Update ONLY that lesson's quiz field
+- "add learning objectives to module X" → Update ONLY that module's learningObjectives field
+- "expand the glossary for module X" → Update ONLY that module's keyTerms field (add 4–8 new entries, preserve existing)
+- "format all notes" → Update ONLY the notes field for each lesson with proper markdown structure (preserve all other fields)
+- "improve the notes for lesson X" → Update ONLY that specific lesson's notes field
+- "delete lesson X from module Y" → Use operation="delete" on that specific lessonIndex (requires explicit "delete" or "remove" in instruction)
+
+⚠️  LESSON EDIT RULE: When updating a lesson, include ONLY the lessonIndex and the specific fields you're changing. 
+    Do NOT include unchanged fields like title, type, durationMinutes unless explicitly modifying them.
 
 NOTES FORMAT STANDARD (when writing or reformatting notes):
   # [Lesson Title]
@@ -340,27 +413,60 @@ Triggers: anything about the landing page, website, social, footer, banner, inst
 - footerText: Custom copyright/tagline in the footer
 
 ════════════════════════════════════════════
-OUTPUT RULES
+OUTPUT RULES — PRESERVATION IS MANDATORY
 ════════════════════════════════════════════
-- Return "academyPatch" field if academy content changed, "siteConfigPatch" if site config changed, or BOTH if both changed
-- Preserve ALL unchanged fields EXACTLY — do not drop modules, lessons, or config sections
-- Always write a concise one-sentence "summary" of exactly what you changed
-- Never invent facts not grounded in the existing academy content or explicit user instruction
-- If the instruction is ambiguous, make the most useful interpretation and describe what you did in the summary
-- The CONCEPT OWNERSHIP MAP injected in the prompt is a hard constraint — do not duplicate a concept, term, or lesson topic across modules. If an edit requires touching content owned by another module, move that content to the owning module instead of duplicating it.
+⚠️  CRITICAL PRESERVATION RULES:
+1. Return "academyPatch" ONLY if academy content needs to change
+2. Return "siteConfigPatch" ONLY if site config needs to change  
+3. Return BOTH if both need to change
+4. NEVER include a field in your patch unless you are CHANGING that specific field
+5. NEVER return empty arrays for pricing/onboardingSteps unless the user explicitly said "clear" or "remove"
+6. NEVER set operation="delete" unless the user explicitly said "delete", "remove", or "clear"
+7. For curriculum patches: include ONLY the moduleIndex and the fields you're modifying for that module
+8. For lesson patches: include ONLY the lessonIndex and the fields you're modifying for that lesson
+9. If you're unsure whether the user wants to delete something, set clarificationNeeded and confidence="low"
+
+⚠️  WHAT TO INCLUDE IN YOUR PATCH:
+- Scalar fields (academyName, themeVariant, etc.) → include ONLY if the user wants to change them
+- curriculumPatches → include ONLY modules you're adding, updating, or deleting (with explicit operation field)
+- lessonPatches → include ONLY lessons you're adding, updating, or deleting within a module
+- pricing / onboardingSteps → include ONLY if the user explicitly asks to change/add/replace them (never empty arrays)
+- seoMeta → include ONLY the specific seo fields being changed (title, description, keywords)
+
+⚠️  DELETION OPERATIONS:
+- To DELETE a module: { moduleIndex: X, operation: "delete" } — ONLY if user explicitly said "delete/remove module X"
+- To DELETE a lesson: { lessonIndex: Y, operation: "delete" } — ONLY if user explicitly said "delete/remove lesson Y"
+- NEVER delete content based on implied intent, vague instructions, or assumptions
+
+Always write a concise "summary" of exactly what you changed (not what you preserved).
+Never invent facts not in the existing academy or user instruction.
+If ambiguous, choose the most conservative interpretation that modifies the LEAST content.
 
 ════════════════════════════════════════════
 OUTPUT FORMAT — patch only what changes
 ════════════════════════════════════════════
-Return "academyPatch" with ONLY the top-level academy fields that need to change:
-- Scalar fields (academyName, themeVariant, etc.) — include only if changing
-- curriculumPatches: array of { moduleIndex (0-based), ...only changed module fields, lessonPatches: [{ lessonIndex (0-based), ...only changed lesson fields }] }
-  Do NOT echo unchanged lesson or module data — include only what changes.
-- pricing / onboardingSteps / seoMeta: include the full replacement array/object ONLY if changing
+Return "academyPatch" with ONLY the fields that need to change:
+- Scalar fields (academyName, themeVariant, difficultyLevel, etc.) — include ONLY if changing
+- curriculumPatches: array of module operations:
+  * To UPDATE a module: { moduleIndex, [changed fields], lessonPatches: [...] }
+  * To DELETE a module: { moduleIndex, operation: "delete" } (explicit user request only!)
+  * To INSERT a module: { operation: "insert", insertAfterIndex, moduleTitle, lessons: [...full lessons...], ... }
+  * lessonPatches within a module:
+    - To UPDATE: { lessonIndex, [changed fields] }
+    - To DELETE: { lessonIndex, operation: "delete" } (explicit user request only!)
+- pricing: include full replacement array ONLY if user explicitly asks to change pricing (never empty unless user said "clear pricing")
+- onboardingSteps: include full replacement array ONLY if user explicitly asks to change onboarding (never empty unless user said "clear onboarding")
+- seoMeta: include ONLY the seo fields being changed (e.g., just {title: "New Title"} if only title changes)
+- landingPage: include ONLY the landing page fields being changed
 
-Return "siteConfigPatch" with ONLY the site config keys that need to change.
+Return "siteConfigPatch" with ONLY the site config keys that need to change (never include unchanged keys).
 
-Always write a concise one-sentence "summary" of exactly what changed.`,
+Always include:
+- "summary": one concise sentence describing what you changed
+- "confidence": "high" | "medium" | "low"
+- "clarificationNeeded": (optional) if the instruction is ambiguous or you need confirmation for a destructive operation
+
+CONCEPT OWNERSHIP: The CONCEPT OWNERSHIP MAP is a hard constraint — do not duplicate terms/concepts across modules.`,
       prompt: [
         "CURRENT ACADEMY (notes trimmed for brevity — explicitly named lessons sent at full length):",
         JSON.stringify(academyContext),
@@ -377,6 +483,29 @@ Always write a concise one-sentence "summary" of exactly what changed.`,
 
         clearInterval(ping);
 
+        // ── Validation: detect destructive operations ────────────────────────
+        const warnings: string[] = [];
+        if (object.academyPatch?.curriculumPatches) {
+          const moduleDeletes = object.academyPatch.curriculumPatches.filter(p => p.operation === "delete");
+          if (moduleDeletes.length > 0) {
+            warnings.push(`⚠️ Deleting ${moduleDeletes.length} module(s): ${moduleDeletes.map(p => `Module ${p.moduleIndex + 1}`).join(", ")}`);
+          }
+          for (const mp of object.academyPatch.curriculumPatches) {
+            if (mp.lessonPatches) {
+              const lessonDeletes = mp.lessonPatches.filter(lp => lp.operation === "delete");
+              if (lessonDeletes.length > 0) {
+                warnings.push(`⚠️ Deleting ${lessonDeletes.length} lesson(s) from Module ${mp.moduleIndex + 1}`);
+              }
+            }
+          }
+        }
+        if (object.academyPatch?.pricing !== undefined && (!object.academyPatch.pricing || object.academyPatch.pricing.length === 0)) {
+          warnings.push("⚠️ Clearing pricing information");
+        }
+        if (object.academyPatch?.onboardingSteps !== undefined && (!object.academyPatch.onboardingSteps || object.academyPatch.onboardingSteps.length === 0)) {
+          warnings.push("⚠️ Clearing onboarding steps");
+        }
+
         // ── Dry-run: return patch without applying ───────────────────────────
         if (dryRun) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({
@@ -385,6 +514,7 @@ Always write a concise one-sentence "summary" of exactly what changed.`,
             siteConfigPatch: object.siteConfigPatch,
             summary: object.summary,
             confidence: object.confidence,
+            ...(warnings.length > 0 && { warnings }),
             ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
             academyVersion: currentVersion,
           })}\n\n`));
@@ -399,6 +529,7 @@ Always write a concise one-sentence "summary" of exactly what changed.`,
             clarificationNeeded: object.clarificationNeeded,
             summary: object.summary,
             confidence: object.confidence,
+            ...(warnings.length > 0 && { warnings }),
             academyVersion: currentVersion,
           })}\n\n`));
           controller.close();
@@ -438,6 +569,7 @@ Always write a concise one-sentence "summary" of exactly what changed.`,
           summary:        object.summary,
           confidence:     object.confidence,
           academyVersion: updatedAcademy ? computeAcademyVersion(updatedAcademy) : currentVersion,
+          ...(warnings.length > 0 && { warnings }),
           ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
         })}\n\n`));
       } catch (error) {
