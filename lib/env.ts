@@ -19,6 +19,9 @@ const EnvironmentSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET_NAME:      z.string().optional(),
   R2_PUBLIC_URL:       z.string().optional(), // e.g. https://pub-xxxx.r2.dev
+  // RunPod Voice Cloning — optional, enables XTTS v2 audiobook narration
+  RUNPOD_API_KEY:             z.string().optional(),
+  RUNPOD_VOICE_ENDPOINT_ID:   z.string().optional(), // RunPod Serverless endpoint ID
 });
 
 const parsed = EnvironmentSchema.safeParse(process.env);

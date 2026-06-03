@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useId, useEffect } from "react";
 import { ProseEditor, ProseToolbarProvider, SharedProseToolbar } from "./ProseEditor";
 import { EbookProgressRing } from "@/app/components/EbookProgressRing";
+import { VoiceStudio } from "@/app/components/VoiceStudio";
 import {
   saveEbookJob,
   getEbookJob,
@@ -3462,6 +3463,9 @@ export function EbookPipeline({
                 ))}
               </div>
             )}
+
+            {/* Voice Studio — audiobook narration */}
+            <VoiceStudio manifest={completedManifest} slug={completedManifest.jobId} />
 
             {/* Start new project */}
             <div className="border-t border-slate-700/40 pt-3 flex justify-end">

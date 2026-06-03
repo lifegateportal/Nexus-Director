@@ -1,0 +1,5 @@
+TTS[all]
+runpod
+soundfile
+numpy
+ffmpeg-python
