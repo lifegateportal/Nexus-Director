@@ -2,6 +2,7 @@ import Link from "next/link";
 import { PublishedCatalogSchema } from "@/lib/schemas/published-book";
 import type { PublishedBookEntry } from "@/lib/schemas/published-book";
 import LibraryGrid from "./LibraryGrid";
+import MyListPanel from "./MyListPanel";
 
 export const revalidate = 60;
 
@@ -266,6 +267,9 @@ export default async function LibraryPage() {
 
           {/* ── New Releases Hero ─────────────────────────────────────────── */}
           <NewReleasesHero books={catalog.books} />
+
+          {/* ── Personal reading list ─────────────────────────────────────── */}
+          <MyListPanel />
 
           {/* ── Full grid ────────────────────────────────────────────────── */}
           <div className="py-10 pb-24 lg:pb-12">

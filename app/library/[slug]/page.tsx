@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EbookManifestSchema } from "@/lib/schemas/ebook";
 import { PublishedCatalogSchema } from "@/lib/schemas/published-book";
+import ReadingListButton from "./ReadingListButton";
 
 export const revalidate = 60;
 
@@ -201,12 +202,26 @@ export default async function BookLandingPage({
                 </span>
               </div>
 
-              <Link
-                href={`/library/${slug}/read`}
-                className={`inline-flex min-h-14 items-center rounded-2xl ${accentBg} px-12 text-base font-bold text-slate-950 shadow-xl transition active:scale-[0.97]`}
-              >
-                Start Reading
-              </Link>
+              <div className="flex flex-wrap items-center justify-center gap-3 lg:justify-start">
+                <Link
+                  href={`/library/${slug}/read`}
+                  className={`inline-flex min-h-14 items-center rounded-2xl ${accentBg} px-12 text-base font-bold text-slate-950 shadow-xl transition active:scale-[0.97]`}
+                >
+                  Start Reading
+                </Link>
+                <ReadingListButton
+                  accentBg={accentBg}
+                  entry={{
+                    slug,
+                    title:         manifest.bookTitle,
+                    authorName:    manifest.authorName,
+                    subtitle:      manifest.subtitle ?? undefined,
+                    coverAccent:   accent,
+                    coverImageUrl: manifest.coverImageUrl ?? null,
+                    addedAt:       "",
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>
