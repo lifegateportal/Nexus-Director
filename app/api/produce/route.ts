@@ -103,9 +103,7 @@ export async function POST(req: NextRequest) {
             schema: ContentMapSchema,
             schemaName: "ContentMap",
             schemaDescription: "Distinct major themes found in the source material",
-            mode: "json",
-            maxTokens: 1_200,
-            temperature: 0.1,
+            maxTokens: 4_000,
             system: `You are a source analyst. Read the material and identify ${themeCountLabel} completely DISTINCT major theme${scale.maxThemes === 1 ? "" : "s"} or sections. Cover the FULL arc of the document.
 
 For each theme:

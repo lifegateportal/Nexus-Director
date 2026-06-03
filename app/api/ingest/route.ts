@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { IngestInputSchema, IngestResultSchema } from "@/lib/schemas/blueprint";
 
 export const runtime = "nodejs";
@@ -17,13 +17,11 @@ export async function POST(request: NextRequest) {
       : input.sourceText;
 
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: deepSeekReasonerModel,
       schema: IngestResultSchema,
       schemaName: "IngestResult",
       schemaDescription: "Structured blueprint extracted from source content",
-      mode: "json",
-      maxTokens: 1_000,
-      temperature: 0.1,
+      maxTokens: 4_000,
       system:
         "You are the Nexus Director Analyst. Extract a concise structured blueprint from the source. Be brief — every field should be the shortest accurate value. Do not pad or invent.",
       prompt: [
