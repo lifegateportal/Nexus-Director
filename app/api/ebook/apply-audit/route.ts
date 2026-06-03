@@ -178,8 +178,8 @@ async function reviseSectionBody(
     : "";
 
   const originalWordCount = body.split(/\s+/).filter(Boolean).length;
-  const minWords = Math.floor(originalWordCount * 0.92);
-  const maxWords = Math.ceil(originalWordCount * 1.08);
+  const minWords = Math.floor(originalWordCount * 0.98);  // 98% minimum (was 92%)
+  const maxWords = Math.ceil(originalWordCount * 1.02);   // 102% maximum (was 108%)
   // Allow ~2 tokens per word (generous) + headroom, minimum 2048
   const maxTokens = Math.max(2048, originalWordCount * 3);
 
@@ -197,6 +197,38 @@ SECTION BODY:
 ${body}
 
 EDITORIAL TASK:
+${task}
+
+RULES:
+- Change ONLY what is necessary to address the task above
+- Preserve every scripture reference, quote, and theological teaching point
+- WORD COUNT: The original section is ${originalWordCount} words. Target ${minWords}–${maxWords} words (98–102% of original).
+- Keep the same sentence rhythm and paragraph structure
+- Never use an em dash (— or --)
+- Return the revised body as plain prose text only
+
+${SOURCE_LOCK_RULES}`,
+    });
+    text = result.text.trim();
+  } catch (err) {
+    console.error("[apply-audit] LLM section rewrite failed:", err);
+    return body; // fall back to original
+  }
+
+  if (!text) return body;
+
+  // Hard safety net: if the rewrite lost more than 5% of words, reject and return original.
+  // This prevents accidental content deletion during surgical edits.
+  const revisedWordCount = text.split(/\s+/).filter(Boolean).length;
+  if (revisedWordCount < Math.floor(originalWordCount * 0.95)) {
+    console.warn(
+      `[apply-audit] Rewrite shrank section from ${originalWordCount} → ${revisedWordCount} words (>${Math.round((1 - revisedWordCount / originalWordCount) * 100)}% loss) — keeping original`,
+    );
+    return body;
+  }
+
+  return text;
+}
 ${task}
 
 RULES:
@@ -468,32 +500,51 @@ export const POST = async (req: NextRequest): Promise<Response> => {
     }
   }
 
-  // ── Tier 2: Section deletions for concept duplicates and similar pairs ────────
-  // Rather than rewriting duplicate sections with the same material under a fresh
-  // coat of paint, we delete the redundant occurrence outright and stitch the seam.
+  // ── Tier 2: Faithful to speaker's progression — only delete obvious copy-paste errors ──
+  // STRATEGY: The book should follow the speaker's natural teaching flow. If they revisited
+  // a concept later in the transcript, that was intentional pedagogical reinforcement.
+  // ONLY delete sections that are clearly copy-paste errors (>98% verbatim duplication).
 
-  // Collect which sections to delete
+  function calculateTextSimilarity(text1: string, text2: string): number {
+    const words1 = new Set(tokenizeContent(text1));
+    const words2 = new Set(tokenizeContent(text2));
+    const intersection = new Set([...words1].filter(x => words2.has(x)));
+    const union = new Set([...words1, ...words2]);
+    return union.size > 0 ? intersection.size / union.size : 0;
+  }
+
   const sectionsToDelete: { chapterNum: number; sectionNum: number }[] = [];
+  const llmTasks: LLMTask[] = [];
 
   for (const key of appliedKeys) {
-    // ── Concept duplicates — delete every occurrence after the first ───────────
-    // The first location is canonical (introduced the concept first in the book).
-    // All subsequent occurrences are pure duplication and should be removed.
+    // ── Concept duplicates — only delete if >98% verbatim (copy-paste error) ──────────
+    // If the speaker naturally covered the same concept again in their teaching,
+    // preserve it. Only remove obvious technical duplication errors.
     if (key.startsWith("c-")) {
       const idx = parseInt(key.slice(2));
       const dup = report.conceptDuplicates[idx];
-      // Must have at least 2 locations — if only one exists there's nothing to delete
       if (!dup || dup.locations.length < 2) continue;
 
       for (let li = 1; li < dup.locations.length; li++) {
         const { chapterNum, sectionNum } = parseLocation(dup.locations[li].location);
-        // Only delete full sections — intros/conclusions are structural anchors, leave them
         if (chapterNum === null || sectionNum === null) continue;
-        sectionsToDelete.push({ chapterNum, sectionNum });
+
+        // Check if this is a copy-paste error (near-verbatim text)
+        const firstExcerpt = dup.locations[0].excerpt || "";
+        const thisExcerpt = dup.locations[li].excerpt || "";
+        const similarity = firstExcerpt && thisExcerpt 
+          ? calculateTextSimilarity(firstExcerpt, thisExcerpt) 
+          : 0;
+
+        // Only delete if >98% similar (clear copy-paste error, not intentional reinforcement)
+        if (similarity > 0.98) {
+          sectionsToDelete.push({ chapterNum, sectionNum });
+        }
+        // Otherwise: preserve it — the speaker chose to revisit this concept
       }
     }
 
-    // ── Similar pairs — delete location B (the secondary occurrence) ──────────
+    // ── Similar pairs — only delete if >98% similar (copy-paste error) ─────────────────
     if (key.startsWith("p-")) {
       const idx = parseInt(key.slice(2));
       const pair = report.similarPairs[idx];
@@ -501,7 +552,11 @@ export const POST = async (req: NextRequest): Promise<Response> => {
 
       const locB = parseLocation(pair.locationB);
       if (locB.chapterNum !== null && locB.sectionNum !== null) {
-        sectionsToDelete.push({ chapterNum: locB.chapterNum, sectionNum: locB.sectionNum });
+        // Only delete if >98% similar (clear technical duplication)
+        if (pair.similarity > 0.98) {
+          sectionsToDelete.push({ chapterNum: locB.chapterNum, sectionNum: locB.sectionNum });
+        }
+        // Otherwise: preserve it — follow the speaker's natural progression
       }
     }
   }
@@ -549,8 +604,7 @@ export const POST = async (req: NextRequest): Promise<Response> => {
     chapters[chIdx] = { ...ch, sections: updatedSections, totalWordCount: updatedWordCount };
   }
 
-  // Repair seams between now-adjacent sections where a deletion created a gap.
-  // Only the edge paragraphs of each neighbor are changed; everything else stays verbatim.
+  // Repair seams between now-adjacent sections where a deletion created a gap
   if (seamTasks.length > 0) {
     const seamResults = await mapWithConcurrency(seamTasks, 2, async (task) => {
       const follOpen = (task.followingBody.split(/\n\n+/)[0] ?? "").trim().slice(0, 200);
@@ -560,13 +614,13 @@ export const POST = async (req: NextRequest): Promise<Response> => {
         reviseSectionBody(
           task.precedingHeading,
           task.precedingBody,
-          `A section that immediately followed this one has been removed. Return the COMPLETE body, changing ONLY the final paragraph so it closes naturally and leads into the section that now follows, which opens with: "${follOpen}". Every other paragraph must remain word-for-word identical.`,
+          `A duplicate section that immediately followed this one has been removed. Return the COMPLETE body, changing ONLY the final paragraph so it transitions naturally into the section that now follows, which opens with: "${follOpen}". Every other paragraph must remain word-for-word identical.`,
           voiceDNA,
         ),
         reviseSectionBody(
           task.followingHeading,
           task.followingBody,
-          `A section that immediately preceded this one has been removed. Return the COMPLETE body, changing ONLY the opening paragraph so it opens naturally following the section that now precedes it, which ends with: "${precClose}". Every other paragraph must remain word-for-word identical.`,
+          `A duplicate section that immediately preceded this one has been removed. Return the COMPLETE body, changing ONLY the opening paragraph so it follows naturally from the section that now precedes it, which ends with: "${precClose}". Every other paragraph must remain word-for-word identical.`,
           voiceDNA,
         ),
       ]);
@@ -587,14 +641,6 @@ export const POST = async (req: NextRequest): Promise<Response> => {
         }),
       };
     }
-  }
-
-  // ── Tier 3: LLM tasks (empty now — r-N and w-N are Tier 1; c-N/p-N are now deletions)
-  // Kept as an extension point for future audit finding types.
-  const llmTasks: LLMTask[] = [];
-
-  for (const key of appliedKeys) {
-    void key; // no additional LLM task types currently
   }
 
   // Run LLM tasks with concurrency limit (max 4 at a time)
