@@ -5,6 +5,8 @@ FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 
 WORKDIR /app
 
+ENV COQUI_TOS_AGREED=1
+
 # System dependencies — ffmpeg for audio conversion, libsndfile for soundfile
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
