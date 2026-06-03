@@ -11,12 +11,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
+import { resolveR2ObjectUrl } from "@/lib/r2-storage";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
 const RequestSchema = z.object({
-  sampleUrl: z.string().url(),
+  sampleUrl: z.string().min(1),
   ext:       z.string().optional().default("wav"),
 });
 
@@ -36,10 +37,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const sampleUrl = await resolveR2ObjectUrl(input.sampleUrl);
     const submitRes = await fetch(`https://api.runpod.ai/v2/${RUNPOD_VOICE_ENDPOINT_ID}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNPOD_API_KEY}` },
-      body: JSON.stringify({ input: { action: "clone", audio_url: input.sampleUrl, ext: input.ext } }),
+      body: JSON.stringify({ input: { action: "clone", audio_url: sampleUrl, ext: input.ext } }),
     });
     if (!submitRes.ok) throw new Error(`RunPod submit failed (${submitRes.status})`);
     const { id: runpodJobId } = await submitRes.json() as { id: string };

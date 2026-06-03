@@ -1,22 +1,23 @@
 # ── Nexus Director Voice Worker ───────────────────────────────────────────────
-# Base: official PyTorch 2.1 + CUDA 12.1 (works on RunPod RTX 3090 / A5000)
-FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel
+# Keep the serverless image as small as possible so queued jobs can actually
+# acquire a healthy worker instead of stalling during repeated cold starts.
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 
 WORKDIR /app
 
-# System dependencies — ffmpeg for audio conversion
+# System dependencies — ffmpeg for audio conversion, libsndfile for soundfile
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    git \
+    libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download XTTS v2 model weights at build time so cold starts are fast.
-# This adds ~2 GB to the image but eliminates runtime model downloads.
-RUN python -c "from TTS.api import TTS; TTS('tts_models/multilingual/multi-dataset/xtts_v2')"
+# Do not bake XTTS weights into the image. It makes the serverless image much
+# larger and workers can get stuck initializing before they ever pull a job.
+# The model is still lazy-loaded by handler.py on the first synth request.
 
 # Worker code
 COPY handler.py .

@@ -158,17 +158,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
         throw new Error(err.error ?? `Upload failed (${res.status})`);
       }
       const { publicUrl, key } = await res.json() as { publicUrl: string | null; key: string };
-
-      // publicUrl is null when R2_PUBLIC_URL env var is not configured.
-      // Fall back to the object key so the clone route can fetch via presigned GET.
-      if (!publicUrl) {
-        throw new Error(
-          "R2_PUBLIC_URL is not set — RunPod cannot reach the sample without a public URL. " +
-          "Add R2_PUBLIC_URL to your environment variables."
-        );
-      }
-
-      return publicUrl;
+      return publicUrl ?? key;
     } finally {
       setUploadingR2(false);
     }

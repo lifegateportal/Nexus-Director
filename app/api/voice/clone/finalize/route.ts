@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { z } from "zod";
 import { env } from "@/lib/env";
+import { toR2PublicUrlOrKey } from "@/lib/r2-storage";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -78,7 +79,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "FAILED", error: "R2 storage not configured" }, { status: 503 });
     }
 
-    const wavB64 = output.wav_base64 as string;
+    const wavB64 = output.wav_base64;
+    if (typeof wavB64 !== "string" || wavB64.length === 0) {
+      return NextResponse.json({ status: "FAILED", error: "RunPod clone completed without wav_base64 output" });
+    }
     const durationSec = (output.duration_sec as number) ?? 0;
 
     const s3 = makeS3();
@@ -90,9 +94,7 @@ export async function POST(req: NextRequest) {
       ContentType: "audio/wav",
     }));
 
-    const voiceId = R2_PUBLIC_URL
-      ? `${R2_PUBLIC_URL.replace(/\/$/, "")}/${key}`
-      : key;
+    const voiceId = toR2PublicUrlOrKey(key);
 
     return NextResponse.json({ status: "COMPLETED", voiceId, durationSec });
   } catch (err) {

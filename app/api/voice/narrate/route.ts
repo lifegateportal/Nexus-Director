@@ -11,13 +11,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
+import { resolveR2ObjectUrl } from "@/lib/r2-storage";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
 const RequestSchema = z.object({
   text:       z.string().min(1).max(50_000),
-  voiceId:    z.string().url("voiceId must be the R2 URL of your cloned WAV"),
+  voiceId:    z.string().min(1, "voiceId is required"),
   chapterId:  z.string().min(1).max(100),
   slug:       z.string().min(1).max(100),
   language:   z.string().default("en"),
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
     .trim();
 
   try {
+    const speakerWavUrl = await resolveR2ObjectUrl(input.voiceId);
     const submitRes = await fetch(`https://api.runpod.ai/v2/${RUNPOD_VOICE_ENDPOINT_ID}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNPOD_API_KEY}` },
@@ -57,7 +59,7 @@ export async function POST(req: NextRequest) {
         input: {
           action: "synthesize",
           text: cleanText,
-          speaker_wav_url: input.voiceId,
+          speaker_wav_url: speakerWavUrl,
           language: input.language,
           speed: input.speed,
           // Pass chapter metadata so finalize can build the R2 key
