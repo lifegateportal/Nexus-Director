@@ -350,7 +350,10 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
           academy,
           instruction: text,
           siteConfig,
-          history: messages.slice(-20).map((m) => ({ role: m.role, content: m.content })),
+          history: messages
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .slice(-20)
+            .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
           academyVersion: (academy as Record<string, unknown>).__version as string | undefined,
         }),
       });
