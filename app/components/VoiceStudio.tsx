@@ -140,6 +140,10 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
   // Using server-side upload (not presigned PUT) to avoid browser CORS issues.
 
   async function uploadSampleToR2(file: File): Promise<string> {
+    const MAX_MB = 25;
+    if (file.size > MAX_MB * 1024 * 1024) {
+      throw new Error(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Please trim your recording to under ${MAX_MB} MB.`);
+    }
     setUploadingR2(true);
     try {
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "wav";
@@ -180,17 +184,35 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
       const sampleUrl = await uploadSampleToR2(sampleFile);
       const ext = sampleFile.name.split(".").pop()?.toLowerCase() ?? "wav";
 
-      const res = await fetch("/api/voice/clone", {
+      // Submit job — returns immediately
+      const submitRes = await fetch("/api/voice/clone", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sampleUrl, ext }),
       });
-      const json = await res.json() as { voiceId?: string; durationSec?: number; error?: string };
-      if (!res.ok || json.error) throw new Error(json.error ?? `Clone failed (${res.status})`);
+      const submitJson = await submitRes.json() as { runpodJobId?: string; error?: string };
+      if (!submitRes.ok || submitJson.error) throw new Error(submitJson.error ?? `Clone submit failed (${submitRes.status})`);
 
-      setVoiceId(json.voiceId!);
-      setVoiceDurationSec(json.durationSec ?? null);
-      persist(json.voiceId!, json.durationSec ?? null, chapters);
+      // Poll finalize until done
+      const runpodJobId = submitJson.runpodJobId!;
+      for (let attempt = 0; attempt < 150; attempt++) {
+        await new Promise<void>((r) => setTimeout(r, 4000));
+        const pollRes = await fetch("/api/voice/clone/finalize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runpodJobId }),
+        });
+        const poll = await pollRes.json() as { status: string; voiceId?: string; durationSec?: number; error?: string };
+        if (poll.status === "COMPLETED") {
+          setVoiceId(poll.voiceId!);
+          setVoiceDurationSec(poll.durationSec ?? null);
+          persist(poll.voiceId!, poll.durationSec ?? null, chapters);
+          return;
+        }
+        if (poll.status === "FAILED") throw new Error(poll.error ?? "Clone failed");
+        // IN_QUEUE / IN_PROGRESS — keep polling
+      }
+      throw new Error("Voice clone timed out after 10 minutes. The GPU worker may still be cold-starting — try again.");
     } catch (err) {
       setCloneError(err instanceof Error ? err.message : "Clone failed");
     } finally {
@@ -215,21 +237,34 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
 
     try {
       const text = buildChapterText(ch);
-      const res = await fetch("/api/voice/narrate", {
+
+      // Submit job — returns immediately
+      const submitRes = await fetch("/api/voice/narrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          voiceId: currentVoiceId,
-          chapterId: id,
-          slug: bookSlug,
-          language,
-          speed,
-        }),
+        body: JSON.stringify({ text, voiceId: currentVoiceId, chapterId: id, slug: bookSlug, language, speed }),
       });
-      const json = await res.json() as { audioUrl?: string; durationSec?: number; error?: string };
-      if (!res.ok || json.error) throw new Error(json.error ?? `Narration failed (${res.status})`);
-      updated = updateStatus({ status: "done", audioUrl: json.audioUrl!, durationSec: json.durationSec ?? null }, updated);
+      const submitJson = await submitRes.json() as { runpodJobId?: string; error?: string };
+      if (!submitRes.ok || submitJson.error) throw new Error(submitJson.error ?? `Narrate submit failed (${submitRes.status})`);
+
+      // Poll finalize until done
+      const runpodJobId = submitJson.runpodJobId!;
+      for (let attempt = 0; attempt < 150; attempt++) {
+        await new Promise<void>((r) => setTimeout(r, 4000));
+        const pollRes = await fetch("/api/voice/narrate/finalize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runpodJobId, chapterId: id, slug: bookSlug }),
+        });
+        const poll = await pollRes.json() as { status: string; audioUrl?: string; durationSec?: number; error?: string };
+        if (poll.status === "COMPLETED") {
+          updated = updateStatus({ status: "done", audioUrl: poll.audioUrl!, durationSec: poll.durationSec ?? null }, updated);
+          break;
+        }
+        if (poll.status === "FAILED") throw new Error(poll.error ?? "Narration failed");
+        // IN_QUEUE / IN_PROGRESS — keep polling
+        if (attempt === 149) throw new Error("Narration timed out after 10 minutes");
+      }
     } catch (err) {
       updated = updateStatus({ status: "error", error: err instanceof Error ? err.message : "Narration failed" }, updated);
     }
@@ -312,7 +347,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
           </p>
           <p className="text-xs text-slate-400">
             Record yourself reading 30 seconds to 3 minutes of clean, unedited speech in your natural voice.
-            No music, minimal background noise. WAV, MP3, M4A, or FLAC.
+            No music, minimal background noise. WAV, MP3, M4A, FLAC, or MOV/MP4 (audio track is extracted). Max 25 MB.
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
