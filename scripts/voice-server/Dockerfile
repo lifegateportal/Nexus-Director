@@ -1,7 +1,7 @@
 # ── Nexus Director Voice Worker ───────────────────────────────────────────────
-# Keep the serverless image as small as possible so queued jobs can actually
-# acquire a healthy worker instead of stalling during repeated cold starts.
-FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+# RunPod is currently scheduling this endpoint onto Blackwell-class GPUs, so
+# the image needs a recent PyTorch/CUDA runtime that includes sm_120 support.
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 
 WORKDIR /app
 
