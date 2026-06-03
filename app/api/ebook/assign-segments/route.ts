@@ -13,13 +13,28 @@ export async function POST(req: NextRequest) {
   try {
     input = AssignSegmentsRequestSchema.parse(body);
   } catch (err) {
+    console.error("[assign-segments] Schema validation failed:", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
   try {
+    const chapters = Array.isArray(input.architecture?.chapters) ? input.architecture.chapters : [];
+    const segments = Array.isArray(input.contentMap?.segments) ? input.contentMap.segments : [];
+
+    console.log(`[assign-segments] Processing ${chapters.length} chapters, ${segments.length} segments`);
+
+    if (chapters.length === 0) {
+      console.error("[assign-segments] Architecture is missing chapters");
+      return NextResponse.json({ error: "Architecture is missing chapters" }, { status: 400 });
+    }
+    if (segments.length === 0) {
+      console.error("[assign-segments] Content map is missing segments");
+      return NextResponse.json({ error: "Content map is missing segments" }, { status: 400 });
+    }
+
     // Build a segment lookup for fast retrieval
     const segmentMap = Object.fromEntries(
-      input.contentMap.segments.map((s) => [s.id, s])
+      segments.map((s) => [s.id, s])
     );
 
     // ── Scripture Amendment 4: Compute dominant Bible translation ──────────
@@ -36,39 +51,53 @@ export async function POST(req: NextRequest) {
       : undefined;
 
     // Build all assignments by resolving segment text for each section
-    const assignments = input.architecture.chapters.flatMap((chapter) =>
-      chapter.sections.map((section, idx) => {
-        const excerpts = section.sourceSegmentIds
-          .map((id) => segmentMap[id]?.rawText ?? "")
-          .filter(Boolean);
+    const assignments = chapters.flatMap((chapter, chIdx) => {
+      if (!Array.isArray(chapter.sections)) {
+        console.error(`[assign-segments] Chapter ${chapter.number} has no sections array`);
+        return [];
+      }
+      
+      return chapter.sections.map((section, idx) => {
+        try {
+          const sourceSegmentIds = Array.isArray(section.sourceSegmentIds) ? section.sourceSegmentIds : [];
+          const excerpts = sourceSegmentIds
+            .map((id) => segmentMap[id]?.rawText ?? "")
+            .filter(Boolean);
 
-        // We don't have the previous section's ending yet (that gets filled at write time)
-        return {
-          chapterNumber: chapter.number,
-          chapterTitle: chapter.title,
-          sectionNumber: section.sectionNumber,
-          heading: section.heading,
-          transcriptExcerpts: excerpts,
-          quotes: section.quotesInSection,
-          keyPoints: section.keyPoints,
-          voiceDNA: input.voiceDNA,
-          previousSectionEnding: "", // filled in at write time by the pipeline client
-          targetWordCount: section.targetWordCount,
-          // Upgrade 1: carry stable segment IDs so the pipeline can track consumption
-          sourceSegmentIds: section.sourceSegmentIds,
-          // A2: carry chapter premise so standalone callers get the north-star anchor
-          chapterPremise: chapter.chapterPremise || undefined,
-          // Upgrade 3: book thesis threaded from content map
-          coreThesis: input.contentMap.coreThesis || undefined,
-          // Scripture Amendment 4: primary translation for consistency
-          primaryTranslation,
-        };
-      })
-    );
+          // We don't have the previous section's ending yet (that gets filled at write time)
+          return {
+            chapterNumber: chapter.number,
+            chapterTitle: chapter.title,
+            sectionNumber: section.sectionNumber,
+            heading: section.heading,
+            transcriptExcerpts: excerpts,
+            quotes: Array.isArray(section.quotesInSection) ? section.quotesInSection : [],
+            keyPoints: Array.isArray(section.keyPoints) ? section.keyPoints : [],
+            voiceDNA: input.voiceDNA,
+            previousSectionEnding: "", // filled in at write time by the pipeline client
+            targetWordCount: section.targetWordCount ?? 500,
+            // Upgrade 1: carry stable segment IDs so the pipeline can track consumption
+            sourceSegmentIds,
+            // A2: carry chapter premise so standalone callers get the north-star anchor
+            chapterPremise: chapter.chapterPremise || undefined,
+            // Upgrade 3: book thesis threaded from content map
+            coreThesis: input.contentMap.coreThesis || undefined,
+            // Scripture Amendment 4: primary translation for consistency
+            primaryTranslation,
+          };
+        } catch (sectionErr) {
+          console.error(`[assign-segments] Error processing chapter ${chapter.number} section ${section.sectionNumber}:`, sectionErr);
+          throw sectionErr;
+        }
+      });
+    });
 
+    console.log(`[assign-segments] Successfully created ${assignments.length} assignments`);
     return NextResponse.json({ assignments }, { status: 200 });
   } catch (err) {
+    console.error("[assign-segments] Fatal error:", err);
     const message = err instanceof Error ? err.message : "Segment assignment failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const stack = err instanceof Error ? err.stack : undefined;
+    return NextResponse.json({ error: message, stack }, { status: 500 });
   }
 }
