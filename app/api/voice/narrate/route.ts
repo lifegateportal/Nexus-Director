@@ -26,10 +26,11 @@ const RequestSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const { RUNPOD_API_KEY, RUNPOD_VOICE_ENDPOINT_ID } = env;
+  const { RUNPOD_API_KEY, RUNPOD_VOICE_ENDPOINT_ID, RUNPOD_ENDPOINT_ID } = env;
+  const endpointId = RUNPOD_VOICE_ENDPOINT_ID ?? RUNPOD_ENDPOINT_ID;
 
-  if (!RUNPOD_API_KEY || !RUNPOD_VOICE_ENDPOINT_ID) {
-    return NextResponse.json({ error: "RUNPOD_API_KEY and RUNPOD_VOICE_ENDPOINT_ID must be set" }, { status: 503 });
+  if (!RUNPOD_API_KEY || !endpointId) {
+    return NextResponse.json({ error: "RUNPOD_API_KEY and RUNPOD_VOICE_ENDPOINT_ID (or RUNPOD_ENDPOINT_ID) must be set" }, { status: 503 });
   }
 
   let input: z.infer<typeof RequestSchema>;
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const speakerWavUrl = await resolveR2ObjectUrl(input.voiceId);
-    const submitRes = await fetch(`https://api.runpod.ai/v2/${RUNPOD_VOICE_ENDPOINT_ID}/run`, {
+    const submitRes = await fetch(`https://api.runpod.ai/v2/${endpointId}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNPOD_API_KEY}` },
       body: JSON.stringify({
@@ -68,7 +69,10 @@ export async function POST(req: NextRequest) {
         },
       }),
     });
-    if (!submitRes.ok) throw new Error(`RunPod submit failed (${submitRes.status})`);
+    if (!submitRes.ok) {
+      const body = await submitRes.text();
+      throw new Error(`RunPod submit failed (${submitRes.status}): ${body.slice(0, 400)}`);
+    }
     const { id: runpodJobId } = await submitRes.json() as { id: string };
     return NextResponse.json({ runpodJobId });
   } catch (err) {

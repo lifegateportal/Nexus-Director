@@ -22,6 +22,7 @@ const EnvironmentSchema = z.object({
   // RunPod Voice Cloning — optional, enables XTTS v2 audiobook narration
   RUNPOD_API_KEY:             z.string().optional(),
   RUNPOD_VOICE_ENDPOINT_ID:   z.string().optional(), // RunPod Serverless endpoint ID
+  RUNPOD_ENDPOINT_ID:         z.string().optional(), // Backward-compatible alias
 });
 
 const parsed = EnvironmentSchema.safeParse(process.env);

@@ -33,11 +33,37 @@ function makeS3(): S3Client {
   });
 }
 
-export async function POST(req: NextRequest) {
-  const { RUNPOD_API_KEY, RUNPOD_VOICE_ENDPOINT_ID, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_URL } = env;
+function getOutputObject(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    const first = value[0];
+    return first && typeof first === "object" ? (first as Record<string, unknown>) : null;
+  }
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
 
-  if (!RUNPOD_API_KEY || !RUNPOD_VOICE_ENDPOINT_ID) {
-    return NextResponse.json({ status: "FAILED", error: "RUNPOD_API_KEY and RUNPOD_VOICE_ENDPOINT_ID must be set" }, { status: 503 });
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+export async function POST(req: NextRequest) {
+  const {
+    RUNPOD_API_KEY,
+    RUNPOD_VOICE_ENDPOINT_ID,
+    RUNPOD_ENDPOINT_ID,
+    R2_ACCOUNT_ID,
+    R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY,
+    R2_BUCKET_NAME,
+  } = env;
+  const endpointId = RUNPOD_VOICE_ENDPOINT_ID ?? RUNPOD_ENDPOINT_ID;
+
+  if (!RUNPOD_API_KEY || !endpointId) {
+    return NextResponse.json({ status: "FAILED", error: "RUNPOD_API_KEY and RUNPOD_VOICE_ENDPOINT_ID (or RUNPOD_ENDPOINT_ID) must be set" }, { status: 503 });
   }
 
   let input: z.infer<typeof RequestSchema>;
@@ -50,12 +76,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const statusRes = await fetch(
-      `https://api.runpod.ai/v2/${RUNPOD_VOICE_ENDPOINT_ID}/status/${input.runpodJobId}`,
+      `https://api.runpod.ai/v2/${endpointId}/status/${input.runpodJobId}`,
       { headers: { Authorization: `Bearer ${RUNPOD_API_KEY}` } }
     );
+
+    if (!statusRes.ok) {
+      const body = await statusRes.text();
+      return NextResponse.json({ status: "FAILED", error: `RunPod status failed (${statusRes.status}): ${body.slice(0, 400)}` });
+    }
+
     const json = await statusRes.json() as {
       status: string;
-      output?: Record<string, unknown>;
+      output?: unknown;
+      delayOutput?: unknown;
       error?: string;
     };
 
@@ -72,18 +105,21 @@ export async function POST(req: NextRequest) {
     }
 
     // COMPLETED — upload WAV to R2
-    const output = json.output ?? {};
+    const output = getOutputObject(json.output ?? json.delayOutput);
+    if (!output) {
+      return NextResponse.json({ status: "FAILED", error: "RunPod clone completed without structured output" });
+    }
     if (output.error) return NextResponse.json({ status: "FAILED", error: output.error });
 
     if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
       return NextResponse.json({ status: "FAILED", error: "R2 storage not configured" }, { status: 503 });
     }
 
-    const wavB64 = output.wav_base64;
+    const wavB64 = (output.wav_base64 ?? output.audio_base64) as unknown;
     if (typeof wavB64 !== "string" || wavB64.length === 0) {
-      return NextResponse.json({ status: "FAILED", error: "RunPod clone completed without wav_base64 output" });
+      return NextResponse.json({ status: "FAILED", error: "RunPod clone completed without wav_base64/audio_base64 output" });
     }
-    const durationSec = (output.duration_sec as number) ?? 0;
+    const durationSec = asNumber(output.duration_sec ?? output.duration) ?? 0;
 
     const s3 = makeS3();
     const key = `voices/${Date.now()}-sample.wav`;
