@@ -229,39 +229,6 @@ ${SOURCE_LOCK_RULES}`,
 
   return text;
 }
-${task}
-
-RULES:
-- Change ONLY what is necessary to address the task above
-- Preserve every scripture reference, quote, and theological teaching point exactly
-- WORD COUNT: The original section is ${originalWordCount} words. Target ${minWords}–${maxWords} words. If removing duplicate content shortens the section, that is correct — do NOT invent replacement material to pad it back up.
-- Do not add any argument, story, illustration, or detail not already present in the section body above
-- Keep the same sentence rhythm and paragraph structure
-- Never use an em dash (— or --)
-- Return the revised body as plain prose text only
-
-${SOURCE_LOCK_RULES}`,
-    });
-    text = result.text.trim();
-  } catch (err) {
-    console.error("[apply-audit] LLM section rewrite failed:", err);
-    return body; // fall back to original
-  }
-
-  if (!text) return body;
-
-  // Hard safety net: if the rewrite lost more than 15% of words, reject and return original.
-  // This prevents concept-duplicate removal from silently deleting thousands of words.
-  const revisedWordCount = text.split(/\s+/).filter(Boolean).length;
-  if (revisedWordCount < Math.floor(originalWordCount * 0.85)) {
-    console.warn(
-      `[apply-audit] Rewrite shrank section from ${originalWordCount} → ${revisedWordCount} words (>${Math.round((1 - revisedWordCount / originalWordCount) * 100)}% loss) — keeping original`,
-    );
-    return body;
-  }
-
-  return text;
-}
 
 // Concurrency-limited parallel runner
 // Note: uses `any` instead of generics — SWC in Next.js 15 can mis-parse generic
