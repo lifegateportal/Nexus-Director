@@ -2272,43 +2272,48 @@ export function EbookPipeline({
       // mid-argument rather than re-setting up what was already established.
       let previousExcerptTail = "";
 
-      // ── Upgrade 4: Chapter-bucketed covered-points ────────────────────────
-      // Current chapter entries are kept in full; completed chapters are compressed
-      // to one summary line each — guaranteeing intra-chapter dedup is perfect while
-      // keeping cross-chapter signal compact regardless of book length.
-      const coveredByChapter = new Map<number, string[]>(); // chapterNum → compressed summary lines
-      let coveredCurrentChapter: string[] = [];  // full entries for the chapter being written
-      let coveredCurrentChapterNum = -1;
+      // ── FIX 1: Prose-based deduplication (replaces metadata-based system) ──────
+      // Store actual written prose by chapter for true n-gram overlap detection.
+      // Cross-chapter: last 2 paragraphs per chapter (actual sentences)
+      // Current chapter: full prose of all completed sections
+      const writtenProseByChapter = new Map<number, string>(); // chapterNum → full prose
+      let currentChapterProse = "";  // accumulates prose for the chapter being written
+      let currentChapterNum = -1;
 
       // Seed from already-completed sections on resume.
-      // Include section heading + all key points so the LLM gets real signal,
-      // not just section labels.
+      // Group prose by chapter so we can sample it properly.
       for (const a of assignments.filter((a) => completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))) {
-        const bucket = coveredByChapter.get(a.chapterNumber) ?? [];
-        bucket.push(`[Already written] Ch ${a.chapterNumber} §${a.sectionNumber}: ${a.heading}`);
-        for (const kp of a.keyPoints ?? []) {
-          if (kp.trim().length > 5) bucket.push(kp.trim());
-        }
-        coveredByChapter.set(a.chapterNumber, bucket);
+        const section = allSections.find((s) => s.chapterNumber === a.chapterNumber && s.sectionNumber === a.sectionNumber);
+        const body = section?.body ?? "";
+        const existing = writtenProseByChapter.get(a.chapterNumber) ?? "";
+        writtenProseByChapter.set(a.chapterNumber, existing + "\n\n" + body);
       }
 
-      // Flatten to the array the LLM receives — cross-chapter per-entry list + current-chapter full entries.
-      // Each prior-chapter entry is emitted individually so the LLM can read specific topics, not a compressed blob.
-      function buildCoveredKeyPoints(currentChapterNum: number): string[] {
-        const crossChapter: string[] = [];
-        for (const [chNum, entries] of coveredByChapter.entries()) {
-          if (chNum === currentChapterNum) continue;
-          // Emit up to 20 individual entries per completed chapter (enough for real dedup signal)
-          const label = `[Ch ${chNum} — already written]`;
-          for (const entry of entries.slice(0, 20)) {
-            const text = entry
-              .replace(/^\[Already written\] Ch \d+ §\d+: /, "")
-              .replace(/^\[Section covered\] Ch \d+ §\d+: /, "")
-              .replace(/^\[Covered\] Ch \d+ §\d+: /, "");
-            if (text.trim().length > 5) crossChapter.push(`${label} ${text}`);
+      // Build prose sample for deduplication: actual written sentences, not metadata.
+      // This gives n-gram overlap real signal to detect duplicated stories/scriptures.
+      function buildProseSampleForDedup(currentChapterNum: number): string[] {
+        const samples: string[] = [];
+        
+        // Cross-chapter: last 2 paragraphs from each prior chapter
+        for (const [chNum, prose] of writtenProseByChapter.entries()) {
+          if (chNum >= currentChapterNum) continue; // only prior chapters
+          const paragraphs = prose.split(/\n{2,}/).filter(Boolean);
+          const lastTwo = paragraphs.slice(-2);
+          for (const para of lastTwo) {
+            samples.push(`[Ch ${chNum}] ${para.trim()}`);
           }
         }
-        return [...crossChapter, ...coveredCurrentChapter];
+        
+        // Current chapter: all sentences from completed sections
+        if (currentChapterProse.length > 0) {
+          const sentences = currentChapterProse
+            .split(/\n{2,}/)
+            .flatMap((p) => p.split(/(?<=[.!?])\s+/))
+            .filter((s) => s.trim().length > 20);
+          samples.push(...sentences);
+        }
+        
+        return samples;
       }
 
       // ── Upgrade 1: Transcript segment consumption registry ───────────────
@@ -2326,11 +2331,17 @@ export function EbookPipeline({
       const conceptOwnershipMap: Record<string, number> = {};
       // Assignment key-points lookup for coverage ledger enrichment (ch-sec → keyPoints[])
       const assignmentKeyPointsLookup = new Map<string, string[]>();
+      // FIX 3: Segment-to-chapter mapping for hard chapter boundary enforcement
+      const segmentToChapter = new Map<string, number>();
       for (const ch of architecture.chapters) {
         for (const sec of ch.sections) {
           conceptOwnershipMap[sec.heading] = ch.number;
           for (const kp of sec.keyPoints ?? []) {
             conceptOwnershipMap[kp] = ch.number;
+          }
+          // Map each segment to its owning chapter
+          for (const segId of sec.sourceSegmentIds ?? []) {
+            segmentToChapter.set(segId, ch.number);
           }
         }
       }
@@ -2393,17 +2404,15 @@ export function EbookPipeline({
           ? nextAssignment.chapterNumber !== assignment.chapterNumber
           : true; // last section of the whole book is also a chapter-closer
 
-        // ── Upgrade 4: Rotate chapter bucket when we enter a new chapter ──
-        if (assignment.chapterNumber !== coveredCurrentChapterNum) {
-          if (coveredCurrentChapterNum !== -1 && coveredCurrentChapter.length > 0) {
-            // When rotating chapters, persist the FULL key-point signal (section labels + key points).
-            // Filter out paragraph-topic entries (no bracket prefix) which are too verbose for cross-chapter use.
-            const compactEntries = coveredCurrentChapter.filter((e) => e.startsWith("[") || e.split(/\s+/).length <= 12);
-            const existing = coveredByChapter.get(coveredCurrentChapterNum) ?? [];
-            coveredByChapter.set(coveredCurrentChapterNum, [...existing, ...compactEntries.slice(0, 40)]);
+        // ── FIX 1: Rotate chapter prose when we enter a new chapter ──
+        if (assignment.chapterNumber !== currentChapterNum) {
+          if (currentChapterNum !== -1 && currentChapterProse.length > 0) {
+            // Persist current chapter's full prose to the cross-chapter map
+            const existing = writtenProseByChapter.get(currentChapterNum) ?? "";
+            writtenProseByChapter.set(currentChapterNum, existing + "\n\n" + currentChapterProse);
           }
-          coveredCurrentChapter = [];
-          coveredCurrentChapterNum = assignment.chapterNumber;
+          currentChapterProse = "";
+          currentChapterNum = assignment.chapterNumber;
 
           // ── Chapter-level planner: plan ALL sections before writing any ──
           // Builds the concept-ownership contract for this chapter in one call.
@@ -2430,14 +2439,22 @@ export function EbookPipeline({
                     })(),
                     coreThesis: contentMap.coreThesis || undefined,
                     voiceDNA,
-                    alreadyCoveredPoints: buildCoveredKeyPoints(assignment.chapterNumber),
-                    priorSectionsSample: buildProseCorpusSample(writtenCorpus),
+                    priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
+                    alreadyCoveredPoints: [], // deprecated — prose samples now used for dedup
                     sections: chapterAssignments.map((a) => ({
                       sectionNumber: a.sectionNumber,
                       heading: a.heading,
                       keyPoints: a.keyPoints ?? [],
                       transcriptExcerpts: (a.transcriptExcerpts ?? []).filter((_, idx) => {
                         const segId = (a.sourceSegmentIds ?? [])[idx];
+                        // FIX 3: Hard chapter boundary — only include excerpts from segments
+                        // that belong to the current chapter. This prevents chapter spillage.
+                        if (segId && segmentToChapter.has(segId)) {
+                          const excerptChapter = segmentToChapter.get(segId)!;
+                          if (excerptChapter !== assignment.chapterNumber) {
+                            return false; // This excerpt belongs to a different chapter
+                          }
+                        }
                         return !segId || !consumedSegmentIds.has(segId);
                       }),
                       nextSectionHeading: (() => {
@@ -2497,8 +2514,8 @@ export function EbookPipeline({
                     primaryTranslation: chapterAssignmentsForWrite[0]?.primaryTranslation,
                     voiceDNA,
                     authorConfig: (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined,
-                    alreadyCoveredPoints: buildCoveredKeyPoints(assignment.chapterNumber),
-                    priorSectionsSample: buildProseCorpusSample(writtenCorpus),
+                    priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
+                    alreadyCoveredPoints: [], // deprecated — prose samples now used for dedup
                     bannedRecaps: extractBannedRecaps(allSections),
                     alreadyQuotedRefs: [...usedQuoteRefs],
                     forbiddenVerseTexts: Array.from(quotedVerseTextsByRef.values()).filter(Boolean),
@@ -2561,9 +2578,20 @@ export function EbookPipeline({
           }
         }
 
-        // ── Upgrade 1: Filter excerpts whose source segments are consumed ──
+        // ── FIX 3: Filter excerpts by chapter boundary ────────────────────
+        // Only send excerpts from segments that belong to the current chapter.
+        // This enforces hard chapter boundaries at the data level, preventing
+        // the LLM from accessing next-chapter content even if it wanted to.
         const filteredExcerpts = (assignment.transcriptExcerpts ?? []).filter((_, idx) => {
           const segId = (assignment.sourceSegmentIds ?? [])[idx];
+          // Chapter boundary check first
+          if (segId && segmentToChapter.has(segId)) {
+            const excerptChapter = segmentToChapter.get(segId)!;
+            if (excerptChapter !== assignment.chapterNumber) {
+              return false; // Hard boundary: this excerpt belongs to another chapter
+            }
+          }
+          // Then check consumption
           return !segId || !consumedSegmentIds.has(segId);
         });
         const partiallyConsumed = filteredExcerpts.length < (assignment.transcriptExcerpts ?? []).length;
@@ -2580,7 +2608,8 @@ export function EbookPipeline({
           transcriptExcerpts: filteredExcerpts.length > 0 ? filteredExcerpts : assignment.transcriptExcerpts,
           previousSectionEnding: previousEnding,
           nextSectionHeading: nextAssignment?.heading,
-          alreadyCoveredPoints: buildCoveredKeyPoints(assignment.chapterNumber),
+          priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
+          alreadyCoveredPoints: [], // deprecated — prose samples now used for dedup
           alreadyQuotedRefs: [...usedQuoteRefs],
           isLastSectionInChapter,
           nextChapterTitle: isLastSectionInChapter && nextAssignment
@@ -2683,13 +2712,11 @@ export function EbookPipeline({
             addLog(`  ↺ Upgrade 6: ${dupSentences.length} duplicate sentence(s) detected — redrafting with explicit exclusion…`);
             const redraftExclusion: SectionAssignment = {
               ...augmented,
-              alreadyCoveredPoints: [
-                ...buildCoveredKeyPoints(assignment.chapterNumber),
-                ...dupSentences.map((s) => `[EXACT DUPLICATE — DO NOT REPRODUCE]: "${s.slice(0, 120)}"`).
-                  slice(0, 10),
+              priorSectionsSample: [
+                ...buildProseSampleForDedup(assignment.chapterNumber),
+                ...dupSentences.map((s) => `[EXACT DUPLICATE — DO NOT REPRODUCE]: "${s.slice(0, 120)}"`).slice(0, 10),
               ],
-              // Refresh prose corpus so filterConsumedExcerpts strips covered excerpts on the redraft
-              priorSectionsSample: buildProseCorpusSample(writtenCorpus),
+              alreadyCoveredPoints: [], // deprecated — prose samples now used for dedup
             };
             ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
               redraftExclusion,
@@ -2741,44 +2768,13 @@ export function EbookPipeline({
 
         // ── Upgrade 6: Extend corpus for future similarity checks ─────────
         writtenCorpus += "\n\n" + body;
+        
+        // ── FIX 1: Accumulate prose for current chapter ───────────────────
+        currentChapterProse += "\n\n" + body;
 
         // ── Upgrade 4 (writer): Register new illustration labels ──────────
         for (const label of extractIllustrationLabels(body ?? "")) {
           usedIllustrations.add(label);
-        }
-
-        // ── Upgrade 4: Register in current-chapter bucket ─────────────────
-        // First sentence of every paragraph is the most reliable dedup signal.
-        const allParagraphTopics = (body ?? "")
-          .split(/\n{2,}/)
-          .map((p) => p.replace(/^[>\s#*\-]+/, "").split(/(?<=[.!?])\s+/)[0]?.trim())
-          .filter((s): s is string => Boolean(s) && s.length > 20);
-        coveredCurrentChapter.push(
-          `[Section covered] Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${assignment.heading}`,
-          ...(assignment.keyPoints ?? []),
-          ...(claimLedger ?? []).map((c) => c.claim).filter(Boolean),
-          ...allParagraphTopics,
-        );
-        // Cap the current-chapter bucket at 100 entries. Trim by removing paragraph-topic
-        // sentences first (they are verbose but lower priority than section headers + key points).
-        // Section headers start with "[Section covered]" — protect those from FIFO trimming.
-        if (coveredCurrentChapter.length > 100) {
-          // Find and remove the oldest paragraph-topic entries first (no bracket prefix)
-          let removed = 0;
-          const target = coveredCurrentChapter.length - 80;
-          for (let _i = 0; _i < coveredCurrentChapter.length && removed < target; ) {
-            if (!coveredCurrentChapter[_i].startsWith("[")) {
-              coveredCurrentChapter.splice(_i, 1);
-              removed++;
-            } else {
-              _i++;
-            }
-          }
-          // If still over cap, do plain FIFO for the remainder
-          if (coveredCurrentChapter.length > 80) {
-            coveredCurrentChapter.splice(0, coveredCurrentChapter.length - 80);
-          }
-        }
 
         // ── Upgrade 1: Mark source segments as consumed ───────────────────
         for (const segId of assignment.sourceSegmentIds ?? []) {

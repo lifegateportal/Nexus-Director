@@ -623,11 +623,12 @@ Your opening paragraph must land where that argument was heading — do NOT re-e
     : "";
 
 
-  // Use actual written prose sentences when available (prose-vs-prose n-gram overlap fires;
-  // metadata-vs-prose was near-zero and is the root cause of the excerpt filter never removing anything).
-  const dedupCorpus = (assignment.priorSectionsSample ?? []).length > 0
-    ? assignment.priorSectionsSample ?? []
-    : assignment.alreadyCoveredPoints ?? [];
+  // FIX 1: Always use prose samples for deduplication (no metadata fallback)
+  // Prose-vs-prose n-gram overlap gives real signal for detecting duplicate stories/scriptures.
+  const dedupCorpus = assignment.priorSectionsSample ?? [];
+  if (dedupCorpus.length === 0) {
+    console.warn(`[write-section] No prose samples provided for Ch${assignment.chapterNumber} §${assignment.sectionNumber} — dedup will be weak`);
+  }
   const excerptEntries: ExcerptEntry[] = (assignment.transcriptExcerpts ?? []).map((text, idx) => ({
     text,
     sourceNumber: idx + 1,
@@ -821,90 +822,21 @@ Now write the section prose:`;
   });
 
   try {
-    let paragraphPlan: z.infer<typeof PlanSchema>["paragraphPlan"] = [];
-
-    // ── Chapter-level plan fast-path ────────────────────────────────────────
-    // When the pipeline pre-computed a chapter-level plan (via /api/ebook/chapter-plan),
-    // it is passed as assignment.assignedPlan. Skip the per-section planner entirely —
-    // the chapter planner already enforced concept ownership across all sections.
-    if ((assignment.assignedPlan ?? []).length > 0) {
-      paragraphPlan = assignment.assignedPlan!;
-      console.log(`[write-section] Using chapter-level plan (${paragraphPlan.length} entries) for Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
-    } else {
-    // ── Per-section planner fallback (used when chapter-plan was unavailable) ──
-    const plannerDedup = (assignment.alreadyCoveredPoints ?? []).length > 0
-      ? `\n\n════════════════════════════════════════════\nALREADY COVERED — HARD SKIP\n════════════════════════════════════════════\nThe following sections and ideas have already been written. Do NOT plan ANY paragraph that touches, references, or re-introduces them — not even one sentence. If an excerpt only contains already-covered content, plan zero paragraphs from it:\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}`
-      : "";
-
-    try {
-      // Cap the planner at 45 seconds so it never eats into the writer's budget
-      const plannerAbort = AbortSignal.timeout(45_000);
-      const { object: plan } = await generateObject({
-        model: deepSeekModel,
-        schema: PlanSchema,
-        mode: "json",
-        temperature: 0.15,
-        abortSignal: plannerAbort,
-        system: `You are a structural editor planning the paragraph-level architecture for a single book section.
-
-TRANSCRIPT SEQUENCE — NON-NEGOTIABLE:
-Paragraphs MUST follow the order ideas appear in the transcript excerpts. Do NOT reorder, shuffle, or front-load ideas from later excerpts earlier in the section. The speaker built their argument in a specific sequence — preserve that build-up exactly, point by point.
-
-Within that sequence, the prose of each paragraph should:
-- Open each new point with the concrete claim or detail from the transcript
-- Develop it with any supporting specifics the speaker provided
-- Land it before moving to the next point in sequence
-Do not skip ahead to a later point and return to an earlier one.
-
-EXCERPT ANCHOR REQUIREMENT (Seq-A1):
-Every paragraph plan entry MUST list the specific excerpt number(s) that support it in supportedExcerptNumbers[]. Plans with empty supportedExcerptNumbers will be pruned automatically. The minimum excerpt number must advance across the plan — do not plan paragraph N drawing from a lower excerpt than paragraph N-1's minimum. Excerpts are labeled "EXCERPT X of ${totalExcerpts}" — use those numbers in supportedExcerptNumbers.
-${plannerDedup}
-Each paragraph in your plan must have a clear narrative purpose and be supported by specific transcript excerpt numbers. Do not plan paragraphs with no excerpt support.
-
-${SOURCE_LOCK_RULES}
-${READER_NORMALIZATION_RULES}`,
-        prompt: `Create a paragraph plan for this section. Each paragraph purpose must be supported by specific excerpt numbers.\n\nSECTION: ${assignment.heading}${assignment.nextSectionHeading ? `\nNEXT SECTION (do NOT plan paragraphs about this): "${assignment.nextSectionHeading}"` : ""}${assignment.isLastSectionInChapter && assignment.nextChapterTitle ? `\nCHAPTER BOUNDARY: This is the LAST section of Chapter ${assignment.chapterNumber}. The next chapter is titled "${assignment.nextChapterTitle}". Do NOT plan any paragraph that introduces or develops content from that next chapter. If an excerpt transitions into the next chapter's opening topic, stop planning before that line.` : ""}\n\nKEY POINTS:\n${assignment.keyPoints.join("\n")}\n${(assignment.alreadyCoveredPoints ?? []).length > 0 ? `\nDO NOT PLAN PARAGRAPHS ABOUT THESE (already written):\n${(assignment.alreadyCoveredPoints ?? []).map((p) => `• ${p}`).join("\n")}\n\nSCRIPTURE EXCEPTION: The skip rule above does NOT apply to Bible verses or their direct supporting commentary. Plan a dedicated paragraph for every scripture the excerpts contain for this section. Scripture is the foundation of each point — never omit it from the plan.` : ""}\n\nEXCERPTS:\n${excerptBlock}`,
-      });
-
-      // ── Upgrade 3: Planner prune pass ────────────────────────────────────
-      // Remove any planned paragraph whose stated purpose overlaps heavily with
-      // already-written prose. Use the prose corpus when available (4-gram overlap
-      // against actual sentences), falling back to word-bag against metadata.
-      const priorProseText = (assignment.priorSectionsSample ?? []).join(" ");
-      const coveredPointsText = (assignment.alreadyCoveredPoints ?? []).join(" ");
-      const pruneCorpus = priorProseText.length > 100 ? priorProseText : coveredPointsText;
-      const prunedPlan = (plan.paragraphPlan ?? []).filter((entry) => {
-        if (!entry.purpose || pruneCorpus.length < 50) return true;
-        if (priorProseText.length > 100) {
-          // Prose corpus available: n-gram overlap (purpose-vs-prose)
-          const overlap = excerptOverlapWithCoveredContent(entry.purpose, pruneCorpus);
-          return overlap < 0.30; // prune if >30% of purpose 4-grams appear in written prose
-        }
-        // Metadata fallback: word-bag approach
-        const purposeWords = entry.purpose.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
-        const coveredWords = new Set(pruneCorpus.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/));
-        if (purposeWords.length < 4) return true;
-        const matchCount = purposeWords.filter((w) => coveredWords.has(w) && w.length > 4).length;
-        const overlap = matchCount / purposeWords.length;
-        return overlap < 0.50;
-      });
-      paragraphPlan = prunedPlan.length > 0 ? prunedPlan : (plan.paragraphPlan ?? []);
-
-      // ── Seq-A1: Post-plan prune — remove plan entries with no excerpt anchor,
-      // then sort remaining entries by their minimum excerpt number so the plan
-      // itself enforces the speaker's argument order before the writer sees it.
-      const anchoredPlan = paragraphPlan.filter((e) => (e.supportedExcerptNumbers ?? []).length > 0);
-      const basePlan = anchoredPlan.length > 0 ? anchoredPlan : paragraphPlan;
-      basePlan.sort((a, b) => {
-        const minA = Math.min(...(a.supportedExcerptNumbers.length ? a.supportedExcerptNumbers : [Infinity]));
-        const minB = Math.min(...(b.supportedExcerptNumbers.length ? b.supportedExcerptNumbers : [Infinity]));
-        return minA - minB;
-      });
-      paragraphPlan = basePlan;
-    } catch {
-      paragraphPlan = [];
+    // FIX 2: Require chapter-level plan (no fallback planner)
+    // The per-section fallback cannot see other sections and creates overlaps.
+    // Fail visibly so the pipeline can retry the chapter-plan call.
+    if ((assignment.assignedPlan ?? []).length === 0) {
+      return NextResponse.json(
+        {
+          error: "Chapter-level plan required",
+          details: `No assignedPlan for Ch${assignment.chapterNumber} §${assignment.sectionNumber}. The chapter-plan step must succeed before write-section can run.`,
+        },
+        { status: 400 }
+      );
     }
-    } // end per-section planner fallback
+
+    const paragraphPlan = assignment.assignedPlan!;
+    console.log(`[write-section] Using chapter-level plan (${paragraphPlan.length} entries) for Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
 
     // Build a per-request system prompt: Voice DNA at the top (system-level weight),
     // then the dedup prohibition block if any points have already been covered.

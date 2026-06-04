@@ -121,11 +121,18 @@ Before planning paragraphs, mentally assign each concept in the transcript to th
 This is the anti-duplication contract: the writer for Section 3 will receive only Section 3's plan and will not see what Sections 1 and 2 planned. If the plans overlap, the book will duplicate content. There is no retry mechanism — plan correctly the first time.
 
 ════════════════════════════════════════════
-SEQUENCE RULE
+EXCERPT OWNERSHIP RULE (FIX 4 — REPLACES MONOTONIC)
 ════════════════════════════════════════════
-Within each section, paragraph plans MUST follow the order ideas appear in the transcript excerpts. Use supportedExcerptNumbers to anchor each paragraph. Plans must be monotonically non-decreasing by excerpt number — paragraph N cannot draw from a lower excerpt than paragraph N-1.
+Each transcript excerpt may be assigned to EXACTLY ONE section in this chapter. Once you assign an excerpt to a section, it is LOCKED — no other section may use it.
 
-Excerpt references use section-scoped numbering: [S1-EXCERPT 1] means Section 1's first excerpt. In supportedExcerptNumbers, use only the number (e.g. 1 for S1-EXCERPT 1).${priorChapterBlock}${coreThesisBlock}${voiceDnaLine}${chapterBoundaryBlock}
+You MAY assign excerpts non-monotonically:
+  ✓ Section 1 can use excerpts 1, 3, 5
+  ✓ Section 2 can use excerpts 2, 4, 6
+  ✓ Section 3 can use excerpts 7, 8, 9
+
+This allows proper handling of teaching structures where the speaker introduces multiple points, then circles back to develop each one.
+
+Each paragraph plan entry MUST list supportedExcerptNumbers that belong to THIS section only. No excerpt number may appear in two different sections' plans.${priorChapterBlock}${coreThesisBlock}${voiceDnaLine}${chapterBoundaryBlock}
 
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}`;
@@ -175,8 +182,10 @@ ${excerptPayload}`;
         const { object } = await generatePromise;
         clearInterval(heartbeat);
 
-        // ── Post-process: prune low-quality entries and enforce monotonicity ──
+        // ── FIX 4: Post-process with excerpt-usage deduplication ────────────────
         const priorProseText = priorSectionsSample.join(" ");
+        const usedExcerpts = new Set<string>(); // Track which excerpt IDs are already assigned
+        
         const cleanedPlans = (object.sectionPlans ?? []).map((sp) => {
           const sectionInput = sections.find((s) => s.sectionNumber === sp.sectionNumber);
           const maxExcerpt = Math.max(1, sectionInput?.transcriptExcerpts?.length ?? 0);
@@ -200,6 +209,29 @@ ${excerptPayload}`;
             })
             .filter((entry) => entry.supportedExcerptNumbers.length > 0);
 
+          // FIX 4: Excerpt ownership enforcement — remove excerpts already used by prior sections
+          entries = entries
+            .map((entry) => {
+              const excerptKey = `S${sp.sectionNumber}`;
+              const availableExcerpts = entry.supportedExcerptNumbers.filter((n) => {
+                const key = `${excerptKey}-E${n}`;
+                return !usedExcerpts.has(key);
+              });
+              return {
+                ...entry,
+                supportedExcerptNumbers: availableExcerpts,
+                minExcerptNumber: availableExcerpts.length > 0 ? Math.min(...availableExcerpts) : undefined,
+              };
+            })
+            .filter((entry) => entry.supportedExcerptNumbers.length > 0);
+
+          // Mark all excerpts in this section's plan as consumed
+          for (const entry of entries) {
+            for (const n of entry.supportedExcerptNumbers) {
+              usedExcerpts.add(`S${sp.sectionNumber}-E${n}`);
+            }
+          }
+
           if (priorProseText.length > 100) {
             entries = entries.filter((entry) => {
               if (!entry.purpose || entry.purpose.length < 20) return true;
@@ -208,7 +240,9 @@ ${excerptPayload}`;
             });
           }
 
-          // Enforce monotonic excerpt flow within each section plan.
+          // FIX 4: Removed monotonic sorting — sections can now use non-sequential excerpts
+          // This allows proper handling of teaching structures where concepts are introduced
+          // then circled back to. Entries are sorted by minExcerptNumber for readability only.
           entries.sort((a, b) => (a.minExcerptNumber ?? 0) - (b.minExcerptNumber ?? 0));
           return { sectionNumber: sp.sectionNumber, paragraphPlan: entries };
         });
