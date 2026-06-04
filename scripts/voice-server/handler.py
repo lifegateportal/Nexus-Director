@@ -20,10 +20,18 @@ import re
 import tempfile
 import logging
 import urllib.request
+import builtins
+from contextlib import contextmanager
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("nexus-voice")
+
+# RunPod workers are non-interactive. Some upstream libs may attempt stdin prompts
+# (license confirmations, model-download questions). Force deterministic "yes"
+# responses process-wide so jobs never fail with EOF on input().
+os.environ["COQUI_TOS_AGREED"] = "1"
+builtins.input = lambda _prompt="": "y"
 
 # ── Lazy model loader ──────────────────────────────────────────────────────────
 # XTTS v2 takes ~10–20 s to load on first request (cold start).
@@ -31,20 +39,42 @@ log = logging.getLogger("nexus-voice")
 
 _tts = None
 
+
+@contextmanager
+def auto_accept_input():
+    """Force non-interactive yes responses for model/license prompts."""
+    original_input = builtins.input
+    builtins.input = lambda _prompt="": "y"
+    try:
+        yield
+    finally:
+        builtins.input = original_input
+
 def get_tts():
     global _tts
     if _tts is None:
         log.info("Loading XTTS v2 model…")
-        from TTS.api import TTS  # type: ignore
+        # Coqui can prompt for confirmation when pulling model assets. RunPod
+        # workers are non-interactive, so we force prompt acceptance here.
         force_cpu = os.getenv("XTTS_FORCE_CPU", "0") == "1"
-        if force_cpu:
-            log.warning("XTTS_FORCE_CPU=1 set, loading XTTS on CPU")
-            _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
-        else:
-            try:
-                _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=True)
-            except Exception as exc:  # noqa: BLE001
-                log.exception("GPU XTTS init failed, falling back to CPU: %s", exc)
+        try:
+            with auto_accept_input():
+                from TTS.api import TTS  # type: ignore
+                if force_cpu:
+                    log.warning("XTTS_FORCE_CPU=1 set, loading XTTS on CPU")
+                    _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+                else:
+                    try:
+                        _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=True)
+                    except Exception as exc:  # noqa: BLE001
+                        log.exception("GPU XTTS init failed, falling back to CPU: %s", exc)
+                        _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+        except EOFError:
+            # Extra safety: if any dependency still tried to read stdin, retry once
+            # with forced prompt acceptance in a clean pass.
+            log.warning("XTTS init hit EOF on stdin prompt; retrying non-interactive")
+            with auto_accept_input():
+                from TTS.api import TTS  # type: ignore
                 _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
         log.info("XTTS v2 ready.")
     return _tts
