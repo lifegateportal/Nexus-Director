@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
+import { env } from "@/lib/env";
 import { ArchitectRequestSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
@@ -61,6 +62,8 @@ function sectionKeywordOverlap(a: string, b: string): number {
   for (const w of setA) { if (setB.has(w)) shared++; }
   return shared / Math.min(setA.size, setB.size);
 }
+
+const ARCHITECT_OVERLAP_THRESHOLD = 0.60;
 
 // U3 — Word budget calibration: quality multiplier from segment density
 function segmentQualityMultiplier(keyPointsCount: number, quotesCount: number): number {
@@ -672,13 +675,24 @@ This content is a sermon series. The author's preaching sequence IS the book's s
         const aText = [a.heading, ...a.keyPoints].join(" ");
         const bText = [b.heading, ...b.keyPoints].join(" ");
         const overlap = sectionKeywordOverlap(aText, bText);
-        if (overlap >= 0.60) {
+        if (overlap >= ARCHITECT_OVERLAP_THRESHOLD) {
           overlapWarnings.push(
             `Ch ${a.chapterNum} §"${a.heading}" ↔ Ch ${b.chapterNum} §"${b.heading}" (${Math.round(overlap * 100)}% overlap)`
           );
         }
       }
     }
+
+    if (env.EBOOK_STRICT_ARCHITECT_OVERLAP_GATE && overlapWarnings.length > 0) {
+      return NextResponse.json({
+        route: "ebook/architect",
+        error: "Architecture overlap detected",
+        details: "Architect found overlapping sections across chapters and stopped before drafting to avoid duplicated prose.",
+        overlapWarnings,
+        revertHint: "Set EBOOK_STRICT_ARCHITECT_OVERLAP_GATE=false to restore warning-only behavior.",
+      }, { status: 409 });
+    }
+
     // Attach overlap warnings as arcFlags on the affected chapters
     if (overlapWarnings.length > 0) {
       for (const warning of overlapWarnings) {

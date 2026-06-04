@@ -39,10 +39,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const sampleUrl = await resolveR2ObjectUrl(input.sampleUrl);
+    const sampleRes = await fetch(sampleUrl);
+    if (!sampleRes.ok) {
+      const body = await sampleRes.text();
+      throw new Error(`Sample fetch failed (${sampleRes.status}): ${body.slice(0, 300)}`);
+    }
+    const sampleBuffer = Buffer.from(await sampleRes.arrayBuffer());
+    const audioBase64 = sampleBuffer.toString("base64");
+    const safeExt = (input.ext ?? "wav").toLowerCase().replace(/[^a-z0-9]/g, "") || "wav";
+
     const submitRes = await fetch(`https://api.runpod.ai/v2/${endpointId}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNPOD_API_KEY}` },
-      body: JSON.stringify({ input: { action: "clone", audio_url: sampleUrl, ext: input.ext } }),
+      body: JSON.stringify({ input: { action: "clone", audio_base64: audioBase64, ext: safeExt } }),
     });
     if (!submitRes.ok) {
       const body = await submitRes.text();

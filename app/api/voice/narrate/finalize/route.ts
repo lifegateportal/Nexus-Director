@@ -101,7 +101,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (json.status === "FAILED") {
-      return NextResponse.json({ status: "FAILED", error: json.error ?? "RunPod synthesis failed" });
+      const rawError = json.error ?? "RunPod synthesis failed";
+      const error = /EOF when reading a line/i.test(rawError)
+        ? "RunPod worker is prompting for interactive input (EOF). Deploy the latest voice worker image so XTTS loads non-interactively."
+        : rawError;
+      return NextResponse.json({ status: "FAILED", error });
     }
 
     if (json.status !== "COMPLETED") {
