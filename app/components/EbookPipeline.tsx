@@ -2420,12 +2420,17 @@ export function EbookPipeline({
           if (chapterPlanBuiltForChapter !== assignment.chapterNumber) {
             chapterPlanBuiltForChapter = assignment.chapterNumber;
             chapterPlanMap.clear();
+            // Include ALL sections in chapter-plan (even completed ones) so the planner
+            // can see the full chapter structure. Completed sections' excerpts are already
+            // filtered out by consumedSegmentIds, so no duplication risk.
             const chapterAssignments = assignments.filter(
-              (a) => a.chapterNumber === assignment.chapterNumber &&
-                     !completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`)
+              (a) => a.chapterNumber === assignment.chapterNumber
             );
-            if (chapterAssignments.length > 0) {
-              addLog(`  📋 Planning Chapter ${assignment.chapterNumber} (${chapterAssignments.length} sections)…`);
+            const incompleteCount = chapterAssignments.filter(
+              (a) => !completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`)
+            ).length;
+            if (incompleteCount > 0) {
+              addLog(`  📋 Planning Chapter ${assignment.chapterNumber} (${incompleteCount} sections remaining)…`);
               try {
                 const chapterPlanResult = await postJson<{ sectionPlans: Array<{ sectionNumber: number; paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[]; minExcerptNumber?: number }> }> }>(
                   "/api/ebook/chapter-plan",
@@ -2477,8 +2482,10 @@ export function EbookPipeline({
                 }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} plan ready (${chapterPlanMap.size} sections planned)`);
               } catch (planErr) {
-                addLog(`  ⚠ Chapter plan call failed — falling back to per-section planner`);
+                addLog(`  ⚠ Chapter plan failed — pipeline will stop at write-section (Fix 2: no fallback planner)`);
                 console.warn("[chapter-plan] failed:", planErr);
+                // FIX 2: No fallback planner. Write-section will return 400 error.
+                // This forces the user to retry with a working chapter-plan.
               }
             }
           }
