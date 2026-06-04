@@ -460,8 +460,16 @@ export async function POST(req: NextRequest) {
           };
         });
 
+        // Extract short book title from themes or first chapter (not coreThesis which is a long paragraph)
+        const shortBookTitle = (
+          input.contentMap.overarchingThemes[0] ||
+          chapters[0]?.title ||
+          input.contentMap.segments[0]?.topic ||
+          "Untitled Teaching Manuscript"
+        ).trim().split(".")[0].slice(0, 100);
+
         minimal = {
-          bookTitle: input.contentMap.coreThesis || input.contentMap.overarchingThemes[0] || input.contentMap.segments[0]?.topic || "Untitled Teaching Manuscript",
+          bookTitle: shortBookTitle,
           subtitle: input.contentMap.targetAudience || input.contentMap.teachingArc || "Drawn directly from the source teaching",
           authorName: "the Author",
           estimatedTotalWords: chapters.flatMap((c) => c.sections).reduce((sum, s) => sum + (s.targetWordCount || 0), 0),
