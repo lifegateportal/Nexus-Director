@@ -2775,6 +2775,7 @@ export function EbookPipeline({
         // ── Upgrade 4 (writer): Register new illustration labels ──────────
         for (const label of extractIllustrationLabels(body ?? "")) {
           usedIllustrations.add(label);
+        }
 
         // ── Upgrade 1: Mark source segments as consumed ───────────────────
         for (const segId of assignment.sourceSegmentIds ?? []) {
