@@ -17,6 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Ensure TTS dependency resolution does not downgrade CUDA-capable torch.
+# Keep final torch/torchaudio pinned to cu128 for Blackwell compatibility.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
+    torch==2.7.1 torchaudio==2.7.1
+
 # Do not bake XTTS weights into the image. It makes the serverless image much
 # larger and workers can get stuck initializing before they ever pull a job.
 # The model is still lazy-loaded by handler.py on the first synth request.

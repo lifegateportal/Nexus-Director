@@ -36,7 +36,16 @@ def get_tts():
     if _tts is None:
         log.info("Loading XTTS v2 model…")
         from TTS.api import TTS  # type: ignore
-        _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=True)
+        force_cpu = os.getenv("XTTS_FORCE_CPU", "0") == "1"
+        if force_cpu:
+            log.warning("XTTS_FORCE_CPU=1 set, loading XTTS on CPU")
+            _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+        else:
+            try:
+                _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=True)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("GPU XTTS init failed, falling back to CPU: %s", exc)
+                _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
         log.info("XTTS v2 ready.")
     return _tts
 
