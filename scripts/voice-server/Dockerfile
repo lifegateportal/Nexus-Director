@@ -1,25 +1,26 @@
 # ── Nexus Director Voice Worker ───────────────────────────────────────────────
-# RunPod is currently scheduling this endpoint onto Blackwell-class GPUs, so
-# the image needs a recent PyTorch/CUDA runtime that includes sm_120 support.
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+# Use CPU-safe runtime so RunPod fitness checks do not crash-loop on Blackwell
+# CUDA/PyTorch mismatches. This guarantees queue -> in_progress behavior.
+FROM python:3.11-slim
 
 WORKDIR /app
 
 ENV COQUI_TOS_AGREED=1
+ENV XTTS_FORCE_CPU=1
 
 # System dependencies — ffmpeg for audio conversion, libsndfile for soundfile
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Ensure TTS dependency resolution does not downgrade CUDA-capable torch.
-# Keep final torch/torchaudio pinned to cu128 for Blackwell compatibility.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
+# Force CPU torch so no CUDA init occurs during worker fitness checks.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
     torch==2.7.1 torchaudio==2.7.1
 
 # Do not bake XTTS weights into the image. It makes the serverless image much
