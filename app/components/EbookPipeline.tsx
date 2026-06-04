@@ -2522,7 +2522,6 @@ export function EbookPipeline({
                     voiceDNA,
                     authorConfig: (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined,
                     priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
-                    alreadyCoveredPoints: [], // deprecated — prose samples now used for dedup
                     bannedRecaps: extractBannedRecaps(allSections),
                     alreadyQuotedRefs: [...usedQuoteRefs],
                     forbiddenVerseTexts: Array.from(quotedVerseTextsByRef.values()).filter(Boolean),
@@ -2570,11 +2569,6 @@ export function EbookPipeline({
                     paragraphs: sec.paragraphs ?? [],
                     claimLedger: sec.claimLedger ?? [],
                   });
-                  // G3: Feed claims from chapter-writer back into coveredCurrentChapter
-                  // so subsequent chapters' alreadyCoveredPoints includes these claims.
-                  for (const c of sec.claimLedger ?? []) {
-                    if (c.claim) coveredCurrentChapter.push(c.claim);
-                  }
                 }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} written (${chapterWriteCache.size} sections cached)`);
               } catch (writeErr) {

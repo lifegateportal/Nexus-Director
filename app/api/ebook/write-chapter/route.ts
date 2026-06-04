@@ -43,12 +43,13 @@ AUTHOR CONFIGURATION (highest priority)
     : "";
 
   // ── Cross-chapter dedup context ────────────────────────────────────────────
-  const priorContextBlock = alreadyCoveredPoints.length > 0
+  // FIX 1: Use prose samples (not metadata) for n-gram overlap detection
+  const priorContextBlock = priorSectionsSample.length > 0
     ? `\n\n════════════════════════════════════════════
-PRIOR CHAPTERS — HARD SKIP
+PRIOR CHAPTERS — PROSE SAMPLE (avoid repeating these stories/examples)
 ════════════════════════════════════════════
-These concepts were fully developed in earlier chapters. Do NOT re-explain or re-develop them in any section of this chapter. One-sentence callback maximum per concept:
-${alreadyCoveredPoints.slice(0, 30).map((p) => `• ${p}`).join("\n")}`
+These are actual sentences from prior chapters. Do NOT repeat these stories, examples, or scripture explanations. One-sentence reference maximum:
+${priorSectionsSample.slice(0, 20).map((p) => `• ${p.slice(0, 200)}`).join("\n")}`
     : "";
 
   const bannedRecapsBlock = bannedRecaps.length > 0
@@ -57,13 +58,6 @@ BANNED RECAP SENTENCES
 ════════════════════════════════════════════
 These thesis sentences from prior sections must NOT be paraphrased or echoed:
 ${bannedRecaps.slice(0, 10).map((r) => `• "${r}"`).join("\n")}`
-    : "";
-
-  const priorProseBlock = priorSectionsSample.length > 0
-    ? `\n\n════════════════════════════════════════════
-PRIOR PROSE SAMPLE (n-gram reference — avoid repeating these constructions)
-════════════════════════════════════════════
-${priorSectionsSample.slice(0, 12).join("\n")}`
     : "";
 
   const quoteDedupBlock = (alreadyQuotedRefs.length + forbiddenVerseTexts.length) > 0
@@ -154,7 +148,7 @@ Each section is sealed. Do NOT preview the next section's content from within th
 • Transitional banter that has no teaching content: "moving on", "next point", "back to our text", "as I was saying"
 • Incomplete or broken sentences that trail off without a point
 • Any sentence beginning with a markdown heading symbol (#, ##, ###)
-${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${priorProseBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
+${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
 ${READER_NORMALIZATION_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}`;
 
