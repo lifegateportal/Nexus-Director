@@ -17,6 +17,7 @@ import base64
 import os
 import io
 import re
+import sys
 import tempfile
 import logging
 import urllib.request
@@ -44,11 +45,16 @@ _tts = None
 def auto_accept_input():
     """Force non-interactive yes responses for model/license prompts."""
     original_input = builtins.input
+    original_stdin = sys.stdin
     builtins.input = lambda _prompt="": "y"
+    # Some libraries read directly from stdin instead of calling input().
+    # Provide an endless stream of "y" answers to avoid EOF in headless workers.
+    sys.stdin = io.StringIO("y\n" * 256)
     try:
         yield
     finally:
         builtins.input = original_input
+        sys.stdin = original_stdin
 
 def get_tts():
     global _tts
@@ -78,6 +84,11 @@ def get_tts():
                 _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
         log.info("XTTS v2 ready.")
     return _tts
+
+
+def _reset_tts() -> None:
+    global _tts
+    _tts = None
 
 
 # ── Text chunker ───────────────────────────────────────────────────────────────
@@ -287,6 +298,16 @@ def handler(job: dict) -> dict:
         elif action == "synthesize":
             return action_synthesize(job_input)
         else:
+            return {"error": f"Unknown action: {action}. Use 'clone' or 'synthesize'."}
+    except EOFError:
+        # Last-resort recovery for any hidden interactive prompt path.
+        log.warning("EOF from interactive prompt path; retrying once non-interactively")
+        _reset_tts()
+        with auto_accept_input():
+            if action == "clone":
+                return action_clone(job_input)
+            elif action == "synthesize":
+                return action_synthesize(job_input)
             return {"error": f"Unknown action: {action}. Use 'clone' or 'synthesize'."}
     except Exception as exc:  # noqa: BLE001
         log.exception("Handler error")
