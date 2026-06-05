@@ -22,6 +22,7 @@ import tempfile
 import logging
 import urllib.request
 import builtins
+import boto3
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -89,6 +90,22 @@ def get_tts():
 def _reset_tts() -> None:
     global _tts
     _tts = None
+
+
+def get_r2_client():
+    account_id = os.getenv("R2_ACCOUNT_ID")
+    access_key_id = os.getenv("R2_ACCESS_KEY_ID")
+    secret_access_key = os.getenv("R2_SECRET_ACCESS_KEY")
+    if not account_id or not access_key_id or not secret_access_key:
+        raise RuntimeError("R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY are required for synthesis uploads")
+
+    return boto3.client(
+        "s3",
+        region_name="auto",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret_access_key,
+    )
 
 
 # ── Text chunker ───────────────────────────────────────────────────────────────
@@ -229,6 +246,8 @@ def action_synthesize(job_input: dict) -> dict:
     speaker_url: str | None = job_input.get("speaker_wav_url")
     language: str = job_input.get("language", "en")
     speed: float = float(job_input.get("speed", 1.0))
+    slug: str = job_input.get("slug", "default")
+    chapter_id: str = job_input.get("chapter_id", "chapter")
 
     if not text:
         return {"error": "text is required"}
@@ -270,15 +289,26 @@ def action_synthesize(job_input: dict) -> dict:
         Path(spk_tmp_path).unlink(missing_ok=True)
 
     stitched = stitch_wav_chunks(wav_chunks)
-    encoded = base64.b64encode(stitched).decode()
 
     # Calculate output duration
     import wave
     with wave.open(io.BytesIO(stitched)) as wf:
         duration_sec = wf.getnframes() / wf.getframerate()
 
+    safe_slug = re.sub(r"[^a-z0-9-]", "-", slug.lower()).strip("-") or "default"
+    safe_chapter = re.sub(r"[^a-z0-9-]", "-", chapter_id.lower()).strip("-") or "chapter"
+    key = f"audio/books/{safe_slug}/{safe_chapter}.wav"
+
+    r2 = get_r2_client()
+    r2.put_object(
+        Bucket=os.environ["R2_BUCKET_NAME"],
+        Key=key,
+        Body=stitched,
+        ContentType="audio/wav",
+    )
+
     return {
-        "wav_base64": encoded,
+        "audio_url": key,
         "duration_sec": round(duration_sec, 1),
         "format": "wav",
         "sample_rate": 22050,

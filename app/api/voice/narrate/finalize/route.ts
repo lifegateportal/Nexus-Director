@@ -124,6 +124,42 @@ function extractAudioBase64(value: unknown): string | null {
   return null;
 }
 
+function extractAudioUrl(value: unknown): string | null {
+  const queue: unknown[] = [value];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+
+    if (typeof current === "string") {
+      const trimmed = current.trim();
+      if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("audio/books/")) {
+        return trimmed;
+      }
+      continue;
+    }
+
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+
+    if (typeof current !== "object") continue;
+    const obj = current as Record<string, unknown>;
+
+    const direct = obj.audio_url ?? obj.audioUrl ?? obj.url;
+    if (typeof direct === "string" && direct.length > 0) return direct;
+
+    if (obj.output !== undefined) queue.push(obj.output);
+    if (obj.delayOutput !== undefined) queue.push(obj.delayOutput);
+    if (obj.data !== undefined) queue.push(obj.data);
+    if (obj.result !== undefined) queue.push(obj.result);
+    if (obj.response !== undefined) queue.push(obj.response);
+  }
+
+  return null;
+}
+
 function summarizePayloadShape(value: unknown): string {
   if (!value || typeof value !== "object") return "no object payload";
   const top = value as Record<string, unknown>;
@@ -212,6 +248,16 @@ export async function POST(req: NextRequest) {
     }
     if (typeof output.error === "string" && output.error) {
       return NextResponse.json({ status: "FAILED", error: output.error });
+    }
+
+    const audioUrl = extractAudioUrl(output);
+    if (audioUrl) {
+      const durationSec = asNumber(output.duration_sec ?? output.duration) ?? 0;
+      return NextResponse.json({
+        status: "COMPLETED",
+        audioUrl: audioUrl.startsWith("audio/books/") ? toR2PublicUrlOrKey(audioUrl) : audioUrl,
+        durationSec,
+      });
     }
 
     if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
