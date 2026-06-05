@@ -328,8 +328,12 @@ export function AudioReader({
   const prevStartFrom = useRef<number | undefined>(undefined);
   const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
   const recordedTimelineRef = useRef<Array<{ start: number; end: number; paraKey: string }>>([]);
+  const recordedAudioCtxRef = useRef<AudioContext | null>(null);
+  const recordedGainRef = useRef<GainNode | null>(null);
+  const recordedSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
 
   const hasRecordedAudio = Boolean(chapterAudioUrl);
+  const RECORDED_GAIN_BOOST = 1.6;
 
   // ── Narrator persona — persisted to localStorage ─────────────────────────
   // localPersonaIdx drives the UI; a useEffect syncs it into the engine.
@@ -475,6 +479,48 @@ export function AudioReader({
     if (audioEl.readyState >= 1) syncTimeline();
     return () => audioEl.removeEventListener("loadedmetadata", syncTimeline);
   }, [chapter, hasRecordedAudio, chapterAudioUrl, onRecordedParaKeyChange]);
+
+  useEffect(() => {
+    if (!hasRecordedAudio) return;
+    const audioEl = recordedAudioRef.current;
+    if (!audioEl || typeof window === "undefined") return;
+
+    // Keep native element volume maxed, then apply extra gain through WebAudio.
+    audioEl.volume = 1;
+
+    try {
+      const Ctx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return;
+
+      if (!recordedAudioCtxRef.current) recordedAudioCtxRef.current = new Ctx();
+      const ctx = recordedAudioCtxRef.current;
+      if (!ctx) return;
+
+      if (!recordedGainRef.current) {
+        const gain = ctx.createGain();
+        gain.gain.value = RECORDED_GAIN_BOOST;
+        gain.connect(ctx.destination);
+        recordedGainRef.current = gain;
+      } else {
+        recordedGainRef.current.gain.value = RECORDED_GAIN_BOOST;
+      }
+
+      if (!recordedSourceRef.current) {
+        const src = ctx.createMediaElementSource(audioEl);
+        src.connect(recordedGainRef.current);
+        recordedSourceRef.current = src;
+      }
+
+      const resumeCtx = () => {
+        if (ctx.state === "suspended") void ctx.resume();
+      };
+
+      audioEl.addEventListener("play", resumeCtx);
+      return () => audioEl.removeEventListener("play", resumeCtx);
+    } catch {
+      // Fallback to native element volume only when WebAudio isn't available.
+    }
+  }, [hasRecordedAudio]);
 
   useEffect(() => {
     if (!hasRecordedAudio) return;
