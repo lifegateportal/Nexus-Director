@@ -152,6 +152,48 @@ function splitEmphasis(raw: string): { text: string; emph: boolean }[] {
   return parts.filter((p) => p.text.trim().length > 0);
 }
 
+function estimateSegmentDuration(segment: Segment): number {
+  const words = segment.text.split(/\s+/).filter(Boolean).length;
+  const chars = segment.text.length;
+  const commas = (segment.text.match(/,/g) ?? []).length;
+  const semicolons = (segment.text.match(/[;:]/g) ?? []).length;
+  const clauses = (segment.text.match(/[.!?]/g) ?? []).length;
+
+  let seconds = Math.max(0.55, words * 0.28 + chars * 0.004);
+
+  if (segment.type === "chapter-title") seconds *= 1.9;
+  else if (segment.type === "heading") seconds *= 1.35;
+  else if (segment.type === "quote") seconds *= 1.12;
+  else if (segment.type === "emphasis") seconds *= 1.05;
+
+  seconds += commas * 0.18 + semicolons * 0.24 + clauses * 0.12;
+  if (words <= 4) seconds += 0.12;
+  if (words >= 25) seconds += 0.4;
+
+  return Math.max(0.45, seconds);
+}
+
+function buildRecordedTimeline(segments: Segment[], duration: number): Array<{ start: number; end: number; paraKey: string }> {
+  if (!segments.length || !Number.isFinite(duration) || duration <= 0) return [];
+
+  const estimated = segments.map((segment) => estimateSegmentDuration(segment));
+  const totalEstimated = estimated.reduce((sum, value) => sum + value, 0) || 1;
+  const scale = duration / totalEstimated;
+
+  let cursor = 0;
+  return segments.map((segment, index) => {
+    const segmentDuration = Math.max(0.45, estimated[index] * scale);
+    const entry = { start: cursor, end: cursor + segmentDuration, paraKey: segment.paraKey };
+    cursor = entry.end;
+    return entry;
+  }).map((entry, index, timeline) => {
+    if (index === timeline.length - 1) {
+      return { ...entry, end: duration };
+    }
+    return entry;
+  });
+}
+
 export function parseChapter(chapter: ChapterDraft): Segment[] {
   const segs: Segment[] = [];
 
@@ -221,13 +263,18 @@ export function parseChapter(chapter: ChapterDraft): Segment[] {
     }
   };
 
-  pushSentences("chapter-title", `Chapter ${chapter.number}. ${chapter.title}.`, "title");
+  const chapterLead = chapter.number > 0
+    ? `Chapter ${chapter.number}. ${chapter.title}.`
+    : `${chapter.title}.`;
+  pushSentences("chapter-title", chapterLead, "title");
   if (chapter.epigraph)      pushSentences("quote", chapter.epigraph, "epigraph");
   if (chapter.intro)         pushSentences("body",  chapter.intro,    "intro");
 
   for (let si = 0; si < chapter.sections.length; si++) {
     const section = chapter.sections[si];
-    if (section.heading) pushSentences("heading", section.heading, `s${si}_h`);
+    // Mirror ReaderClient: the first section heading is intentionally hidden
+    // in the UI, so it should not be narrated as an apparent "extra subtitle".
+    if (section.heading && si > 0) pushSentences("heading", section.heading, `s${si}_h`);
     processBody(section.body, `s${si}`);
   }
   if (chapter.forwardQuestion) pushSentences("body", chapter.forwardQuestion, "fwd");
@@ -247,6 +294,12 @@ interface Props {
   readerHref: string;
   /** Book slug — used to persist audio pins. */
   slug:       string;
+  /** Generated chapter narration URL from Voice Studio local storage. */
+  chapterAudioUrl?: string | null;
+  /** External seek request for recorded audio (segment + word offset). */
+  recordedSeekRequest?: { token: number; segIdx: number; wordIdx: number } | null;
+  /** Emits active paragraph key while recorded audio plays. */
+  onRecordedParaKeyChange?: (paraKey: string | null) => void;
   theme: {
     muted:        string;
     accent:       string;
@@ -263,7 +316,7 @@ interface Props {
 }
 
 export function AudioReader({
-  chapter, bookTitle, readerHref, slug, theme, fontFamily,
+  chapter, bookTitle, readerHref, slug, chapterAudioUrl, recordedSeekRequest, onRecordedParaKeyChange, theme, fontFamily,
   onClose, startFrom,
 }: Props) {
   const {
@@ -273,6 +326,10 @@ export function AudioReader({
   } = useAudioPlayer();
 
   const prevStartFrom = useRef<number | undefined>(undefined);
+  const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
+  const recordedTimelineRef = useRef<Array<{ start: number; end: number; paraKey: string }>>([]);
+
+  const hasRecordedAudio = Boolean(chapterAudioUrl);
 
   // ── Narrator persona — persisted to localStorage ─────────────────────────
   // localPersonaIdx drives the UI; a useEffect syncs it into the engine.
@@ -350,7 +407,7 @@ export function AudioReader({
       : `${Math.ceil(sleepSecsLeft / 60)}m`;
 
   // ── Audio pins ────────────────────────────────────────────────────────
-  const chapterKey = `ch-${chapter.number}`;
+  const chapterKey = `${slug}-ch-${chapter.number}`;
 
   const [pins, setPins] = useState<AudioPin[]>([]);
 
@@ -378,9 +435,10 @@ export function AudioReader({
 
   // Register chapter with the global engine when chapter changes
   useEffect(() => {
+    if (hasRecordedAudio) return;
     const segs: Segment[] = parseChapter(chapter);
     const meta: AudioChapterMeta = {
-      chapterKey: `ch-${chapter.number}`,
+      chapterKey: `${slug}-ch-${chapter.number}`,
       title:      chapter.title,
       number:     chapter.number,
       bookTitle,
@@ -388,17 +446,98 @@ export function AudioReader({
     };
     setChapter(segs, meta);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chapter, bookTitle, readerHref]);
+  }, [chapter, bookTitle, readerHref, slug, hasRecordedAudio]);
 
   // Jump to a specific segment when startFrom prop changes
   useEffect(() => {
+    if (hasRecordedAudio) return;
     if (startFrom === undefined) return;
     if (startFrom === prevStartFrom.current) return;
     prevStartFrom.current = startFrom;
     seekTo(startFrom);
-  }, [startFrom, seekTo]);
+  }, [startFrom, seekTo, hasRecordedAudio]);
+
+  useEffect(() => {
+    if (!hasRecordedAudio) {
+      recordedTimelineRef.current = [];
+      onRecordedParaKeyChange?.(null);
+      return;
+    }
+    const audioEl = recordedAudioRef.current;
+    if (!audioEl) return;
+
+    const syncTimeline = () => {
+      const segs = parseChapter(chapter);
+      recordedTimelineRef.current = buildRecordedTimeline(segs, audioEl.duration || 0);
+    };
+
+    audioEl.addEventListener("loadedmetadata", syncTimeline);
+    if (audioEl.readyState >= 1) syncTimeline();
+    return () => audioEl.removeEventListener("loadedmetadata", syncTimeline);
+  }, [chapter, hasRecordedAudio, chapterAudioUrl, onRecordedParaKeyChange]);
+
+  useEffect(() => {
+    if (!hasRecordedAudio) return;
+    const audioEl = recordedAudioRef.current;
+    if (!audioEl) return;
+
+    const emitCurrentPara = () => {
+      const timeline = recordedTimelineRef.current;
+      if (!timeline.length) {
+        onRecordedParaKeyChange?.(null);
+        return;
+      }
+      const t = audioEl.currentTime;
+      const active = timeline.find((entry) => t >= entry.start && t < entry.end)
+        ?? timeline[timeline.length - 1];
+      onRecordedParaKeyChange?.(active?.paraKey ?? null);
+    };
+
+    const clearPara = () => onRecordedParaKeyChange?.(null);
+
+    audioEl.addEventListener("timeupdate", emitCurrentPara);
+    audioEl.addEventListener("seeked", emitCurrentPara);
+    audioEl.addEventListener("play", emitCurrentPara);
+    audioEl.addEventListener("ended", clearPara);
+
+    emitCurrentPara();
+    return () => {
+      audioEl.removeEventListener("timeupdate", emitCurrentPara);
+      audioEl.removeEventListener("seeked", emitCurrentPara);
+      audioEl.removeEventListener("play", emitCurrentPara);
+      audioEl.removeEventListener("ended", clearPara);
+    };
+  }, [hasRecordedAudio, onRecordedParaKeyChange]);
+
+  useEffect(() => {
+    if (!hasRecordedAudio || !recordedSeekRequest) return;
+    const audioEl = recordedAudioRef.current;
+    const timeline = recordedTimelineRef.current;
+    if (!audioEl || !timeline.length) return;
+
+    const segmentWindow = timeline[recordedSeekRequest.segIdx];
+    if (!segmentWindow) return;
+
+    const segs = parseChapter(chapter);
+    const tappedSeg = segs[recordedSeekRequest.segIdx];
+    const words = tappedSeg?.text.split(/\s+/).filter(Boolean).length ?? 0;
+    const ratio = words > 0 ? Math.min(1, Math.max(0, recordedSeekRequest.wordIdx / words)) : 0;
+    const seekSeconds = segmentWindow.start + (segmentWindow.end - segmentWindow.start) * ratio;
+    audioEl.currentTime = Math.max(0, seekSeconds);
+    void audioEl.play().catch(() => {});
+  }, [chapter, hasRecordedAudio, recordedSeekRequest]);
 
   const togglePlay = () => {
+    if (hasRecordedAudio) {
+      const audioEl = recordedAudioRef.current;
+      if (!audioEl) return;
+      if (audioEl.paused) {
+        void audioEl.play().catch(() => {});
+      } else {
+        audioEl.pause();
+      }
+      return;
+    }
     if (!window.speechSynthesis) return;
     if      (state === "idle")    play();
     else if (state === "playing") pause();
@@ -419,6 +558,83 @@ export function AudioReader({
 
   return (
     <div style={{ flexShrink: 0 }}>
+      {chapterAudioUrl && (
+        <div style={{
+          padding: "0.65rem 1.25rem",
+          background: `${theme.chrome}f2`,
+          borderTop: `1px solid ${theme.chromeBorder}`,
+          borderBottom: `1px solid ${theme.chromeBorder}`,
+          backdropFilter: "blur(20px)",
+          WebkitBackdropFilter: "blur(20px)",
+        }}>
+          <p style={{ margin: 0, marginBottom: "0.45rem", fontSize: "0.62rem", letterSpacing: "0.1em", textTransform: "uppercase", color: theme.muted, fontFamily, fontWeight: 700 }}>
+            Recorded chapter audio
+          </p>
+          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+          <audio
+            ref={recordedAudioRef}
+            src={chapterAudioUrl}
+            controls
+            preload="metadata"
+            style={{ width: "100%", height: "2rem" }}
+          />
+        </div>
+      )}
+
+      {hasRecordedAudio ? (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "0.35rem",
+          padding: "0 0.85rem 0 1.25rem",
+          height: "3.5rem",
+          background: theme.chrome,
+          borderTop: `1px solid ${theme.chromeBorder}`,
+          backdropFilter: "blur(28px)", WebkitBackdropFilter: "blur(28px)",
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{
+              margin: 0, lineHeight: 1.25,
+              fontSize: "0.72rem", fontFamily, fontWeight: 500,
+              color: theme.text,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}>
+              Chapter {chapter.number}
+            </p>
+            <p style={{ margin: "0.12rem 0 0", lineHeight: 1.25, fontSize: "0.62rem", fontFamily, color: theme.muted }}>
+              Recorded narration
+            </p>
+          </div>
+
+          <button onClick={togglePlay} aria-label="Play or pause recorded narration" style={{
+            width: "2.5rem", height: "2.5rem", borderRadius: "50%",
+            background: theme.accent,
+            boxShadow: `0 2px 8px ${theme.accent}3a`,
+            border: "none", cursor: "pointer",
+            color: "#fff",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0,
+          }}>
+            <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.85rem", height: "0.85rem" }}>
+              <path d="M8 5.14v14l11-7-11-7z" />
+            </svg>
+          </button>
+
+          <button onClick={onClose} aria-label="Close audio player bar" style={{
+            width: "2.25rem", height: "2.25rem",
+            background: "none", border: "none",
+            borderRadius: "50%", cursor: "pointer",
+            color: theme.muted,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0,
+          }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25}
+              style={{ width: "0.85rem", height: "0.85rem" }}>
+              <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+      ) : (
+      <>
+
       {/* ── CSS keyframes for equalizer bars ── */}
       <style>{`
         @keyframes nxEqA { 0%,100%{height:3px} 50%{height:11px} }
@@ -710,6 +926,8 @@ export function AudioReader({
           </svg>
         </button>
       </div>
+      </>
+      )}
     </div>
   );
 }

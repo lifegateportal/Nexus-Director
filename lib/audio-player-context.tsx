@@ -147,6 +147,7 @@ interface AudioPlayerContextValue {
   stop:                () => void;
   cycleRate:           () => void;
   seekTo:              (idx: number) => void;
+  seekToWord:          (idx: number, wordIdx: number) => void;
   setVolumeMultiplier: (v: number) => void;
   setPersona:          (idx: number) => void;
 }
@@ -193,6 +194,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
   // Indirection pointer so closures always call the latest speakSegment.
   const speakRef       = useRef<(idx: number, gen: number) => void>(() => {});
+  const wordOffsetRef  = useRef(0);
 
   // AudioContext keep-alive (Chrome)
   const audioCtxRef    = useRef<AudioContext | null>(null);
@@ -389,8 +391,11 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       setSegIdx(idx);
       onProgressRef.current?.(idx, seg.paraKey);
 
-      const utt    = new SpeechSynthesisUtterance(seg.text);
-      utt.rate     = treatment.rate * userRate * segComplexity(seg.text, seg.type) * persona.rateMultiplier;
+      const words = seg.text.split(/(\s+)/).filter((token) => !/^\s+$/.test(token));
+      const startWordIdx = Math.max(0, Math.min(wordOffsetRef.current, Math.max(0, words.length - 1)));
+      const spokenText = startWordIdx > 0 ? words.slice(startWordIdx).join(" ") : seg.text;
+      const utt    = new SpeechSynthesisUtterance(spokenText);
+      utt.rate     = treatment.rate * userRate * segComplexity(spokenText, seg.type) * persona.rateMultiplier;
       utt.pitch    = Math.max(0.1, Math.min(2, treatment.pitch + persona.pitchOffset));
       utt.volume   = treatment.volume * volumeMultiplierRef.current;
       utt.lang     = "en-US";
@@ -398,7 +403,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
       utt.onboundary = (e) => {
         if (e.name !== "word" || gen !== genRef.current) return;
-        setCurrentWord((seg.text.slice(0, e.charIndex).match(/\S+/g) ?? []).length);
+        setCurrentWord(startWordIdx + (spokenText.slice(0, e.charIndex).match(/\S+/g) ?? []).length);
       };
 
       utt.onend = () => {
@@ -429,6 +434,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         );
         setTimeout(() => {
           pendingRef.current = false;
+          wordOffsetRef.current = 0;
           speakRef.current(idx + 1, gen);
         }, totalPauseMs);
       };
@@ -584,7 +590,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     // ── Chapter arrival announcement ────────────────────────────────────
     // Plays "Chapter N. Title." once before the first segment whenever a fresh
     // chapter starts from position 0, replicating the Audible handoff feel.
-    const announcement = (fromIdx === 0) ? pendingAnnouncementRef.current : null;
+    const firstSeg = segsRef.current[fromIdx] ?? null;
+    const shouldAnnounce = fromIdx === 0 && firstSeg?.type !== "chapter-title";
+    const announcement = shouldAnnounce ? pendingAnnouncementRef.current : null;
     if (fromIdx === 0) pendingAnnouncementRef.current = null;
 
     if (announcement) {
@@ -661,6 +669,22 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }, []);
 
   const seekTo = useCallback((idx: number) => {
+    wordOffsetRef.current = 0;
+    genRef.current += 1;
+    stoppedRef.current = false;
+    pendingRef.current = false;
+    window.speechSynthesis?.cancel();
+    const gen = genRef.current;
+    setTimeout(() => {
+      setState("playing"); stateRef.current = "playing";
+      startAudioCtx(); startWatchdog();
+      updateMediaSession("playing");
+      speakRef.current(idx, gen);
+    }, 80);
+  }, [startAudioCtx, startWatchdog, updateMediaSession]);
+
+  const seekToWord = useCallback((idx: number, wordIdx: number) => {
+    wordOffsetRef.current = Math.max(0, wordIdx);
     genRef.current += 1;
     stoppedRef.current = false;
     pendingRef.current = false;
@@ -689,6 +713,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       genRef.current += 1;
       stoppedRef.current = false;
       pendingRef.current = false;
+      wordOffsetRef.current = 0;
       window.speechSynthesis?.cancel();
       const gen = genRef.current;
       setTimeout(() => speakRef.current(segIdxRef.current, gen), 60);
@@ -700,7 +725,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       value={{
         state, currentSeg, currentWord, segIdx, segTotal,
         rateIdx, personaIdx, chapterMeta,
-        setChapter, play, pause, resume, stop, cycleRate, seekTo,
+        setChapter, play, pause, resume, stop, cycleRate, seekTo, seekToWord,
         setVolumeMultiplier, setPersona,
       }}
     >

@@ -14,17 +14,19 @@
  * user can close the tab and come back to their audiobook.
  */
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import type { EbookManifest, ChapterDraft } from "@/lib/schemas/ebook";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type NarrateStatus = "idle" | "queued" | "synthesizing" | "done" | "error";
+type ProgressPhase = "queued" | "synthesizing" | "finalizing";
 
 interface ChapterNarration {
   chapterId: string;
   title: string;
   status: NarrateStatus;
+  phase: ProgressPhase | null;
   progressPct: number;
   audioUrl: string | null;
   durationSec: number | null;
@@ -37,6 +39,12 @@ interface VoiceStudioState {
   chapters: ChapterNarration[];
 }
 
+interface NarrationTarget {
+  chapterId: string;
+  title: string;
+  text: string;
+}
+
 // ── Storage key ───────────────────────────────────────────────────────────────
 
 const STORAGE_KEY_PREFIX = "nexus_voice_studio_";
@@ -47,11 +55,20 @@ function makeChapterId(ch: ChapterDraft): string {
   return `ch-${ch.number}`;
 }
 
-function initChapterNarrations(manifest: EbookManifest): ChapterNarration[] {
-  return manifest.chapters.map((ch) => ({
-    chapterId: makeChapterId(ch),
-    title: ch.title || `Chapter ${ch.number}`,
+function makeIntroductionId(): string {
+  return "fm-introduction";
+}
+
+function makeConclusionId(): string {
+  return "fm-conclusion";
+}
+
+function initChapterNarrations(targets: NarrationTarget[]): ChapterNarration[] {
+  return targets.map((target) => ({
+    chapterId: target.chapterId,
+    title: target.title,
     status: "idle",
+    phase: null,
     progressPct: 0,
     audioUrl: null,
     durationSec: null,
@@ -68,10 +85,25 @@ function clampProgress(value: number): number {
 
 function buildChapterText(ch: ChapterDraft): string {
   const parts: string[] = [];
-  if (ch.intro) parts.push(ch.intro);
+
+  // Lead with chapter heading so generated narration always opens with chapter context.
+  if (ch.number || ch.title) {
+    const chapterHeading = [
+      ch.number ? `Chapter ${ch.number}` : "",
+      ch.title?.trim() ? `: ${ch.title.trim()}` : "",
+    ].join("");
+    if (chapterHeading.trim()) parts.push(chapterHeading.trim());
+  }
+
+  // Read the key scripture/epigraph before the intro so the opening matches reader flow.
+  if (ch.epigraph?.trim()) {
+    parts.push(ch.epigraph.trim());
+  }
+
+  if (ch.intro?.trim()) parts.push(ch.intro.trim());
   for (const section of ch.sections) {
-    if (section.heading) parts.push(section.heading);
-    if (section.body) parts.push(section.body);
+    if (section.heading?.trim()) parts.push(section.heading.trim());
+    if (section.body?.trim()) parts.push(section.body.trim());
   }
   if (ch.keyTakeaways.length > 0) {
     parts.push("Key Takeaways");
@@ -80,10 +112,119 @@ function buildChapterText(ch: ChapterDraft): string {
   return parts.join("\n\n");
 }
 
+function buildNarrationTargets(manifest: EbookManifest): NarrationTarget[] {
+  const targets: NarrationTarget[] = [];
+  const intro = manifest.frontMatter.introduction?.trim();
+  const conclusion = manifest.frontMatter.conclusion?.trim();
+
+  if (intro) {
+    targets.push({
+      chapterId: makeIntroductionId(),
+      title: "Book Introduction",
+      text: intro,
+    });
+  }
+
+  for (const ch of manifest.chapters) {
+    targets.push({
+      chapterId: makeChapterId(ch),
+      title: ch.title || `Chapter ${ch.number}`,
+      text: buildChapterText(ch),
+    });
+  }
+
+  if (conclusion) {
+    targets.push({
+      chapterId: makeConclusionId(),
+      title: "Book Conclusion",
+      text: conclusion,
+    });
+  }
+
+  return targets;
+}
+
 function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function inferExtFromUrl(url: string): string {
+  try {
+    const pathname = new URL(url).pathname;
+    const fileName = pathname.split("/").pop() ?? "";
+    const ext = fileName.split(".").pop()?.toLowerCase() ?? "wav";
+    return ext.replace(/[^a-z0-9]/g, "") || "wav";
+  } catch {
+    return "wav";
+  }
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function isNetworkFetchError(message: string): boolean {
+  return /fetch failed|failed to fetch|networkerror|network connection|load failed/i.test(message);
+}
+
+function normalizeClientError(err: unknown, fallback: string): string {
+  const message = err instanceof Error ? err.message : fallback;
+  if (isNetworkFetchError(message)) {
+    return "Network connection interrupted while contacting the voice API. Please retry.";
+  }
+  return message || fallback;
+}
+
+async function postJsonWithRetry<T>(
+  url: string,
+  body: Record<string, unknown>,
+  retries = 2,
+): Promise<T> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const raw = await res.text();
+      let parsed: Record<string, unknown> = {};
+      if (raw) {
+        try {
+          parsed = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          parsed = { error: raw.slice(0, 300) };
+        }
+      }
+
+      if (!res.ok) {
+        const message = typeof parsed.error === "string"
+          ? parsed.error
+          : `${url} failed (${res.status})`;
+        const retryable = res.status >= 500 || res.status === 429;
+        if (retryable && attempt < retries) {
+          await delay(400 * (attempt + 1));
+          continue;
+        }
+        throw new Error(message);
+      }
+
+      return parsed as T;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Request failed";
+      const retryable = isNetworkFetchError(message);
+      if (retryable && attempt < retries) {
+        await delay(400 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error("Request failed after retries");
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -96,17 +237,19 @@ interface VoiceStudioProps {
 export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
   const bookSlug = slug ?? manifest.jobId;
   const storageKey = `${STORAGE_KEY_PREFIX}${bookSlug}`;
+  const narrationTargets = useMemo(() => buildNarrationTargets(manifest), [manifest]);
 
   // ── State ──────────────────────────────────────────────────────────────────
 
   const [voiceId, setVoiceId] = useState<string | null>(null);
   const [voiceDurationSec, setVoiceDurationSec] = useState<number | null>(null);
   const [sampleFile, setSampleFile] = useState<File | null>(null);
+  const [sampleUrl, setSampleUrl] = useState("");
   const [cloning, setCloning] = useState(false);
   const [cloneError, setCloneError] = useState<string | null>(null);
 
   const [chapters, setChapters] = useState<ChapterNarration[]>(() =>
-    initChapterNarrations(manifest)
+    initChapterNarrations(narrationTargets)
   );
 
   const [uploadingR2, setUploadingR2] = useState(false);
@@ -135,6 +278,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
             const merged = { ...ch, ...saved_ch };
             return {
               ...merged,
+              phase: merged.status === "done" || merged.status === "error" ? null : merged.phase ?? null,
               progressPct: merged.status === "done" ? 100 : clampProgress(merged.progressPct ?? 0),
             };
           })
@@ -181,32 +325,44 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
   // ── Clone voice ────────────────────────────────────────────────────────────
 
   async function handleClone() {
-    if (!sampleFile) return;
+    const trimmedSampleUrl = sampleUrl.trim();
+    if (!sampleFile && !trimmedSampleUrl) return;
     setCloning(true);
     setCloneError(null);
     try {
-      const sampleUrl = await uploadSampleToR2(sampleFile);
-      const ext = sampleFile.name.split(".").pop()?.toLowerCase() ?? "wav";
+      if (!sampleFile) {
+        try {
+          const parsed = new URL(trimmedSampleUrl);
+          if (!(parsed.protocol === "http:" || parsed.protocol === "https:")) {
+            throw new Error("Voice sample URL must start with http:// or https://");
+          }
+        } catch (error) {
+          throw error instanceof Error ? error : new Error("Enter a valid voice sample URL");
+        }
+      }
+
+      const cloneSampleUrl = sampleFile ? await uploadSampleToR2(sampleFile) : trimmedSampleUrl;
+      const ext = sampleFile
+        ? sampleFile.name.split(".").pop()?.toLowerCase() ?? "wav"
+        : inferExtFromUrl(trimmedSampleUrl);
 
       // Submit job — returns immediately
-      const submitRes = await fetch("/api/voice/clone", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sampleUrl, ext }),
-      });
-      const submitJson = await submitRes.json() as { runpodJobId?: string; error?: string };
-      if (!submitRes.ok || submitJson.error) throw new Error(submitJson.error ?? `Clone submit failed (${submitRes.status})`);
+      const submitJson = await postJsonWithRetry<{ runpodJobId?: string; error?: string }>(
+        "/api/voice/clone",
+        { sampleUrl: cloneSampleUrl, ext },
+      );
+      if (submitJson.error || !submitJson.runpodJobId) {
+        throw new Error(submitJson.error ?? "Clone submit failed");
+      }
 
       // Poll finalize until done
       const runpodJobId = submitJson.runpodJobId!;
       for (let attempt = 0; attempt < 150; attempt++) {
         await new Promise<void>((r) => setTimeout(r, 4000));
-        const pollRes = await fetch("/api/voice/clone/finalize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runpodJobId }),
-        });
-        const poll = await pollRes.json() as { status: string; voiceId?: string; durationSec?: number; error?: string };
+        const poll = await postJsonWithRetry<{ status: string; voiceId?: string; durationSec?: number; error?: string }>(
+          "/api/voice/clone/finalize",
+          { runpodJobId },
+        );
         if (poll.status === "COMPLETED") {
           setVoiceId(poll.voiceId!);
           setVoiceDurationSec(poll.durationSec ?? null);
@@ -218,7 +374,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
       }
       throw new Error("Voice clone timed out after 10 minutes. The GPU worker may still be cold-starting — try again.");
     } catch (err) {
-      setCloneError(err instanceof Error ? err.message : "Clone failed");
+      setCloneError(normalizeClientError(err, "Clone failed"));
     } finally {
       setCloning(false);
     }
@@ -227,42 +383,40 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
   // ── Narrate a single chapter ───────────────────────────────────────────────
 
   const narrateChapter = useCallback(async (
-    ch: ChapterDraft,
+    target: NarrationTarget,
     currentVoiceId: string,
     currentChapters: ChapterNarration[],
     setChaptersFn: React.Dispatch<React.SetStateAction<ChapterNarration[]>>,
   ): Promise<ChapterNarration[]> => {
-    const id = makeChapterId(ch);
+    const id = target.chapterId;
     const updateStatus = (partial: Partial<ChapterNarration>, list: ChapterNarration[]): ChapterNarration[] =>
       list.map((c) => (c.chapterId === id ? { ...c, ...partial } : c));
 
-    let updated = updateStatus({ status: "synthesizing", progressPct: 8, error: null }, currentChapters);
+    let updated = updateStatus({ status: "synthesizing", phase: "synthesizing", progressPct: 8, error: null }, currentChapters);
     setChaptersFn(updated);
 
     try {
-      const text = buildChapterText(ch);
+      const text = target.text;
 
       // Submit job — returns immediately
-      const submitRes = await fetch("/api/voice/narrate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voiceId: currentVoiceId, chapterId: id, slug: bookSlug, language, speed }),
-      });
-      const submitJson = await submitRes.json() as { runpodJobId?: string; error?: string };
-      if (!submitRes.ok || submitJson.error) throw new Error(submitJson.error ?? `Narrate submit failed (${submitRes.status})`);
+      const submitJson = await postJsonWithRetry<{ runpodJobId?: string; error?: string }>(
+        "/api/voice/narrate",
+        { text, voiceId: currentVoiceId, chapterId: id, slug: bookSlug, language, speed },
+      );
+      if (submitJson.error || !submitJson.runpodJobId) {
+        throw new Error(submitJson.error ?? "Narrate submit failed");
+      }
 
       // Poll finalize until done
       const runpodJobId = submitJson.runpodJobId!;
       for (let attempt = 0; attempt < 150; attempt++) {
         await new Promise<void>((r) => setTimeout(r, 4000));
-        const pollRes = await fetch("/api/voice/narrate/finalize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runpodJobId, chapterId: id, slug: bookSlug }),
-        });
-        const poll = await pollRes.json() as { status: string; audioUrl?: string; durationSec?: number; error?: string };
+        const poll = await postJsonWithRetry<{ status: string; audioUrl?: string; durationSec?: number; error?: string; note?: string }>(
+          "/api/voice/narrate/finalize",
+          { runpodJobId, chapterId: id, slug: bookSlug },
+        );
         if (poll.status === "COMPLETED") {
-          updated = updateStatus({ status: "done", progressPct: 100, audioUrl: poll.audioUrl!, durationSec: poll.durationSec ?? null }, updated);
+          updated = updateStatus({ status: "done", phase: null, progressPct: 100, audioUrl: poll.audioUrl!, durationSec: poll.durationSec ?? null }, updated);
           break;
         }
         if (poll.status === "FAILED") throw new Error(poll.error ?? "Narration failed");
@@ -270,28 +424,40 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
         // Estimated progress while waiting for terminal status from RunPod.
         if (poll.status === "IN_QUEUE") {
           const pct = clampProgress(5 + attempt * 2);
-          updated = updateStatus({ status: "queued", progressPct: Math.min(pct, 25) }, updated);
+          updated = updateStatus({ status: "queued", phase: "queued", progressPct: Math.min(pct, 25) }, updated);
           setChaptersFn(updated);
           continue;
         }
 
         if (poll.status === "IN_PROGRESS") {
-          const pct = clampProgress(25 + attempt * 3);
-          updated = updateStatus({ status: "synthesizing", progressPct: Math.min(pct, 96) }, updated);
+          const finalizing = attempt >= 35 || /output|finaliz/i.test(poll.note ?? "");
+          const pct = finalizing
+            ? Math.min(94, clampProgress(86 + (attempt - 35) * 1.5))
+            : Math.min(88, clampProgress(25 + attempt * 2.25));
+          updated = updateStatus({
+            status: "synthesizing",
+            phase: finalizing ? "finalizing" : "synthesizing",
+            progressPct: pct,
+          }, updated);
           setChaptersFn(updated);
           continue;
         }
 
         // Unknown intermediary status — keep user feedback moving.
-        const pct = clampProgress(20 + attempt * 3);
-        updated = updateStatus({ status: "synthesizing", progressPct: Math.min(pct, 96) }, updated);
+        const pct = clampProgress(20 + attempt * 2.5);
+        const finalizing = attempt >= 35;
+        updated = updateStatus({
+          status: "synthesizing",
+          phase: finalizing ? "finalizing" : "synthesizing",
+          progressPct: finalizing ? Math.min(94, Math.max(pct, 88)) : Math.min(pct, 88),
+        }, updated);
         setChaptersFn(updated);
 
         // IN_QUEUE / IN_PROGRESS — keep polling
         if (attempt === 149) throw new Error("Narration timed out after 10 minutes");
       }
     } catch (err) {
-      updated = updateStatus({ status: "error", progressPct: 0, error: err instanceof Error ? err.message : "Narration failed" }, updated);
+      updated = updateStatus({ status: "error", phase: null, progressPct: 0, error: normalizeClientError(err, "Narration failed") }, updated);
     }
 
     setChaptersFn(updated);
@@ -307,17 +473,18 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
 
     // Queue all non-done chapters
     let currentChapters = chapters.map((c) =>
-      c.status === "done" ? c : { ...c, status: "queued" as NarrateStatus, progressPct: 5 }
+      c.status === "done" ? c : { ...c, status: "queued" as NarrateStatus, phase: "queued" as ProgressPhase, progressPct: 5 }
     );
     setChapters(currentChapters);
 
     try {
       for (const ch of manifest.chapters) {
+      for (const target of narrationTargets) {
         if (abortRef.current) break;
-        const chNarration = currentChapters.find((c) => c.chapterId === makeChapterId(ch));
+        const chNarration = currentChapters.find((c) => c.chapterId === target.chapterId);
         if (chNarration?.status === "done") continue;
 
-        currentChapters = await narrateChapter(ch, voiceId, currentChapters, setChapters);
+        currentChapters = await narrateChapter(target, voiceId, currentChapters, setChapters);
         persist(voiceId, voiceDurationSec, currentChapters);
       }
     } finally {
@@ -328,9 +495,9 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
 
   // ── Narrate single chapter ────────────────────────────────────────────────
 
-  async function handleNarrateOne(ch: ChapterDraft) {
+  async function handleNarrateOne(target: NarrationTarget) {
     if (!voiceId) return;
-    const updated = await narrateChapter(ch, voiceId, chapters, setChapters);
+    const updated = await narrateChapter(target, voiceId, chapters, setChapters);
     persist(voiceId, voiceDurationSec, updated);
   }
 
@@ -368,12 +535,34 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
         {/* ── Step 1: Upload voice sample ── */}
         <div className="space-y-2">
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-            Step 1 — Upload Your Voice Sample
+            Step 1 — Add Your Voice Sample
           </p>
           <p className="text-xs text-slate-400">
             Record yourself reading 30 seconds to 3 minutes of clean, unedited speech in your natural voice.
             No music, minimal background noise. WAV, MP3, M4A, FLAC, or MOV/MP4 (audio track is extracted). Max 25 MB.
           </p>
+          <div className="space-y-2 rounded-xl border border-slate-700/60 bg-slate-950/40 p-3">
+            <label htmlFor="voice-sample-url" className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+              Already have a hosted sample?
+            </label>
+            <input
+              id="voice-sample-url"
+              type="url"
+              inputMode="url"
+              placeholder="Paste a public or R2 sample URL"
+              value={sampleUrl}
+              onChange={(e) => {
+                setSampleUrl(e.target.value);
+                if (e.target.value) setSampleFile(null);
+                setCloneError(null);
+              }}
+              disabled={cloning || narrating || uploadingR2}
+              className="min-h-[48px] w-full rounded-xl border border-slate-600 bg-slate-900 px-3 text-base text-slate-100 placeholder:text-slate-500 focus:border-purple-500 focus:outline-none disabled:opacity-50"
+            />
+            <p className="text-xs text-slate-500">
+              Paste an existing WAV, MP3, M4A, FLAC, MOV, or MP4 URL to skip the upload step.
+            </p>
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               ref={fileInputRef}
@@ -382,6 +571,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
               onChange={(e) => {
                 const f = e.target.files?.[0] ?? null;
                 setSampleFile(f);
+                if (f) setSampleUrl("");
                 setCloneError(null);
               }}
               className="hidden"
@@ -401,10 +591,10 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
             <button
               type="button"
               onClick={() => void handleClone()}
-              disabled={!sampleFile || cloning || uploadingR2 || narrating}
+              disabled={(!sampleFile && !sampleUrl.trim()) || cloning || uploadingR2 || narrating}
               className={[
                 "min-h-[48px] rounded-xl px-5 text-sm font-semibold transition-all active:scale-[0.98]",
-                sampleFile && !cloning
+                (sampleFile || sampleUrl.trim()) && !cloning
                   ? "bg-gradient-to-r from-purple-500 to-violet-500 text-white hover:opacity-90"
                   : "bg-slate-700/50 text-slate-500 cursor-not-allowed",
               ].join(" ")}
@@ -507,7 +697,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
           <div className="border-t border-slate-700/40 pt-4 space-y-2">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Chapters</p>
             {chapters.map((narr, i) => {
-              const ch = manifest.chapters[i];
+              const target = narrationTargets.find((t) => t.chapterId === narr.chapterId);
               return (
                 <div
                   key={narr.chapterId}
@@ -524,8 +714,8 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
                     {narr.status !== "synthesizing" && narr.status !== "queued" && (
                       <button
                         type="button"
-                        onClick={() => ch && void handleNarrateOne(ch)}
-                        disabled={narrating || !ch}
+                        onClick={() => target && void handleNarrateOne(target)}
+                        disabled={narrating || !target}
                         className="min-h-[44px] min-w-[44px] flex shrink-0 items-center justify-center rounded-xl border border-purple-500/20 bg-purple-500/8 text-xs text-purple-300 hover:bg-purple-500/15 disabled:opacity-40 transition"
                         title={narr.status === "done" ? "Re-narrate" : "Narrate"}
                       >
@@ -563,16 +753,27 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
                   {(narr.status === "synthesizing" || narr.status === "queued") && (
                     <div className="flex items-center gap-2 px-1">
                       <div className="h-1.5 flex-1 rounded-full bg-slate-700 overflow-hidden">
-                        <div
-                          className={[
-                            "h-full rounded-full transition-all duration-500",
-                            narr.status === "synthesizing" ? "bg-purple-500" : "bg-slate-600",
-                          ].join(" ")}
-                          style={{ width: `${clampProgress(narr.progressPct)}%` }}
-                        />
+                        {narr.phase === "finalizing" ? (
+                          <div className="relative h-full w-full overflow-hidden rounded-full bg-slate-800">
+                            <div className="absolute inset-0 bg-gradient-to-r from-purple-500/20 via-purple-400/65 to-fuchsia-400/20 animate-pulse" />
+                            <div className="absolute inset-y-0 left-0 w-1/3 rounded-full bg-purple-400/85 animate-[pulse_1.4s_ease-in-out_infinite]" />
+                          </div>
+                        ) : (
+                          <div
+                            className={[
+                              "h-full rounded-full transition-all duration-500",
+                              narr.status === "synthesizing" ? "bg-purple-500" : "bg-slate-600",
+                            ].join(" ")}
+                            style={{ width: `${clampProgress(narr.progressPct)}%` }}
+                          />
+                        )}
                       </div>
                       <span className="text-[10px] text-slate-500 shrink-0 tabular-nums">
-                        {narr.status === "synthesizing" ? "Synthesizing" : "Queued"} · {clampProgress(narr.progressPct)}%
+                        {narr.phase === "finalizing"
+                          ? "Finalizing output…"
+                          : narr.status === "synthesizing"
+                            ? "Synthesizing"
+                            : "Queued"}
                       </span>
                     </div>
                   )}
