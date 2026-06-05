@@ -77,6 +77,60 @@ function getOutputObject(value: unknown): Record<string, unknown> | null {
   return fallback;
 }
 
+function extractAudioBase64(value: unknown): string | null {
+  const queue: unknown[] = [value];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+
+    if (typeof current === "string") {
+      const trimmed = current.trim();
+      if (trimmed.length > 1000 && /^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) {
+        return trimmed;
+      }
+      continue;
+    }
+
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+
+    if (typeof current !== "object") continue;
+    const obj = current as Record<string, unknown>;
+
+    const direct = obj.wav_base64 ?? obj.audio_base64;
+    if (typeof direct === "string" && direct.length > 0) return direct;
+
+    const nestedAudio = obj.audio;
+    if (nestedAudio && typeof nestedAudio === "object") {
+      const nested = nestedAudio as Record<string, unknown>;
+      const nestedDirect = nested.wav_base64 ?? nested.audio_base64 ?? nested.base64;
+      if (typeof nestedDirect === "string" && nestedDirect.length > 0) return nestedDirect;
+    }
+
+    if (obj.output !== undefined) queue.push(obj.output);
+    if (obj.delayOutput !== undefined) queue.push(obj.delayOutput);
+    if (obj.data !== undefined) queue.push(obj.data);
+    if (obj.result !== undefined) queue.push(obj.result);
+    if (obj.response !== undefined) queue.push(obj.response);
+  }
+
+  return null;
+}
+
+function summarizePayloadShape(value: unknown): string {
+  if (!value || typeof value !== "object") return "no object payload";
+  const top = value as Record<string, unknown>;
+  const keys = Object.keys(top).slice(0, 12);
+  const details: string[] = [`keys=${keys.join(",") || "none"}`];
+  for (const k of ["status", "id", "executionTime", "delayTime"]) {
+    if (k in top) details.push(`${k}=${String(top[k])}`);
+  }
+  return details.join("; ");
+}
+
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -141,9 +195,12 @@ export async function POST(req: NextRequest) {
     }
 
     // COMPLETED — upload WAV to R2
-    const output = getOutputObject(json.output ?? json.delayOutput);
+    const output = getOutputObject(json.output ?? json.delayOutput ?? json);
     if (!output) {
-      return NextResponse.json({ status: "FAILED", error: "RunPod clone completed without structured output" });
+      return NextResponse.json({
+        status: "FAILED",
+        error: `RunPod clone completed without structured output (${summarizePayloadShape(json)})`,
+      });
     }
     if (typeof output.error === "string" && output.error) {
       return NextResponse.json({ status: "FAILED", error: output.error });
@@ -153,9 +210,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "FAILED", error: "R2 storage not configured" }, { status: 503 });
     }
 
-    const wavB64 = (output.wav_base64 ?? output.audio_base64) as unknown;
-    if (typeof wavB64 !== "string" || wavB64.length === 0) {
-      return NextResponse.json({ status: "FAILED", error: "RunPod clone completed without wav_base64/audio_base64 output" });
+    const wavB64 = extractAudioBase64(output);
+    if (!wavB64) {
+      return NextResponse.json({
+        status: "FAILED",
+        error: `RunPod clone completed without audio base64 payload (${summarizePayloadShape(output)})`,
+      });
     }
     const durationSec = asNumber(output.duration_sec ?? output.duration) ?? 0;
 
