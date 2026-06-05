@@ -478,7 +478,6 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
     setChapters(currentChapters);
 
     try {
-      for (const ch of manifest.chapters) {
       for (const target of narrationTargets) {
         if (abortRef.current) break;
         const chNarration = currentChapters.find((c) => c.chapterId === target.chapterId);
