@@ -63,6 +63,14 @@ function makeConclusionId(): string {
   return "fm-conclusion";
 }
 
+function makePrefaceId(): string {
+  return "fm-preface";
+}
+
+function makeAboutAuthorId(): string {
+  return "fm-about-author";
+}
+
 function initChapterNarrations(targets: NarrationTarget[]): ChapterNarration[] {
   return targets.map((target) => ({
     chapterId: target.chapterId,
@@ -97,31 +105,62 @@ function buildChapterText(ch: ChapterDraft): string {
 
   // Read the key scripture/epigraph before the intro so the opening matches reader flow.
   if (ch.epigraph?.trim()) {
+    parts.push("Key Scripture");
     parts.push(ch.epigraph.trim());
   }
 
-  if (ch.intro?.trim()) parts.push(ch.intro.trim());
+  if (ch.intro?.trim()) {
+    parts.push("Chapter Introduction");
+    parts.push(ch.intro.trim());
+  }
+
   for (const section of ch.sections) {
-    if (section.heading?.trim()) parts.push(section.heading.trim());
+    if (section.heading?.trim()) parts.push(`Section: ${section.heading.trim()}`);
     if (section.body?.trim()) parts.push(section.body.trim());
   }
+
+  if (ch.forwardQuestion?.trim()) {
+    parts.push("Forward Question");
+    parts.push(ch.forwardQuestion.trim());
+  }
+
   if (ch.keyTakeaways.length > 0) {
     parts.push("Key Takeaways");
     parts.push(ch.keyTakeaways.join(". "));
   }
+
+  if (ch.reflectionQuestions.length > 0) {
+    parts.push("Reflection Questions");
+    parts.push(
+      ch.reflectionQuestions
+        .map((question, idx) => `${idx + 1}. ${question}`)
+        .join(" "),
+    );
+  }
+
   return parts.join("\n\n");
 }
 
 function buildNarrationTargets(manifest: EbookManifest): NarrationTarget[] {
   const targets: NarrationTarget[] = [];
+  const preface = manifest.frontMatter.preface?.trim();
   const intro = manifest.frontMatter.introduction?.trim();
   const conclusion = manifest.frontMatter.conclusion?.trim();
+  const aboutAuthor = manifest.frontMatter.aboutAuthor?.trim();
+
+  if (preface) {
+    targets.push({
+      chapterId: makePrefaceId(),
+      title: "Book Preface",
+      text: ["Preface", preface].join("\n\n"),
+    });
+  }
 
   if (intro) {
     targets.push({
       chapterId: makeIntroductionId(),
       title: "Book Introduction",
-      text: intro,
+      text: ["Introduction", intro].join("\n\n"),
     });
   }
 
@@ -137,7 +176,15 @@ function buildNarrationTargets(manifest: EbookManifest): NarrationTarget[] {
     targets.push({
       chapterId: makeConclusionId(),
       title: "Book Conclusion",
-      text: conclusion,
+      text: ["Conclusion", conclusion].join("\n\n"),
+    });
+  }
+
+  if (aboutAuthor) {
+    targets.push({
+      chapterId: makeAboutAuthorId(),
+      title: "About the Author",
+      text: ["About the Author", aboutAuthor].join("\n\n"),
     });
   }
 

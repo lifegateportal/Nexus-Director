@@ -1205,12 +1205,14 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const currentSection = virtualSections[chapterIndex] ?? virtualSections[0];
   const isNarratableFrontMatter =
     currentSection.kind === "frontmatter" &&
-    (currentSection.key === "introduction" || currentSection.key === "conclusion");
+    (currentSection.key === "preface" || currentSection.key === "introduction" || currentSection.key === "conclusion");
 
   const currentAudioTrackId = useMemo(() => {
     if (currentSection.kind === "chapter") return `ch-${currentSection.chapter.number}`;
+    if (currentSection.kind === "frontmatter" && currentSection.key === "preface") return "fm-preface";
     if (currentSection.kind === "frontmatter" && currentSection.key === "introduction") return "fm-introduction";
     if (currentSection.kind === "frontmatter" && currentSection.key === "conclusion") return "fm-conclusion";
+    if (currentSection.kind === "about") return "fm-about-author";
     return null;
   }, [currentSection]);
 
@@ -1220,6 +1222,20 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       return {
         number: 0,
         title: currentSection.title,
+        intro: currentSection.body,
+        epigraph: "",
+        sections: [],
+        forwardQuestion: "",
+        keyTakeaways: [],
+        reflectionQuestions: [],
+        totalWordCount: 0,
+        status: "complete",
+      };
+    }
+    if (currentSection.kind === "about") {
+      return {
+        number: 0,
+        title: "About the Author",
         intro: currentSection.body,
         epigraph: "",
         sections: [],
