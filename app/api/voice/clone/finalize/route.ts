@@ -198,8 +198,8 @@ export async function POST(req: NextRequest) {
     const output = getOutputObject(json.output ?? json.delayOutput ?? json);
     if (!output) {
       return NextResponse.json({
-        status: "FAILED",
-        error: `RunPod clone completed without structured output (${summarizePayloadShape(json)})`,
+        status: "IN_PROGRESS",
+        note: `RunPod marked COMPLETED but output is not yet available (${summarizePayloadShape(json)})`,
       });
     }
     if (typeof output.error === "string" && output.error) {
@@ -213,8 +213,8 @@ export async function POST(req: NextRequest) {
     const wavB64 = extractAudioBase64(output);
     if (!wavB64) {
       return NextResponse.json({
-        status: "FAILED",
-        error: `RunPod clone completed without audio base64 payload (${summarizePayloadShape(output)})`,
+        status: "IN_PROGRESS",
+        note: `RunPod output pending audio payload (${summarizePayloadShape(output)})`,
       });
     }
     const durationSec = asNumber(output.duration_sec ?? output.duration) ?? 0;
