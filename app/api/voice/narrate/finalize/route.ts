@@ -250,12 +250,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "FAILED", error: output.error });
     }
 
-    const audioUrl = extractAudioUrl(output);
-    if (audioUrl) {
+    const outputAudioUrl = extractAudioUrl(output);
+    if (outputAudioUrl) {
       const durationSec = asNumber(output.duration_sec ?? output.duration) ?? 0;
       return NextResponse.json({
         status: "COMPLETED",
-        audioUrl: audioUrl.startsWith("audio/books/") ? toR2PublicUrlOrKey(audioUrl) : audioUrl,
+        audioUrl: outputAudioUrl.startsWith("audio/books/") ? toR2PublicUrlOrKey(outputAudioUrl) : outputAudioUrl,
         durationSec,
       });
     }
