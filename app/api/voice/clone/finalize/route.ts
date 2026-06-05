@@ -34,11 +34,47 @@ function makeS3(): S3Client {
 }
 
 function getOutputObject(value: unknown): Record<string, unknown> | null {
-  if (Array.isArray(value)) {
-    const first = value[0];
-    return first && typeof first === "object" ? (first as Record<string, unknown>) : null;
+  const queue: unknown[] = [value];
+  let fallback: Record<string, unknown> | null = null;
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+
+    if (typeof current === "string") {
+      const trimmed = current.trim();
+      if (trimmed.length > 1000 && /^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) {
+        return { wav_base64: trimmed };
+      }
+      try {
+        queue.push(JSON.parse(trimmed));
+      } catch {
+        // Not JSON, continue searching.
+      }
+      continue;
+    }
+
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+
+    if (!current || typeof current !== "object") continue;
+
+    const obj = current as Record<string, unknown>;
+    if (!fallback) fallback = obj;
+
+    const hasAudioPayload =
+      typeof obj.wav_base64 === "string" ||
+      typeof obj.audio_base64 === "string" ||
+      typeof obj.error === "string";
+    if (hasAudioPayload) return obj;
+
+    if (obj.output !== undefined) queue.push(obj.output);
+    if (obj.delayOutput !== undefined) queue.push(obj.delayOutput);
+    if (obj.data !== undefined) queue.push(obj.data);
   }
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+
+  return fallback;
 }
 
 function asNumber(value: unknown): number | null {
@@ -109,7 +145,9 @@ export async function POST(req: NextRequest) {
     if (!output) {
       return NextResponse.json({ status: "FAILED", error: "RunPod clone completed without structured output" });
     }
-    if (output.error) return NextResponse.json({ status: "FAILED", error: output.error });
+    if (typeof output.error === "string" && output.error) {
+      return NextResponse.json({ status: "FAILED", error: output.error });
+    }
 
     if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
       return NextResponse.json({ status: "FAILED", error: "R2 storage not configured" }, { status: 503 });
