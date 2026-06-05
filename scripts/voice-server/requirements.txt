@@ -1,5 +1,3 @@
-TTS[all]
+TTS
 runpod
 soundfile
-numpy
-ffmpeg-python
