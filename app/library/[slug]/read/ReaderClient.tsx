@@ -1279,6 +1279,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       return;
     }
 
+    let cancelled = false;
+
     const storageKeys = [manifest.jobId, slug]
       .filter((value): value is string => Boolean(value))
       .map((value) => `${VOICE_STUDIO_STORAGE_PREFIX}${value}`);
@@ -1303,7 +1305,31 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       // Ignore malformed localStorage and fall back to synced reader only.
     }
 
-    setChapterAudioUrl(null);
+    const lookupRemote = async () => {
+      try {
+        const qs = new URLSearchParams({
+          chapterId: currentAudioTrackId,
+          slug,
+          jobId: manifest.jobId,
+        });
+        const res = await fetch(`/api/voice/library-audio?${qs.toString()}`);
+        if (!res.ok) {
+          if (!cancelled) setChapterAudioUrl(null);
+          return;
+        }
+        const json = await res.json() as { audioUrl?: string | null };
+        if (!cancelled) {
+          setChapterAudioUrl(typeof json.audioUrl === "string" && json.audioUrl.length > 0 ? json.audioUrl : null);
+        }
+      } catch {
+        if (!cancelled) setChapterAudioUrl(null);
+      }
+    };
+
+    void lookupRemote();
+    return () => {
+      cancelled = true;
+    };
   }, [manifest.jobId, slug, currentAudioTrackId]);
 
   // ── Dog-ear bookmark helpers (depend on currentSection) ─────────────────
