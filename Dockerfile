@@ -10,7 +10,7 @@ ENV TZ=UTC
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg git tzdata && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir TTS[all] runpod soundfile
+RUN pip install --no-cache-dir TTS[all] runpod soundfile "transformers>=4.36,<4.47"
 
 COPY scripts/voice-server/handler.py .
 

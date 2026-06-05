@@ -1,3 +1,4 @@
 TTS
 runpod
 soundfile
+transformers>=4.36,<4.47
