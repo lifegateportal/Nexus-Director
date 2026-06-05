@@ -25,6 +25,7 @@ interface ChapterNarration {
   chapterId: string;
   title: string;
   status: NarrateStatus;
+  progressPct: number;
   audioUrl: string | null;
   durationSec: number | null;
   error: string | null;
@@ -51,10 +52,18 @@ function initChapterNarrations(manifest: EbookManifest): ChapterNarration[] {
     chapterId: makeChapterId(ch),
     title: ch.title || `Chapter ${ch.number}`,
     status: "idle",
+    progressPct: 0,
     audioUrl: null,
     durationSec: null,
     error: null,
   }));
+}
+
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 100) return 100;
+  return Math.round(value);
 }
 
 function buildChapterText(ch: ChapterDraft): string {
@@ -122,7 +131,12 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
         setChapters((prev) =>
           prev.map((ch) => {
             const saved_ch = state.chapters.find((c) => c.chapterId === ch.chapterId);
-            return saved_ch ? { ...ch, ...saved_ch } : ch;
+            if (!saved_ch) return ch;
+            const merged = { ...ch, ...saved_ch };
+            return {
+              ...merged,
+              progressPct: merged.status === "done" ? 100 : clampProgress(merged.progressPct ?? 0),
+            };
           })
         );
       }
@@ -222,7 +236,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
     const updateStatus = (partial: Partial<ChapterNarration>, list: ChapterNarration[]): ChapterNarration[] =>
       list.map((c) => (c.chapterId === id ? { ...c, ...partial } : c));
 
-    let updated = updateStatus({ status: "synthesizing", error: null }, currentChapters);
+    let updated = updateStatus({ status: "synthesizing", progressPct: 8, error: null }, currentChapters);
     setChaptersFn(updated);
 
     try {
@@ -248,15 +262,36 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
         });
         const poll = await pollRes.json() as { status: string; audioUrl?: string; durationSec?: number; error?: string };
         if (poll.status === "COMPLETED") {
-          updated = updateStatus({ status: "done", audioUrl: poll.audioUrl!, durationSec: poll.durationSec ?? null }, updated);
+          updated = updateStatus({ status: "done", progressPct: 100, audioUrl: poll.audioUrl!, durationSec: poll.durationSec ?? null }, updated);
           break;
         }
         if (poll.status === "FAILED") throw new Error(poll.error ?? "Narration failed");
+
+        // Estimated progress while waiting for terminal status from RunPod.
+        if (poll.status === "IN_QUEUE") {
+          const pct = clampProgress(5 + attempt * 2);
+          updated = updateStatus({ status: "queued", progressPct: Math.min(pct, 25) }, updated);
+          setChaptersFn(updated);
+          continue;
+        }
+
+        if (poll.status === "IN_PROGRESS") {
+          const pct = clampProgress(25 + attempt * 3);
+          updated = updateStatus({ status: "synthesizing", progressPct: Math.min(pct, 96) }, updated);
+          setChaptersFn(updated);
+          continue;
+        }
+
+        // Unknown intermediary status — keep user feedback moving.
+        const pct = clampProgress(20 + attempt * 3);
+        updated = updateStatus({ status: "synthesizing", progressPct: Math.min(pct, 96) }, updated);
+        setChaptersFn(updated);
+
         // IN_QUEUE / IN_PROGRESS — keep polling
         if (attempt === 149) throw new Error("Narration timed out after 10 minutes");
       }
     } catch (err) {
-      updated = updateStatus({ status: "error", error: err instanceof Error ? err.message : "Narration failed" }, updated);
+      updated = updateStatus({ status: "error", progressPct: 0, error: err instanceof Error ? err.message : "Narration failed" }, updated);
     }
 
     setChaptersFn(updated);
@@ -272,7 +307,7 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
 
     // Queue all non-done chapters
     let currentChapters = chapters.map((c) =>
-      c.status === "done" ? c : { ...c, status: "queued" as NarrateStatus }
+      c.status === "done" ? c : { ...c, status: "queued" as NarrateStatus, progressPct: 5 }
     );
     setChapters(currentChapters);
 
@@ -528,15 +563,16 @@ export function VoiceStudio({ manifest, slug }: VoiceStudioProps) {
                   {(narr.status === "synthesizing" || narr.status === "queued") && (
                     <div className="flex items-center gap-2 px-1">
                       <div className="h-1.5 flex-1 rounded-full bg-slate-700 overflow-hidden">
-                        <div className={[
-                          "h-full rounded-full",
-                          narr.status === "synthesizing"
-                            ? "bg-purple-500 animate-pulse w-full"
-                            : "bg-slate-600 w-1/4",
-                        ].join(" ")} />
+                        <div
+                          className={[
+                            "h-full rounded-full transition-all duration-500",
+                            narr.status === "synthesizing" ? "bg-purple-500" : "bg-slate-600",
+                          ].join(" ")}
+                          style={{ width: `${clampProgress(narr.progressPct)}%` }}
+                        />
                       </div>
-                      <span className="text-[10px] text-slate-500 shrink-0">
-                        {narr.status === "synthesizing" ? "Synthesizing…" : "Queued"}
+                      <span className="text-[10px] text-slate-500 shrink-0 tabular-nums">
+                        {narr.status === "synthesizing" ? "Synthesizing" : "Queued"} · {clampProgress(narr.progressPct)}%
                       </span>
                     </div>
                   )}
