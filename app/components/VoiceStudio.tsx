@@ -110,12 +110,11 @@ function buildChapterText(ch: ChapterDraft): string {
   }
 
   if (ch.intro?.trim()) {
-    parts.push("Chapter Introduction");
     parts.push(ch.intro.trim());
   }
 
   for (const section of ch.sections) {
-    if (section.heading?.trim()) parts.push(`Section: ${section.heading.trim()}`);
+    if (section.heading?.trim()) parts.push(section.heading.trim());
     if (section.body?.trim()) parts.push(section.body.trim());
   }
 

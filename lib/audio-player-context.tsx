@@ -75,9 +75,9 @@ const VOICE_TREATMENT: Record<
   { pitch: number; rate: number; volume: number; pauseBeforeMs: number; pauseAfterMs: number }
 > = {
   "chapter-title": { pitch: 1.10, rate: 0.78, volume: 1.00, pauseBeforeMs: 500, pauseAfterMs: 580 },
-  "heading":       { pitch: 1.06, rate: 0.82, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 420 },
-  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.82, pauseBeforeMs:   0, pauseAfterMs: 280 },
-  "body":          { pitch: 1.00, rate: 1.00, volume: 0.95, pauseBeforeMs:   0, pauseAfterMs: 220 },
+  "heading":       { pitch: 1.06, rate: 0.82, volume: 1.00, pauseBeforeMs:   0, pauseAfterMs: 420 },
+  "quote":         { pitch: 0.91, rate: 0.76, volume: 0.92, pauseBeforeMs:   0, pauseAfterMs: 280 },
+  "body":          { pitch: 1.00, rate: 1.00, volume: 1.00, pauseBeforeMs:   0, pauseAfterMs: 220 },
   // Emphasis — bold/italic markers detected by parseChapter
   "emphasis":      { pitch: 1.15, rate: 0.90, volume: 1.00, pauseBeforeMs:   0, pauseAfterMs: 220 },
 };
