@@ -693,9 +693,7 @@ function FrontMatterView({
         </h1>
         <div style={{ width: "2.5em", height: "2px", background: theme.accent, margin: "1em auto 0", borderRadius: "1px" }} />
       </header>
-      <div data-pkey="intro" style={{ ...hlBg("intro"), cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
-        {renderBody(body, theme, true, annotations, onWordTap, undefined, audioParaKey, audioOpen)}
-      </div>
+      {renderBody(body, theme, true, annotations, onWordTap, "s0", audioParaKey, audioOpen)}
     </article>
   );
 }
@@ -1234,9 +1232,16 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       return {
         number: 0,
         title: currentSection.title,
-        intro: currentSection.body,
+        intro: "",
         epigraph: "",
-        sections: [],
+        sections: [{
+          chapterNumber: 0,
+          sectionNumber: 1,
+          heading: "",
+          body: currentSection.body,
+          wordCount: 0,
+          status: "complete",
+        }],
         forwardQuestion: "",
         keyTakeaways: [],
         reflectionQuestions: [],
@@ -1248,9 +1253,16 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       return {
         number: 0,
         title: "About the Author",
-        intro: currentSection.body,
+        intro: "",
         epigraph: "",
-        sections: [],
+        sections: [{
+          chapterNumber: 0,
+          sectionNumber: 1,
+          heading: "",
+          body: currentSection.body,
+          wordCount: 0,
+          status: "complete",
+        }],
         forwardQuestion: "",
         keyTakeaways: [],
         reflectionQuestions: [],
