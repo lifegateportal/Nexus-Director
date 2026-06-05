@@ -21,7 +21,7 @@ COPY scripts/voice-server/requirements.txt ./requirements.txt
 
 # Install CPU torch first so downstream dependencies reuse it.
 RUN pip install --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.7.1 torchaudio==2.7.1 \
+    torch==2.5.1 torchaudio==2.5.1 \
     && pip install -r requirements.txt
 
 COPY scripts/voice-server/handler.py ./handler.py

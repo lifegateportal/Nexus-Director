@@ -24,7 +24,7 @@ COPY requirements.txt .
 # Install CPU torch first so downstream deps (e.g. TTS) reuse it instead of
 # pulling a second torch variant in another layer.
 RUN pip install --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.7.1 torchaudio==2.7.1 \
+    torch==2.5.1 torchaudio==2.5.1 \
     && pip install -r requirements.txt
 
 # Do not bake XTTS weights into the image. It makes the serverless image much
