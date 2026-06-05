@@ -658,7 +658,7 @@ function ChapterView({
 // ── Front / back matter section view ─────────────────────────────────────────
 
 function FrontMatterView({
-  title, body, theme, fontFamily, fontSize, lineHeight, annotations,
+  title, body, theme, fontFamily, fontSize, lineHeight, annotations, onWordTap, audioParaKey, audioOpen,
 }: {
   title:       string;
   body:        string;
@@ -667,23 +667,35 @@ function FrontMatterView({
   fontSize:    number;
   lineHeight:  number;
   annotations: { selectedText: string; color: AnnotationColor }[];
+  onWordTap?:  WordTapHandler;
+  audioParaKey?: string | null;
+  audioOpen?:  boolean;
 }) {
   const baseStyle: React.CSSProperties = { fontFamily, fontSize: `${fontSize}px`, lineHeight, color: theme.text };
+  const isAct = (k: string) => k === audioParaKey;
+  const hlBg  = (k: string): React.CSSProperties => isAct(k)
+    ? { background: `${theme.accent}1c`, borderRadius: "0.2rem", transition: "background 0.35s ease" }
+    : { transition: "background 0.35s ease" };
   return (
     <article style={baseStyle}>
       <header style={{ textAlign: "center", marginBottom: "3.5em" }}>
         <h1
+          data-pkey="title"
           style={{
+            ...hlBg("title"),
             fontSize: "1.9em", fontWeight: 700, color: theme.heading,
             lineHeight: 1.2, letterSpacing: "-0.02em", marginBottom: "0.5em",
             fontFamily: "Georgia, serif",
+            cursor: audioOpen ? "pointer" : undefined,
           }}
         >
           {title}
         </h1>
         <div style={{ width: "2.5em", height: "2px", background: theme.accent, margin: "1em auto 0", borderRadius: "1px" }} />
       </header>
-      {renderBody(body, theme, true, annotations)}
+      <div data-pkey="intro" style={{ ...hlBg("intro"), cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
+        {renderBody(body, theme, true, annotations, onWordTap, undefined, audioParaKey, audioOpen)}
+      </div>
     </article>
   );
 }
@@ -1306,8 +1318,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   // ── Build paraKey→segIdx map whenever audio opens for a chapter ──────────
   // (placed here because it depends on currentSection, declared above)
   useEffect(() => {
-    if (currentSection.kind !== "chapter") { paraKeyMapRef.current = {}; paraWordMapRef.current = {}; return; }
-    const segs = parseChapter(currentSection.chapter);
+    if (!currentAudioChapter) { paraKeyMapRef.current = {}; paraWordMapRef.current = {}; return; }
+    const segs = parseChapter(currentAudioChapter);
     const keyMap: Record<string, number> = {};
     const wordMap: Record<string, Array<{ segIdx: number; startWord: number; endWord: number }>> = {};
     const wordOffsetByKey = new Map<string, number>();
@@ -1325,7 +1337,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
 
     paraKeyMapRef.current = keyMap;
     paraWordMapRef.current = wordMap;
-  }, [audioOpen, currentSection]);
+  }, [audioOpen, currentAudioChapter]);
 
   const handleWordTap = useCallback((paraKey: string, wordIndex: number) => {
     const segments = paraWordMapRef.current[paraKey] ?? [];
@@ -1865,6 +1877,9 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
                 fontSize={fontSize}
                 lineHeight={lineHeight}
                 annotations={annotations}
+                onWordTap={handleWordTap}
+                audioParaKey={audioOpen ? audioParaKey : null}
+                audioOpen={audioOpen}
               />
             )}
             {currentSection.kind === "backmatter" && manifest.backMatter && (
