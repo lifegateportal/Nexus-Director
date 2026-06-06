@@ -53,12 +53,6 @@ export async function POST(req: NextRequest) {
 
   try {
     const speakerWavUrl = await resolveR2ObjectUrl(input.voiceId);
-    const speakerRes = await fetch(speakerWavUrl);
-    if (!speakerRes.ok) {
-      const body = await speakerRes.text();
-      throw new Error(`Speaker WAV fetch failed (${speakerRes.status}): ${body.slice(0, 300)}`);
-    }
-    const speakerWavBase64 = Buffer.from(await speakerRes.arrayBuffer()).toString("base64");
 
     const submitRes = await fetch(`https://api.runpod.ai/v2/${endpointId}/run`, {
       method: "POST",
@@ -67,7 +61,7 @@ export async function POST(req: NextRequest) {
         input: {
           action: "synthesize",
           text: cleanText,
-          speaker_wav_base64: speakerWavBase64,
+          speaker_wav_url: speakerWavUrl,
           language: input.language,
           speed: input.speed,
           // Pass chapter metadata so finalize can build the R2 key
