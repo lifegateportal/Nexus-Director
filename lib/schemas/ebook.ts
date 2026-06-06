@@ -338,6 +338,8 @@ export const EbookManifestSchema = z.object({
   coverImageUrl: z.string().url().optional().nullable(),
   /** Optional R2 public URL for the author's photo */
   authorImageUrl: z.string().url().optional().nullable(),
+  /** Optional published narration map keyed by chapter/front-matter audio track id */
+  narrationUrls: z.record(z.string().min(1), z.string().min(1)).optional(),
   /** Voice DNA captured during the pipeline — threaded into audit + apply-audit for voice fidelity */
   voiceDNA: VoiceDNASchema.optional().nullable(),
   /** Back matter: glossary, reading group guide, scripture index, recommended resources */

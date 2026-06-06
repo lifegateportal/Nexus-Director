@@ -1279,6 +1279,12 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       return;
     }
 
+    const publishedAudioUrl = manifest.narrationUrls?.[currentAudioTrackId];
+    if (typeof publishedAudioUrl === "string" && publishedAudioUrl.length > 0) {
+      setChapterAudioUrl(publishedAudioUrl);
+      return;
+    }
+
     let cancelled = false;
 
     const storageKeys = [manifest.jobId, slug]
@@ -1330,7 +1336,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [manifest.jobId, slug, currentAudioTrackId]);
+  }, [manifest.jobId, manifest.narrationUrls, slug, currentAudioTrackId]);
 
   // ── Dog-ear bookmark helpers (depend on currentSection) ─────────────────
   const isBookmarked = bookmarks.some((b) => b.chapterIndex === chapterIndex);
@@ -1418,13 +1424,26 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       if (!track) return;
       const el = track.querySelector(`[data-pkey="${audioParaKey}"]`) as HTMLElement | null;
       if (!el) return;
-      // Un-do the track's translateX to get the element's natural column position.
-      // trackRect.left = containerLeft - pageIndex * containerW (due to transform)
-      // elNaturalLeft = elRect.left - trackRect.left  (cancels the transform)
       const trackLeft = track.getBoundingClientRect().left;
-      const elLeft    = el.getBoundingClientRect().left;
-      const naturalLeft = elLeft - trackLeft;
-      const targetPage  = Math.floor(naturalLeft / containerW);
+      const rects = Array.from(el.getClientRects());
+      const occupiedPages = (rects.length > 0 ? rects : [el.getBoundingClientRect()])
+        .map((rect) => {
+          const naturalLeft = Math.max(0, rect.left - trackLeft);
+          const naturalRight = Math.max(naturalLeft, rect.right - trackLeft - 1);
+          return {
+            startPage: Math.floor(naturalLeft / containerW),
+            endPage: Math.floor(naturalRight / containerW),
+          };
+        });
+
+      const startPage = Math.max(0, Math.min(...occupiedPages.map((page) => page.startPage)));
+      const endPage = Math.max(...occupiedPages.map((page) => page.endPage));
+
+      let targetPage = pageIndexRef.current;
+      if (pageIndexRef.current < startPage) targetPage = startPage;
+      else if (pageIndexRef.current > endPage) targetPage = endPage;
+      else if (endPage > pageIndexRef.current) targetPage = endPage;
+
       if (targetPage !== pageIndexRef.current && targetPage >= 0) {
         setPageIndex(targetPage);
       }

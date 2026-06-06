@@ -18,6 +18,7 @@ import {
 import type { EbookProject } from "@/lib/ebook-project-store";
 
 const JOB_STATE_KEY = "nexus_ebook_job_state";
+const VOICE_STUDIO_STORAGE_PREFIX = "nexus_voice_studio_";
 
 type Tab = "pipeline" | "projects";
 
@@ -40,6 +41,30 @@ export default function EbookPage() {
   }, []);
 
   const suggestedName = ebookPipelineSnapshot?.bookTitle ?? ebookManifest?.bookTitle ?? "";
+
+  const readNarrationUrls = useCallback((jobId: string): Record<string, string> | undefined => {
+    try {
+      const raw = localStorage.getItem(`${VOICE_STUDIO_STORAGE_PREFIX}${jobId}`);
+      if (!raw) return undefined;
+      const parsed = JSON.parse(raw) as {
+        chapters?: Array<{ chapterId?: string; status?: string; audioUrl?: string | null }>;
+      };
+      const entries = (parsed.chapters ?? [])
+        .filter((chapter): chapter is { chapterId: string; status: string; audioUrl: string } => (
+          typeof chapter.chapterId === "string" &&
+          chapter.chapterId.length > 0 &&
+          chapter.status === "done" &&
+          typeof chapter.audioUrl === "string" &&
+          chapter.audioUrl.length > 0
+        ))
+        .map((chapter) => [chapter.chapterId, chapter.audioUrl] as const);
+
+      if (entries.length === 0) return undefined;
+      return Object.fromEntries(entries);
+    } catch {
+      return undefined;
+    }
+  }, []);
 
   // ── Project handlers ──────────────────────────────────────────────────────
 
@@ -189,6 +214,7 @@ export default function EbookPage() {
       printSpec:     { trimSize: "6x9", runningHeaders: true },
       coverImageUrl:  project.coverImageUrl  ?? null,
       authorImageUrl: project.authorImageUrl ?? null,
+      narrationUrls:  readNarrationUrls(job.jobId),
     };
     try {
       const res = await fetch("/api/ebook/publish", {
@@ -211,7 +237,7 @@ export default function EbookPage() {
       setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Publish failed." });
       return null;
     }
-  }, []);
+  }, [readNarrationUrls]);
 
   const handleUpdateImages = useCallback(async (
     id: string,
