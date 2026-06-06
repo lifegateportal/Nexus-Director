@@ -21,6 +21,7 @@ import sys
 import tempfile
 import logging
 import urllib.request
+from urllib.parse import urlparse
 import builtins
 import boto3
 from contextlib import contextmanager
@@ -199,7 +200,10 @@ def action_clone(job_input: dict) -> dict:
     else:
         with urllib.request.urlopen(audio_url, timeout=30) as resp:  # noqa: S310
             raw = resp.read()
-        ext = audio_url.rsplit(".", 1)[-1].lower() if "." in audio_url else "wav"
+        parsed_path = urlparse(audio_url).path
+        ext = parsed_path.rsplit(".", 1)[-1].lower() if "." in parsed_path else job_input.get("ext", "wav")
+
+    ext = re.sub(r"[^a-z0-9]", "", str(ext).lower()) or "wav"
 
     # Write to temp file for ffmpeg
     with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp_in:
