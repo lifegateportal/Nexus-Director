@@ -1,0 +1,1466 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+type TabId = "raw" | "organized" | "assistant";
+
+type ScriptureCard = {
+  id: string;
+  ref: string;
+  text: string;
+  source: "detected" | "suggested";
+  confidence?: number;
+  reason?: string;
+};
+
+type ChatEntry = {
+  id: string;
+  role: "user" | "assistant";
+  markdown: string;
+};
+
+type CadencePoint = {
+  tSec: number;
+  wpm: number;
+};
+
+type PulpitBlock = {
+  kind: "paragraph" | "bullet" | "quote" | "subheading";
+  text: string;
+};
+
+type PulpitSection = {
+  title: string;
+  body: string;
+  blocks: PulpitBlock[];
+  wordCount: number;
+};
+
+type SermonCloudSnapshot = {
+  rawTranscript: string;
+  organizedMarkdown: string;
+  manualNotes: string;
+  scriptureCards: ScriptureCard[];
+};
+
+type SermonProjectRecord = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  sermonAssistant: SermonCloudSnapshot;
+};
+
+type SermonApiResponse = {
+  markdown: string;
+};
+
+type SuggestionResponse = {
+  suggestions: Array<{
+    ref: string;
+    text: string;
+    reason?: string;
+    confidence?: number;
+  }>;
+};
+
+const STORAGE_KEYS = {
+  raw: "nexus_sermon_raw",
+  organized: "nexus_sermon_organized",
+  notes: "nexus_sermon_manual_notes",
+  projectId: "nexus_sermon_project_id",
+  projectName: "nexus_sermon_project_name",
+} as const;
+
+const SCRIPTURE_DB = [
+  { triggers: ["john 3 16", "john 316"], ref: "John 3:16", text: "For God so loved the world, that he gave his only Son..." },
+  { triggers: ["ephesians 6", "armor of god"], ref: "Ephesians 6:11", text: "Put on the whole armor of God..." },
+  { triggers: ["psalm 23", "lord is my shepherd"], ref: "Psalm 23:1", text: "The Lord is my shepherd; I shall not want." },
+] as const;
+
+const SCRIPTURE_REF_REGEX = /\b(?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+)?\s+\d{1,3}:\d{1,3}(?:-\d{1,3})?\b/g;
+
+const THEOLOGY_HINTS = [
+  "prophet",
+  "gospel",
+  "covenant",
+  "dry bones",
+  "cross",
+  "resurrection",
+  "shepherd",
+  "wilderness",
+  "promise",
+  "kingdom",
+  "grace",
+  "mercy",
+  "faith",
+  "israel",
+  "paul",
+  "moses",
+  "david",
+  "ezekiel",
+] as const;
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function renderMarkdown(md: string): string {
+  const escaped = escapeHtml(md);
+  let html = escaped.replace(/^### (.*$)/gim, '<h3 class="text-xl font-bold text-slate-100 mt-6 mb-2">$1</h3>');
+  html = html.replace(/^## (.*$)/gim, '<h2 class="text-2xl font-bold text-cyan-300 border-b border-cyan-500/25 pb-2 mt-8 mb-3">$1</h2>');
+  html = html.replace(/^# (.*$)/gim, '<h1 class="text-3xl font-black text-cyan-300 mb-5">$1</h1>');
+  html = html.replace(/^\> (.*$)/gim, '<blockquote class="border-l-4 border-cyan-400/80 bg-cyan-500/10 rounded-r-xl px-4 py-3 text-slate-300 italic my-4">$1</blockquote>');
+  html = html.replace(/^\-\s+(.*$)/gim, '<li class="ml-5 list-disc text-slate-200">$1</li>');
+  html = html.replace(/\*\*(.*?)\*\*/gim, '<strong class="text-slate-100">$1</strong>');
+  html = html.replace(/\*(.*?)\*/gim, "<em>$1</em>");
+  html = html.replace(/\n/g, "<br />");
+  return html;
+}
+
+function stripMarkdown(md: string): string {
+  return md
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s?/gm, "")
+    .replace(/^[-*]\s+/gm, "")
+    .replace(/\*\*/g, "")
+    .replace(/\*/g, "")
+    .replace(/`/g, "")
+    .trim();
+}
+
+function normalizeForTriggers(text: string): string {
+  return text.toLowerCase().replace(/[.,!?;:]/g, "");
+}
+
+function countWords(text: string): number {
+  const clean = text.trim();
+  if (!clean) return 0;
+  return clean.split(/\s+/).filter(Boolean).length;
+}
+
+function chooseRecorderMimeType(): string {
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+  ];
+  for (const candidate of candidates) {
+    if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+  }
+  return "";
+}
+
+function buildPulpitSections(markdown: string): PulpitSection[] {
+  function linesToBlocks(bodyLines: string[]): PulpitBlock[] {
+    const blocks: PulpitBlock[] = [];
+    let paragraphBuffer: string[] = [];
+
+    const flushParagraph = () => {
+      const text = stripMarkdown(paragraphBuffer.join(" ")).trim();
+      if (text) blocks.push({ kind: "paragraph", text });
+      paragraphBuffer = [];
+    };
+
+    for (const rawLine of bodyLines) {
+      const line = rawLine.trim();
+      if (!line) {
+        flushParagraph();
+        continue;
+      }
+
+      if (line.startsWith("### ")) {
+        flushParagraph();
+        blocks.push({ kind: "subheading", text: stripMarkdown(line) });
+        continue;
+      }
+
+      if (line.startsWith(">")) {
+        flushParagraph();
+        blocks.push({ kind: "quote", text: stripMarkdown(line) });
+        continue;
+      }
+
+      if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
+        flushParagraph();
+        blocks.push({ kind: "bullet", text: stripMarkdown(line) });
+        continue;
+      }
+
+      paragraphBuffer.push(line);
+    }
+
+    flushParagraph();
+    return blocks;
+  }
+
+  const lines = markdown.split(/\r?\n/);
+  const sections: PulpitSection[] = [];
+  let currentTitle = "Sermon";
+  let bodyLines: string[] = [];
+
+  const pushSection = () => {
+    const body = stripMarkdown(bodyLines.join("\n")).trim();
+    if (!body) return;
+    sections.push({
+      title: currentTitle,
+      body,
+      blocks: linesToBlocks(bodyLines),
+      wordCount: countWords(body),
+    });
+  };
+
+  for (const line of lines) {
+    const heading = line.match(/^(#{1,2})\s+(.+)$/);
+    if (heading) {
+      pushSection();
+      currentTitle = heading[2].trim();
+      bodyLines = [];
+      continue;
+    }
+    bodyLines.push(line);
+  }
+
+  pushSection();
+
+  if (sections.length === 0 && markdown.trim()) {
+    const body = stripMarkdown(markdown);
+    return [{ title: "Sermon", body, blocks: linesToBlocks(markdown.split(/\r?\n/)), wordCount: countWords(body) }];
+  }
+
+  return sections;
+}
+
+function formatClockTime(date: Date): string {
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatElapsed(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (hh > 0) {
+    return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}:${ss.toString().padStart(2, "0")}`;
+  }
+  return `${mm.toString().padStart(2, "0")}:${ss.toString().padStart(2, "0")}`;
+}
+
+function estimateSectionDuration(wordCount: number, wpm: number): string {
+  const effectiveWpm = wpm >= 80 ? wpm : 130;
+  const minutes = Math.max(1, Math.round((wordCount / effectiveWpm) * 60));
+  return formatElapsed(minutes);
+}
+
+function looksTheological(text: string): boolean {
+  const lowered = text.toLowerCase();
+  return THEOLOGY_HINTS.some((hint) => lowered.includes(hint));
+}
+
+function normalizeRef(ref: string): string {
+  return ref.replace(/\s+/g, " ").trim();
+}
+
+function extractScriptureRefs(text: string): string[] {
+  const matches = text.match(SCRIPTURE_REF_REGEX) ?? [];
+  const unique = new Set<string>();
+  for (const raw of matches) {
+    const normalized = normalizeRef(raw);
+    if (normalized.length >= 4) unique.add(normalized);
+  }
+  return [...unique];
+}
+
+export function SermonAssistantPanel() {
+  const [activeTab, setActiveTab] = useState<TabId>("raw");
+  const [rawTranscript, setRawTranscript] = useState("");
+  const [organizedMarkdown, setOrganizedMarkdown] = useState("");
+  const [manualNotes, setManualNotes] = useState("");
+  const [scriptureCards, setScriptureCards] = useState<ScriptureCard[]>([]);
+  const [chatEntries, setChatEntries] = useState<ChatEntry[]>([]);
+  const [assistantInput, setAssistantInput] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const [interimText, setInterimText] = useState("");
+  const [statusText, setStatusText] = useState("Ready");
+  const [toast, setToast] = useState<{ text: string; type: "info" | "success" | "error" } | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isAssistantThinking, setIsAssistantThinking] = useState(false);
+  const [currentProjectId, setCurrentProjectId] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyItems, setHistoryItems] = useState<SermonProjectRecord[]>([]);
+  const [isEditingOrganized, setIsEditingOrganized] = useState(false);
+
+  const [volumeLevel, setVolumeLevel] = useState(0);
+  const [currentWpm, setCurrentWpm] = useState(0);
+  const [avgWpm, setAvgWpm] = useState(0);
+  const [cadencePoints, setCadencePoints] = useState<CadencePoint[]>([]);
+
+  const [audioDownloadUrl, setAudioDownloadUrl] = useState<string | null>(null);
+  const [audioFileName, setAudioFileName] = useState("sermon-session.webm");
+
+  const [pulpitOpen, setPulpitOpen] = useState(false);
+  const [pulpitIndex, setPulpitIndex] = useState(0);
+  const [pulpitNow, setPulpitNow] = useState(() => Date.now());
+  const [pulpitStartedAt, setPulpitStartedAt] = useState<number | null>(null);
+
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioMimeRef = useRef("audio/webm");
+
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const volumeFrameRef = useRef<number | null>(null);
+
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const lastFinalAtRef = useRef<number | null>(null);
+  const totalWordsRef = useRef(0);
+  const totalSpeechSecondsRef = useRef(0);
+
+  const semanticTimerRef = useRef<number | null>(null);
+  const semanticInFlightRef = useRef(false);
+  const scriptureCardsRef = useRef<ScriptureCard[]>([]);
+
+  const pulpitTouchStartXRef = useRef<number | null>(null);
+
+  const mergeScriptureCards = useCallback((incoming: ScriptureCard[]) => {
+    if (incoming.length === 0) return;
+    setScriptureCards((prev) => {
+      const existingRefs = new Set(prev.map((card) => card.ref.toLowerCase()));
+      const additions = incoming.filter((card) => !existingRefs.has(card.ref.toLowerCase()));
+      return additions.length === 0 ? prev : [...prev, ...additions];
+    });
+  }, []);
+
+  useEffect(() => {
+    setRawTranscript(localStorage.getItem(STORAGE_KEYS.raw) ?? "");
+    setOrganizedMarkdown(localStorage.getItem(STORAGE_KEYS.organized) ?? "");
+    setManualNotes(localStorage.getItem(STORAGE_KEYS.notes) ?? "");
+    setCurrentProjectId(localStorage.getItem(STORAGE_KEYS.projectId) ?? "");
+    setProjectName(localStorage.getItem(STORAGE_KEYS.projectName) ?? "");
+  }, []);
+
+  useEffect(() => {
+    scriptureCardsRef.current = scriptureCards;
+  }, [scriptureCards]);
+
+  useEffect(() => {
+    const refs = extractScriptureRefs(`${rawTranscript}\n${organizedMarkdown}`);
+    if (refs.length === 0) return;
+
+    const known = new Map<string, string>();
+    for (const row of SCRIPTURE_DB) known.set(row.ref.toLowerCase(), row.text);
+
+    const cards: ScriptureCard[] = refs.map((ref) => ({
+      id: `${ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      ref,
+      text: known.get(ref.toLowerCase()) ?? "Reference detected in your notes.",
+      source: "detected",
+      confidence: 1,
+    }));
+
+    mergeScriptureCards(cards);
+  }, [mergeScriptureCards, organizedMarkdown, rawTranscript]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.raw, rawTranscript);
+  }, [rawTranscript]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.organized, organizedMarkdown);
+  }, [organizedMarkdown]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.notes, manualNotes);
+  }, [manualNotes]);
+
+  useEffect(() => {
+    if (currentProjectId) localStorage.setItem(STORAGE_KEYS.projectId, currentProjectId);
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    if (projectName) localStorage.setItem(STORAGE_KEYS.projectName, projectName);
+  }, [projectName]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2800);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [chatEntries, isAssistantThinking]);
+
+  const transcriptPreview = useMemo(() => {
+    if (!rawTranscript.trim() && !interimText.trim()) return "";
+    return `${rawTranscript}${interimText ? ` ${interimText}` : ""}`.trim();
+  }, [interimText, rawTranscript]);
+
+  const pulpitSections = useMemo(() => buildPulpitSections(organizedMarkdown), [organizedMarkdown]);
+
+  const elapsedPulpitSec = useMemo(() => {
+    if (!pulpitStartedAt) return 0;
+    return Math.floor((pulpitNow - pulpitStartedAt) / 1000);
+  }, [pulpitNow, pulpitStartedAt]);
+
+  useEffect(() => {
+    if (!pulpitOpen) return;
+    const id = window.setInterval(() => setPulpitNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [pulpitOpen]);
+
+  useEffect(() => {
+    if (!pulpitOpen) return;
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+        event.preventDefault();
+        setPulpitIndex((prev) => Math.min(pulpitSections.length - 1, prev + 1));
+      }
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        event.preventDefault();
+        setPulpitIndex((prev) => Math.max(0, prev - 1));
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPulpitOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
+  }, [pulpitOpen, pulpitSections.length]);
+
+  useEffect(() => {
+    return () => {
+      if (volumeFrameRef.current) window.cancelAnimationFrame(volumeFrameRef.current);
+      if (audioContextRef.current) void audioContextRef.current.close();
+      if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current);
+      if (audioDownloadUrl) URL.revokeObjectURL(audioDownloadUrl);
+    };
+  }, [audioDownloadUrl]);
+
+  const pushToast = useCallback((text: string, type: "info" | "success" | "error" = "info") => {
+    setToast({ text, type });
+  }, []);
+
+  const deriveProjectName = useCallback(() => {
+    if (projectName.trim()) return projectName.trim();
+    const heading = organizedMarkdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
+    if (heading) return heading;
+    const firstLine = rawTranscript.split(/\r?\n/).find((line) => line.trim())?.trim();
+    if (firstLine) return firstLine.slice(0, 48);
+    return `Sermon ${new Date().toLocaleDateString()}`;
+  }, [organizedMarkdown, projectName, rawTranscript]);
+
+  const closeAudioNodes = useCallback(() => {
+    if (volumeFrameRef.current) {
+      window.cancelAnimationFrame(volumeFrameRef.current);
+      volumeFrameRef.current = null;
+    }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+    setVolumeLevel(0);
+  }, []);
+
+  const refreshAudioDownload = useCallback(() => {
+    if (audioChunksRef.current.length === 0) return;
+    if (audioDownloadUrl) URL.revokeObjectURL(audioDownloadUrl);
+
+    const blob = new Blob(audioChunksRef.current, { type: audioMimeRef.current || "audio/webm" });
+    const nextUrl = URL.createObjectURL(blob);
+    setAudioDownloadUrl(nextUrl);
+
+    const ext = audioMimeRef.current.includes("mp4") ? "m4a" : "webm";
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    setAudioFileName(`sermon-session-${stamp}.${ext}`);
+  }, [audioDownloadUrl]);
+
+  const stopRecording = useCallback(() => {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (socketRef.current) {
+      try {
+        socketRef.current.close();
+      } catch {
+        // ignore
+      }
+      socketRef.current = null;
+    }
+
+    closeAudioNodes();
+    setInterimText("");
+    setIsRecording(false);
+    setStatusText("Paused");
+    refreshAudioDownload();
+  }, [closeAudioNodes, refreshAudioDownload]);
+
+  const detectScripture = useCallback((chunk: string) => {
+    const normalized = normalizeForTriggers(chunk);
+    const hits = SCRIPTURE_DB.filter((entry) => entry.triggers.some((trigger) => normalized.includes(trigger)));
+    const triggerCards: ScriptureCard[] = hits.map((hit) => ({
+      id: `${hit.ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      ref: hit.ref,
+      text: hit.text,
+      source: "detected",
+      confidence: 1,
+    }));
+
+    const explicitRefs = extractScriptureRefs(chunk);
+    const explicitCards: ScriptureCard[] = explicitRefs.map((ref) => {
+      const known = SCRIPTURE_DB.find((entry) => entry.ref.toLowerCase() === ref.toLowerCase());
+      return {
+        id: `${ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        ref,
+        text: known?.text ?? "Reference detected in your transcript.",
+        source: "detected",
+        confidence: 1,
+      };
+    });
+
+    if (triggerCards.length === 0 && explicitCards.length === 0) return;
+    mergeScriptureCards([...triggerCards, ...explicitCards]);
+  }, [mergeScriptureCards]);
+
+  const scheduleSemanticSuggest = useCallback((contextText: string) => {
+    if (contextText.length < 70 || !looksTheological(contextText)) return;
+
+    if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current);
+
+    semanticTimerRef.current = window.setTimeout(async () => {
+      if (semanticInFlightRef.current) return;
+      semanticInFlightRef.current = true;
+      try {
+        const res = await fetch("/api/sermon-assistant/scripture-suggest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            context: contextText.slice(-1200),
+            existingRefs: scriptureCardsRef.current.map((card) => card.ref),
+          }),
+        });
+
+        if (!res.ok) return;
+        const data = await res.json() as SuggestionResponse;
+        const cards: ScriptureCard[] = (data.suggestions ?? []).map((item) => ({
+          id: `${item.ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          ref: item.ref,
+          text: item.text,
+          source: "suggested",
+          confidence: item.confidence,
+          reason: item.reason,
+        }));
+        mergeScriptureCards(cards);
+      } catch {
+        // background suggestion should fail silently
+      } finally {
+        semanticInFlightRef.current = false;
+      }
+    }, 1200);
+  }, [mergeScriptureCards]);
+
+  const startVolumeTelemetry = useCallback((stream: MediaStream) => {
+    closeAudioNodes();
+    const context = new AudioContext();
+    const source = context.createMediaStreamSource(stream);
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+
+    audioContextRef.current = context;
+    analyserRef.current = analyser;
+
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+
+    const tick = () => {
+      const node = analyserRef.current;
+      if (!node) return;
+      node.getByteTimeDomainData(buffer);
+
+      let sum = 0;
+      for (let i = 0; i < buffer.length; i += 1) {
+        const centered = (buffer[i] - 128) / 128;
+        sum += centered * centered;
+      }
+      const rms = Math.sqrt(sum / buffer.length);
+      setVolumeLevel(Math.max(0, Math.min(100, Math.round(rms * 180))));
+      volumeFrameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    volumeFrameRef.current = window.requestAnimationFrame(tick);
+  }, [closeAudioNodes]);
+
+  const toggleRecording = useCallback(async () => {
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+
+    try {
+      const tokenRes = await fetch("/api/transcribe-token", { method: "GET" });
+      if (!tokenRes.ok) {
+        pushToast("Deepgram key is not configured on the server.", "error");
+        return;
+      }
+
+      const tokenData = await tokenRes.json() as { apiKey?: string };
+      if (!tokenData.apiKey) {
+        pushToast("Deepgram key is unavailable.", "error");
+        return;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      setStatusText("Connecting...");
+
+      const socket = new WebSocket(
+        "wss://api.deepgram.com/v1/listen?punctuate=true&interim_results=true&smart_format=true&language=en",
+        ["token", tokenData.apiKey],
+      );
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        const mimeType = chooseRecorderMimeType();
+        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        recorderRef.current = recorder;
+        audioMimeRef.current = recorder.mimeType || mimeType || "audio/webm";
+
+        recorder.ondataavailable = (event) => {
+          if (event.data.size <= 0) return;
+          audioChunksRef.current.push(event.data);
+          if (socket.readyState === WebSocket.OPEN) socket.send(event.data);
+        };
+
+        recorder.onstop = () => {
+          refreshAudioDownload();
+        };
+
+        recorder.start(250);
+        recordingStartedAtRef.current = performance.now();
+        lastFinalAtRef.current = performance.now();
+        startVolumeTelemetry(stream);
+        setIsRecording(true);
+        setStatusText("Listening");
+      };
+
+      socket.onmessage = (event) => {
+        const payload = JSON.parse(event.data) as {
+          is_final?: boolean;
+          channel?: { alternatives?: Array<{ transcript?: string }> };
+        };
+
+        const transcript = payload.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
+        if (!transcript) return;
+
+        if (payload.is_final) {
+          setInterimText("");
+          detectScripture(transcript);
+
+          const now = performance.now();
+          const previous = lastFinalAtRef.current ?? now;
+          const deltaSec = Math.max(0.3, (now - previous) / 1000);
+          const words = countWords(transcript);
+          const chunkWpm = Math.round((words / deltaSec) * 60);
+
+          lastFinalAtRef.current = now;
+          totalWordsRef.current += words;
+          totalSpeechSecondsRef.current += deltaSec;
+          setCurrentWpm(chunkWpm);
+
+          const overall = totalSpeechSecondsRef.current > 0
+            ? Math.round((totalWordsRef.current / totalSpeechSecondsRef.current) * 60)
+            : 0;
+          setAvgWpm(overall);
+
+          const started = recordingStartedAtRef.current ?? now;
+          const tSec = Math.max(0, Math.round((now - started) / 1000));
+          setCadencePoints((prev) => {
+            const next = [...prev, { tSec, wpm: chunkWpm }];
+            return next.slice(-36);
+          });
+
+          setRawTranscript((prev) => {
+            const merged = `${prev}${prev ? " " : ""}${transcript}`;
+            scheduleSemanticSuggest(merged.slice(-1400));
+            return merged;
+          });
+        } else {
+          setInterimText(transcript);
+        }
+      };
+
+      socket.onerror = () => {
+        pushToast("Live transcription connection failed.", "error");
+        stopRecording();
+      };
+
+      socket.onclose = () => {
+        stopRecording();
+      };
+    } catch {
+      pushToast("Microphone access denied.", "error");
+      stopRecording();
+    }
+  }, [detectScripture, isRecording, pushToast, refreshAudioDownload, scheduleSemanticSuggest, startVolumeTelemetry, stopRecording]);
+
+  const generateOutline = useCallback(async () => {
+    if (!rawTranscript.trim()) {
+      pushToast("No transcript available yet.", "error");
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      const res = await fetch("/api/sermon-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "outline", rawTranscript }),
+      });
+      if (!res.ok) throw new Error("Outline generation failed");
+      const data = await res.json() as SermonApiResponse;
+      setOrganizedMarkdown(data.markdown);
+      const outlineRefs = extractScriptureRefs(data.markdown);
+      if (outlineRefs.length > 0) {
+        const cards: ScriptureCard[] = outlineRefs.map((ref) => ({
+          id: `${ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          ref,
+          text: "Reference detected in your organized notes.",
+          source: "detected",
+          confidence: 1,
+        }));
+        mergeScriptureCards(cards);
+      }
+      setActiveTab("organized");
+      pushToast("Outline generated.", "success");
+    } catch {
+      pushToast("Nexus Engine request failed.", "error");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [mergeScriptureCards, pushToast, rawTranscript]);
+
+  const sendAssistantCommand = useCallback(async () => {
+    const command = assistantInput.trim();
+    if (!command) return;
+    if (!rawTranscript.trim()) {
+      pushToast("Record or upload a transcript first.", "error");
+      return;
+    }
+
+    setAssistantInput("");
+    setChatEntries((prev) => [
+      ...prev,
+      { id: `u-${Date.now()}`, role: "user", markdown: command },
+    ]);
+
+    setIsAssistantThinking(true);
+    try {
+      const res = await fetch("/api/sermon-assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "command",
+          rawTranscript,
+          organizedMarkdown,
+          command,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Assistant command failed");
+      const data = await res.json() as SermonApiResponse;
+      setChatEntries((prev) => [
+        ...prev,
+        { id: `a-${Date.now()}`, role: "assistant", markdown: data.markdown },
+      ]);
+      setOrganizedMarkdown(data.markdown);
+      const responseRefs = extractScriptureRefs(data.markdown);
+      if (responseRefs.length > 0) {
+        const cards: ScriptureCard[] = responseRefs.map((ref) => ({
+          id: `${ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          ref,
+          text: "Reference detected in agent output.",
+          source: "detected",
+          confidence: 1,
+        }));
+        mergeScriptureCards(cards);
+      }
+      pushToast("Organized notes updated.", "success");
+    } catch {
+      pushToast("Assistant request failed.", "error");
+    } finally {
+      setIsAssistantThinking(false);
+    }
+  }, [assistantInput, mergeScriptureCards, organizedMarkdown, pushToast, rawTranscript]);
+
+  const onUploadTranscript = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    setRawTranscript((prev) => {
+      const next = `${prev}${prev ? " " : ""}${text.trim()}`.trim();
+      scheduleSemanticSuggest(next.slice(-1400));
+      return next;
+    });
+    pushToast("Transcript uploaded.", "success");
+    event.target.value = "";
+  }, [pushToast, scheduleSemanticSuggest]);
+
+  const saveToCloud = useCallback(async (mode: "update" | "new" = "update") => {
+    if (!rawTranscript.trim() && !organizedMarkdown.trim()) {
+      pushToast("Nothing to save.", "error");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextName = deriveProjectName();
+    const id = mode === "new" || !currentProjectId ? `sermon-${Date.now()}` : currentProjectId;
+    const project: SermonProjectRecord = {
+      id,
+      name: nextName,
+      createdAt: now,
+      updatedAt: now,
+      sermonAssistant: {
+        rawTranscript,
+        organizedMarkdown,
+        manualNotes,
+        scriptureCards,
+      },
+    };
+
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project }),
+      });
+      if (!res.ok) throw new Error("save failed");
+      setCurrentProjectId(id);
+      setProjectName(nextName);
+      pushToast(mode === "new" ? "Saved as new sermon." : "Sermon updated in cloud.", "success");
+    } catch {
+      pushToast("Cloud save failed.", "error");
+    }
+  }, [currentProjectId, deriveProjectName, manualNotes, organizedMarkdown, pushToast, rawTranscript, scriptureCards]);
+
+  const openHistory = useCallback(async () => {
+    setHistoryOpen(true);
+    try {
+      const res = await fetch("/api/projects", { method: "GET" });
+      if (!res.ok) throw new Error("load failed");
+      const data = await res.json() as { projects?: Array<Record<string, unknown>> };
+      const items = (data.projects ?? [])
+        .filter((project): project is Record<string, unknown> & { sermonAssistant: SermonCloudSnapshot } =>
+          typeof project === "object" && project !== null && "sermonAssistant" in project)
+        .map((project) => project as unknown as SermonProjectRecord)
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      setHistoryItems(items);
+    } catch {
+      pushToast("Failed to load history.", "error");
+    }
+  }, [pushToast]);
+
+  const loadHistoryItem = useCallback((item: SermonProjectRecord) => {
+    setCurrentProjectId(item.id);
+    setProjectName(item.name);
+    setRawTranscript(item.sermonAssistant.rawTranscript ?? "");
+    setOrganizedMarkdown(item.sermonAssistant.organizedMarkdown ?? "");
+    setManualNotes(item.sermonAssistant.manualNotes ?? "");
+    setScriptureCards(item.sermonAssistant.scriptureCards ?? []);
+    setHistoryOpen(false);
+    pushToast("Project loaded.", "success");
+  }, [pushToast]);
+
+  const deleteHistoryItem = useCallback(async (id: string) => {
+    try {
+      const res = await fetch("/api/projects", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) throw new Error("delete failed");
+      setHistoryItems((prev) => prev.filter((item) => item.id !== id));
+      if (currentProjectId === id) {
+        setCurrentProjectId("");
+        setProjectName("");
+        localStorage.removeItem(STORAGE_KEYS.projectId);
+        localStorage.removeItem(STORAGE_KEYS.projectName);
+      }
+      pushToast("Project deleted.", "success");
+    } catch {
+      pushToast("Delete failed.", "error");
+    }
+  }, [currentProjectId, pushToast]);
+
+  const downloadAudio = useCallback(() => {
+    if (!audioDownloadUrl) return;
+    const anchor = document.createElement("a");
+    anchor.href = audioDownloadUrl;
+    anchor.download = audioFileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  }, [audioDownloadUrl, audioFileName]);
+
+  const openPulpitMode = useCallback(() => {
+    if (!organizedMarkdown.trim()) {
+      pushToast("Generate organized notes before pulpit mode.", "error");
+      return;
+    }
+    setPulpitIndex(0);
+    setPulpitStartedAt(Date.now());
+    setPulpitNow(Date.now());
+    setPulpitOpen(true);
+  }, [organizedMarkdown, pushToast]);
+
+  const closePulpitMode = useCallback(() => {
+    setPulpitOpen(false);
+  }, []);
+
+  const goPulpitPrev = useCallback(() => {
+    setPulpitIndex((prev) => Math.max(0, prev - 1));
+  }, []);
+
+  const goPulpitNext = useCallback(() => {
+    setPulpitIndex((prev) => Math.min(pulpitSections.length - 1, prev + 1));
+  }, [pulpitSections.length]);
+
+  const onPulpitTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    pulpitTouchStartXRef.current = event.changedTouches[0]?.clientX ?? null;
+  }, []);
+
+  const onPulpitTouchEnd = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const startX = pulpitTouchStartXRef.current;
+    const endX = event.changedTouches[0]?.clientX;
+    pulpitTouchStartXRef.current = null;
+    if (startX === null || typeof endX !== "number") return;
+
+    const delta = endX - startX;
+    if (Math.abs(delta) < 50) return;
+    if (delta < 0) {
+      goPulpitNext();
+    } else {
+      goPulpitPrev();
+    }
+  }, [goPulpitNext, goPulpitPrev]);
+
+  const latestSection = pulpitSections[pulpitIndex] ?? null;
+  const nextSection = pulpitSections[pulpitIndex + 1] ?? null;
+  const pulpitProgressPct = pulpitSections.length > 1
+    ? Math.round((pulpitIndex / (pulpitSections.length - 1)) * 100)
+    : latestSection ? 100 : 0;
+
+  return (
+    <>
+      <section className="relative flex h-full min-h-[65dvh] flex-col overflow-hidden rounded-2xl border border-cyan-500/20 glass">
+        <header className="flex shrink-0 flex-col gap-3 border-b border-cyan-500/20 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 ring-1 ring-cyan-400/50">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5 text-cyan-300">
+                <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z" />
+                <path d="M6 11a6 6 0 0 0 12 0" />
+                <path d="M12 17v3" />
+                <path d="M9 20h6" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-100">Sermon Assistant</h2>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{statusText}</p>
+            </div>
+          </div>
+
+          <div className="min-w-0 flex-1 sm:max-w-xs">
+            <input
+              type="text"
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+              placeholder="Sermon title / save name"
+              className="focus-ring min-h-12 w-full rounded-xl border border-slate-700/80 bg-slate-950/70 px-4 text-base text-slate-100 placeholder:text-slate-500"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300"
+            >
+              Upload
+            </button>
+            <button
+              type="button"
+              onClick={openHistory}
+              className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300"
+            >
+              History
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveToCloud("update")}
+              className="focus-ring min-h-12 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/25"
+            >
+              Save Update
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveToCloud("new")}
+              className="focus-ring min-h-12 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/25"
+            >
+              Save As New
+            </button>
+            <input ref={fileRef} type="file" accept=".txt" className="hidden" onChange={onUploadTranscript} />
+          </div>
+        </header>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 pb-24 lg:grid lg:grid-cols-3 lg:overflow-hidden lg:pb-3">
+          <div className="flex min-h-[45dvh] flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:col-span-2 lg:min-h-0">
+            <div className="flex shrink-0 border-b border-cyan-500/20">
+              {(["raw", "organized", "assistant"] as TabId[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`focus-ring min-h-12 flex-1 border-b-2 text-sm font-bold uppercase tracking-wide transition ${
+                    activeTab === tab
+                      ? "border-cyan-400 bg-cyan-500/10 text-cyan-300"
+                      : "border-transparent text-slate-400 hover:bg-slate-900/80 hover:text-slate-200"
+                  }`}
+                >
+                  {tab === "raw" ? "Raw Transcript" : tab === "organized" ? "Organized Notes" : "Nexus Agent"}
+                </button>
+              ))}
+            </div>
+
+            {activeTab === "raw" && (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cyan-500/10 px-4 py-3">
+                  <p className="text-xs uppercase tracking-wider text-slate-500">Live Capture</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={toggleRecording}
+                      className={`focus-ring min-h-12 rounded-xl px-5 text-sm font-bold transition ${
+                        isRecording
+                          ? "border border-cyan-400/60 bg-cyan-500/20 text-cyan-300"
+                          : "bg-cyan-400 text-slate-950 hover:bg-cyan-300"
+                      }`}
+                    >
+                      {isRecording ? "Pause" : "Start"}
+                    </button>
+                    {audioDownloadUrl && !isRecording && (
+                      <button
+                        type="button"
+                        onClick={downloadAudio}
+                        className="focus-ring min-h-12 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/25"
+                      >
+                        Download Audio
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-2 border-b border-cyan-500/10 p-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Mic Level</p>
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                      <div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${volumeLevel}%` }} />
+                    </div>
+                    <p className="mt-2 text-sm font-bold text-cyan-300">{volumeLevel}%</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Current WPM</p>
+                    <p className="mt-2 text-2xl font-black text-slate-100">{currentWpm}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Average WPM</p>
+                    <p className="mt-2 text-2xl font-black text-slate-100">{avgWpm}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3 sm:col-span-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Cadence Trend</p>
+                    <div className="mt-2 flex h-14 items-end gap-1">
+                      {cadencePoints.length === 0 ? (
+                        <p className="text-xs text-slate-500">Begin speaking to generate cadence telemetry.</p>
+                      ) : (
+                        cadencePoints.map((point) => (
+                          <span
+                            key={`${point.tSec}-${point.wpm}`}
+                            className="w-2 rounded-t bg-cyan-400/90"
+                            title={`${point.wpm} WPM at ${point.tSec}s`}
+                            style={{ height: `${Math.max(10, Math.min(100, Math.round((point.wpm / 220) * 100)))}%` }}
+                          />
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 text-base leading-relaxed text-slate-200">
+                  {transcriptPreview ? (
+                    <p className="whitespace-pre-wrap break-words">{transcriptPreview}</p>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-center text-slate-500">
+                      <p>Click Start and begin speaking. Try paraphrasing passages too, semantic suggestions will auto-appear.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "organized" && (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex flex-wrap items-center justify-end gap-2 border-b border-cyan-500/10 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingOrganized((value) => !value)}
+                    className="focus-ring min-h-12 rounded-xl border border-slate-600/80 px-4 text-sm font-bold text-slate-200 transition hover:border-cyan-500/50 hover:text-cyan-300"
+                  >
+                    {isEditingOrganized ? "Preview Mode" : "Edit Notes"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openPulpitMode}
+                    className="focus-ring min-h-12 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 text-sm font-bold text-amber-300 transition hover:bg-amber-500/20"
+                  >
+                    Pulpit Mode
+                  </button>
+                  <button
+                    type="button"
+                    onClick={generateOutline}
+                    disabled={isGenerating}
+                    className="focus-ring min-h-12 rounded-xl bg-cyan-400 px-5 text-sm font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isGenerating ? "Processing..." : "Generate Outline"}
+                  </button>
+                </div>
+                <div className="grid min-h-0 flex-1 gap-3 p-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.8fr)]">
+                  <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70">
+                    {isEditingOrganized ? (
+                      <textarea
+                        value={organizedMarkdown}
+                        onChange={(event) => setOrganizedMarkdown(event.target.value)}
+                        placeholder="Generated sermon structure will appear here. You can manually rewrite, reorder, and add notes directly."
+                        className="focus-ring h-full min-h-[35dvh] w-full resize-none border-0 bg-transparent p-5 text-base leading-relaxed text-slate-100 placeholder:text-slate-500"
+                      />
+                    ) : (
+                      <div className="prose prose-invert h-full max-w-none overflow-y-auto p-5">
+                        {organizedMarkdown ? (
+                          <div dangerouslySetInnerHTML={{ __html: renderMarkdown(organizedMarkdown) }} />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-center text-slate-500 not-prose">
+                            <p>Your structured sermon will appear here.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70">
+                    <div className="border-b border-cyan-500/10 px-4 py-3">
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Manual Notes</p>
+                    </div>
+                    <textarea
+                      value={manualNotes}
+                      onChange={(event) => setManualNotes(event.target.value)}
+                      placeholder="Add transitions, illustrations, altar call notes, delivery cues, or anything you want to manually keep alongside the organized sermon."
+                      className="focus-ring h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] w-full resize-none border-0 bg-transparent p-4 text-base leading-relaxed text-slate-100 placeholder:text-slate-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "assistant" && (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div ref={chatScrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                  {chatEntries.length === 0 && (
+                    <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-4 text-sm text-slate-300">
+                      Type a command like "Give me three opening hooks" or "Turn section 2 into a narrative."
+                    </div>
+                  )}
+                  {chatEntries.map((entry) => (
+                    <div key={entry.id} className={entry.role === "user" ? "flex justify-end" : "flex justify-start"}>
+                      <div
+                        className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                          entry.role === "user"
+                            ? "bg-slate-800 text-slate-100"
+                            : "border border-cyan-500/20 bg-slate-900 text-slate-200"
+                        }`}
+                      >
+                        {entry.role === "user" ? entry.markdown : <div dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.markdown) }} />}
+                      </div>
+                    </div>
+                  ))}
+                  {isAssistantThinking && (
+                    <div className="rounded-2xl border border-cyan-500/20 bg-slate-900 px-4 py-3 text-sm text-slate-400">
+                      Nexus Agent is restructuring your sermon...
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 gap-2 border-t border-cyan-500/20 p-3 pb-8 lg:pb-3">
+                  <input
+                    type="text"
+                    value={assistantInput}
+                    onChange={(event) => setAssistantInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void sendAssistantCommand();
+                    }}
+                    placeholder="Command Nexus Agent..."
+                    className="focus-ring min-h-12 flex-1 rounded-xl border border-slate-700/90 bg-slate-950/80 px-4 text-base text-slate-100 placeholder:text-slate-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void sendAssistantCommand()}
+                    className="focus-ring min-h-12 min-w-12 rounded-xl bg-cyan-400 px-4 text-sm font-bold text-slate-950 hover:bg-cyan-300"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <aside className="hidden min-h-0 flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:flex">
+            <div className="border-b border-cyan-500/20 px-4 py-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">References</p>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+              {scriptureCards.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-center text-sm text-slate-500">
+                  <p>Detected and suggested scriptures will appear here.</p>
+                </div>
+              ) : (
+                scriptureCards.map((card) => (
+                  <article key={card.id} className="rounded-xl border-l-4 border-cyan-400 bg-slate-900/80 px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-bold text-cyan-300">{card.ref}</h3>
+                      <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${card.source === "suggested" ? "bg-amber-500/20 text-amber-300" : "bg-cyan-500/20 text-cyan-200"}`}>
+                        {card.source === "suggested" ? "Suggested" : "Detected"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm italic text-slate-300">&quot;{card.text}&quot;</p>
+                    {card.reason && <p className="mt-1 text-xs text-slate-500">{card.reason}</p>}
+                  </article>
+                ))
+              )}
+            </div>
+          </aside>
+        </div>
+
+        {historyOpen && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+            <div className="flex max-h-[80dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-cyan-500/30 bg-slate-900">
+              <div className="flex items-center justify-between border-b border-cyan-500/20 px-4 py-3">
+                <h3 className="text-base font-bold text-slate-100">Sermon History</h3>
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen(false)}
+                  className="focus-ring min-h-10 rounded-lg px-3 text-sm text-slate-400 hover:text-slate-100"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                {historyItems.length === 0 ? (
+                  <p className="p-4 text-sm text-slate-500">No cloud projects found.</p>
+                ) : (
+                  historyItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-700/70 bg-slate-950/70 px-3 py-3">
+                      <button
+                        type="button"
+                        onClick={() => loadHistoryItem(item)}
+                        className="focus-ring min-h-12 flex-1 text-left"
+                      >
+                        <p className="text-sm font-semibold text-slate-100">{item.name}</p>
+                        <p className="text-xs text-slate-500">{new Date(item.updatedAt).toLocaleString()}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteHistoryItem(item.id)}
+                        className="focus-ring min-h-12 rounded-lg border border-rose-500/40 px-3 text-xs font-semibold text-rose-300 hover:bg-rose-500/15"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {toast && (
+          <div className="pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2">
+            <div
+              className={`rounded-xl border px-4 py-2 text-sm font-semibold shadow-lg ${
+                toast.type === "error"
+                  ? "border-rose-400/70 bg-rose-500/90 text-white"
+                  : toast.type === "success"
+                    ? "border-cyan-400/70 bg-cyan-400 text-slate-950"
+                    : "border-slate-600 bg-slate-800 text-slate-100"
+              }`}
+            >
+              {toast.text}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {pulpitOpen && latestSection && (
+        <div className="fixed inset-0 z-[90] flex flex-col bg-black text-white">
+          <div className="flex shrink-0 items-center justify-between border-b border-amber-400/30 px-4 py-3">
+            <div className="flex items-center gap-6">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-300">Current Time</p>
+                <p className="animate-pulse text-3xl font-black text-amber-200">{formatClockTime(new Date(pulpitNow))}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-cyan-300">Elapsed</p>
+                <p className="animate-pulse text-3xl font-black text-cyan-200">{formatElapsed(elapsedPulpitSec)}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={closePulpitMode}
+              className="focus-ring min-h-12 rounded-xl border border-rose-400/40 px-4 text-sm font-bold text-rose-200 hover:bg-rose-500/20"
+            >
+              Exit
+            </button>
+          </div>
+
+          <div className="border-b border-cyan-500/20 bg-slate-950/70 px-4 py-3">
+            <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+              <div className="h-full rounded-full bg-gradient-to-r from-amber-300 via-cyan-300 to-cyan-500 transition-all" style={{ width: `${pulpitProgressPct}%` }} />
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {pulpitSections.map((section, index) => (
+                <button
+                  key={`${section.title}-${index}`}
+                  type="button"
+                  onClick={() => setPulpitIndex(index)}
+                  className={`focus-ring min-h-12 whitespace-nowrap rounded-xl border px-3 text-left text-sm transition ${
+                    index === pulpitIndex
+                      ? "border-cyan-300 bg-cyan-400/15 text-cyan-100"
+                      : "border-slate-700 bg-slate-900/80 text-slate-400"
+                  }`}
+                >
+                  <span className="block text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">{index + 1}</span>
+                  <span className="block font-semibold">{section.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div
+            className="min-h-0 flex-1 overflow-y-auto px-5 py-6 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-6"
+            onTouchStart={onPulpitTouchStart}
+            onTouchEnd={onPulpitTouchEnd}
+          >
+            <div>
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-xs font-bold uppercase tracking-[0.22em] text-slate-400">
+                  Section {pulpitIndex + 1} of {pulpitSections.length}
+                </p>
+                <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-xs font-bold uppercase tracking-widest text-amber-200">
+                  {latestSection.wordCount} words
+                </span>
+                <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-xs font-bold uppercase tracking-widest text-cyan-200">
+                  Est. {estimateSectionDuration(latestSection.wordCount, avgWpm)}
+                </span>
+              </div>
+
+              <h2 className="mt-3 text-4xl font-black text-amber-200 sm:text-5xl">{latestSection.title}</h2>
+
+              <div className="mt-6 space-y-5">
+                {latestSection.blocks.map((block, index) => {
+                  if (block.kind === "subheading") {
+                    return (
+                      <h3 key={`${block.kind}-${index}`} className="text-2xl font-black text-cyan-200 sm:text-3xl">
+                        {block.text}
+                      </h3>
+                    );
+                  }
+
+                  if (block.kind === "quote") {
+                    return (
+                      <blockquote key={`${block.kind}-${index}`} className="rounded-2xl border-l-4 border-amber-300 bg-amber-300/10 px-5 py-4 text-2xl font-semibold leading-[1.7] text-amber-50 sm:text-3xl">
+                        {block.text}
+                      </blockquote>
+                    );
+                  }
+
+                  if (block.kind === "bullet") {
+                    return (
+                      <div key={`${block.kind}-${index}`} className="flex gap-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/8 px-4 py-4">
+                        <span className="mt-2 h-3 w-3 flex-shrink-0 rounded-full bg-cyan-300" />
+                        <p className="text-2xl font-semibold leading-[1.6] text-slate-100 sm:text-3xl">{block.text}</p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <p key={`${block.kind}-${index}`} className="text-2xl font-medium leading-[1.7] text-slate-100 sm:text-3xl">
+                      {block.text}
+                    </p>
+                  );
+                })}
+              </div>
+            </div>
+
+            <aside className="mt-8 space-y-4 lg:mt-0">
+              <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Current Section</p>
+                <p className="mt-2 text-xl font-bold text-white">{latestSection.title}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Next Up</p>
+                <p className="mt-2 text-lg font-semibold text-slate-200">{nextSection?.title ?? "Final section"}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Controls</p>
+                <div className="mt-3 space-y-2 text-sm text-slate-300">
+                  <p>Swipe left/right to change sections.</p>
+                  <p>Keyboard: Left/Right arrows or Page Up/Page Down.</p>
+                  <p>Press Escape to exit.</p>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-amber-400/30 p-4 pb-8 lg:pb-4">
+            <button
+              type="button"
+              onClick={goPulpitPrev}
+              disabled={pulpitIndex === 0}
+              className="focus-ring min-h-12 rounded-xl border border-slate-600 px-4 text-lg font-bold text-slate-100 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={goPulpitNext}
+              disabled={pulpitIndex >= pulpitSections.length - 1}
+              className="focus-ring min-h-12 rounded-xl border border-cyan-500/60 bg-cyan-500/15 px-4 text-lg font-bold text-cyan-200 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

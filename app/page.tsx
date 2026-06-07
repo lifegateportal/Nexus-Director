@@ -11,6 +11,7 @@ import { PromptBar } from "@/app/components/PromptBar";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { ProjectsPanel } from "@/app/components/ProjectsPanel";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
+import { SermonAssistantPanel } from "@/app/components/SermonAssistantPanel";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import { EbookJobStateSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest } from "@/lib/schemas/ebook";
@@ -640,9 +641,11 @@ export default function HomePage() {
     deploy:    null,
     projects:  null,
     ebook:     null,
+    sermon:    null,
   };
   const focusedTab = NAV_TAB[activeNav] ?? undefined;
   const isFocused = activeNav !== "overview";
+  const isSermonView = activeNav === "sermon";
 
   return (
     <div className="flex min-h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame">
@@ -666,16 +669,18 @@ export default function HomePage() {
           {/* ── Focused agent views (non-overview nav) ── */}
           {isFocused ? (
             <>
-              {/* Terminal — hidden on mobile in focused mode (nav already shows context), full panel on desktop */}
-              <div className="hidden lg:block lg:min-h-0 lg:col-span-2">
-                <TerminalLog
-                  entries={logs}
-                  isStreaming={stage === "ingesting" || stage === "reasoning"}
-                />
-              </div>
+              {/* Terminal — hidden for sermon mode to maximize writing/presentation space */}
+              {!isSermonView && (
+                <div className="hidden lg:block lg:min-h-0 lg:col-span-2">
+                  <TerminalLog
+                    entries={logs}
+                    isStreaming={stage === "ingesting" || stage === "reasoning"}
+                  />
+                </div>
+              )}
 
-              {/* Primary panel — full width on mobile, 3/5 on desktop */}
-              <div className="min-h-[65dvh] lg:min-h-0 lg:col-span-3">
+              {/* Primary panel — full width on mobile, sermon uses full desktop width */}
+              <div className={`min-h-[65dvh] lg:min-h-0 ${isSermonView ? "lg:col-span-5" : "lg:col-span-3"}`}>
                 {activeNav === "projects" ? (
                   <ProjectsPanel
                     projects={projects}
@@ -699,6 +704,8 @@ export default function HomePage() {
                       onSaveProject={handleSaveProject}
                     />
                   </div>
+                ) : activeNav === "sermon" ? (
+                  <SermonAssistantPanel />
                 ) : activeNav === "deploy" ? (
                   <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Deploy</p>

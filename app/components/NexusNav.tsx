@@ -15,6 +15,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "deploy",    label: "Deploy"    },
   { id: "projects",  label: "Projects"  },
   { id: "ebook",     label: "Ebook"     },
+  { id: "sermon",    label: "Sermon"    },
 ];
 
 /** Overview — mission control hub */
@@ -102,7 +103,19 @@ function IconEbook() {
   );
 }
 
-const NAV_ICONS = [IconGrid, IconEye, IconCode, IconLayout, IconFilm, IconDeploy, IconProjects, IconEbook];
+/** Sermon — live sermon restructuring assistant */
+function IconSermon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+      <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z" />
+      <path d="M6 11a6 6 0 0 0 12 0" strokeLinecap="round" />
+      <path d="M12 17v3" strokeLinecap="round" />
+      <path d="M9 20h6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+const NAV_ICONS = [IconGrid, IconEye, IconCode, IconLayout, IconFilm, IconDeploy, IconProjects, IconEbook, IconSermon];
 
 type NexusNavProps = {
   active: string;
