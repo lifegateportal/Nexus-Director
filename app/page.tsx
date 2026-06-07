@@ -664,7 +664,7 @@ export default function HomePage() {
           Mobile: flex-col + overflow-y-auto so panels stack and scroll.
           Desktop (lg+): grid 5-cols + overflow-hidden so panels fill height.
         */}
-        <main className="flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5">
+        <main className={isSermonView ? "flex min-h-0 flex-1 overflow-hidden" : "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5"}>
 
           {/* ── Focused agent views (non-overview nav) ── */}
           {isFocused ? (
@@ -680,7 +680,7 @@ export default function HomePage() {
               )}
 
               {/* Primary panel — full width on mobile, sermon uses full desktop width */}
-              <div className={`min-h-[65dvh] lg:min-h-0 ${isSermonView ? "lg:col-span-5" : "lg:col-span-3"}`}>
+              <div className={isSermonView ? "flex h-full flex-col" : `min-h-[65dvh] lg:min-h-0 ${"lg:col-span-3"}`}>
                 {activeNav === "projects" ? (
                   <ProjectsPanel
                     projects={projects}
@@ -826,13 +826,15 @@ export default function HomePage() {
           )}
         </main>
 
-        <PromptBar
-          stage={stage}
-          onLog={addLog}
-          onBlueprint={handleBlueprint}
-          onStageChange={handleStageChange}
-          onDeliveryChange={setDeliveryInstructions}
-        />
+        {!isSermonView && (
+          <PromptBar
+            stage={stage}
+            onLog={addLog}
+            onBlueprint={handleBlueprint}
+            onStageChange={handleStageChange}
+            onDeliveryChange={setDeliveryInstructions}
+          />
+        )}
       </div>
 
       {/* Director AI drawer — toggled from StatusBar */}

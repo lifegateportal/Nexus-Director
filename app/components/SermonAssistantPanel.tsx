@@ -295,6 +295,8 @@ export function SermonAssistantPanel() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<SermonProjectRecord[]>([]);
   const [isEditingOrganized, setIsEditingOrganized] = useState(false);
+  const [manualNotesOpen, setManualNotesOpen] = useState(false);
+  const [mobileView, setMobileView] = useState<"outline" | "manual">("outline");
 
   const [volumeLevel, setVolumeLevel] = useState(0);
   const [currentWpm, setCurrentWpm] = useState(0);
@@ -969,23 +971,33 @@ export function SermonAssistantPanel() {
   return (
     <>
       <section className="relative flex h-full min-h-[65dvh] flex-col overflow-hidden rounded-2xl border border-cyan-500/20 glass">
-        <header className="flex shrink-0 flex-col gap-3 border-b border-cyan-500/20 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 ring-1 ring-cyan-400/50">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5 text-cyan-300">
-                <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z" />
-                <path d="M6 11a6 6 0 0 0 12 0" />
-                <path d="M12 17v3" />
-                <path d="M9 20h6" />
-              </svg>
+        <header className="flex shrink-0 flex-col gap-3 border-b border-cyan-500/20 px-4 py-3 sm:px-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 ring-1 ring-cyan-400/50">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5 text-cyan-300">
+                  <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z" />
+                  <path d="M6 11a6 6 0 0 0 12 0" />
+                  <path d="M12 17v3" />
+                  <path d="M9 20h6" />
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-bold text-slate-100">Sermon Assistant</h2>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{statusText}</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-100">Sermon Assistant</h2>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{statusText}</p>
-            </div>
+
+            <button
+              type="button"
+              onClick={() => setMobileToolsOpen((v) => !v)}
+              className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-200 sm:hidden"
+            >
+              {mobileToolsOpen ? "Close Tools" : "Tools"}
+            </button>
           </div>
 
-          <div className="min-w-0 flex-1 sm:max-w-xs">
+          <div className="min-w-0">
             <input
               type="text"
               value={projectName}
@@ -995,7 +1007,7 @@ export function SermonAssistantPanel() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+          <div className="hidden grid-cols-2 gap-2 sm:grid sm:auto-cols-fr sm:grid-flow-col sm:items-center">
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
@@ -1024,12 +1036,46 @@ export function SermonAssistantPanel() {
             >
               Save As New
             </button>
-            <input ref={fileRef} type="file" accept=".txt" className="hidden" onChange={onUploadTranscript} />
           </div>
+
+          {mobileToolsOpen && (
+            <div className="grid grid-cols-2 gap-2 sm:hidden">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300"
+              >
+                Upload
+              </button>
+              <button
+                type="button"
+                onClick={openHistory}
+                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300"
+              >
+                History
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveToCloud("update")}
+                className="focus-ring min-h-12 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-300"
+              >
+                Save Update
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveToCloud("new")}
+                className="focus-ring min-h-12 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-300"
+              >
+                Save As New
+              </button>
+            </div>
+          )}
+
+          <input ref={fileRef} type="file" accept=".txt" className="hidden" onChange={onUploadTranscript} />
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 pb-24 lg:grid lg:grid-cols-3 lg:overflow-hidden lg:pb-3">
-          <div className="flex min-h-[45dvh] flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:col-span-2 lg:min-h-0">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 pb-24 lg:grid lg:grid-cols-12 lg:overflow-hidden lg:pb-3">
+          <div className="flex min-h-[45dvh] flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:col-span-9 lg:min-h-0">
             <div className="flex shrink-0 border-b border-cyan-500/20">
               {(["raw", "organized", "assistant"] as TabId[]).map((tab) => (
                 <button
@@ -1075,7 +1121,17 @@ export function SermonAssistantPanel() {
                   </div>
                 </div>
 
-                <div className="grid gap-2 border-b border-cyan-500/10 p-3 sm:grid-cols-3">
+                <div className="border-b border-cyan-500/10 px-3 py-2 sm:hidden">
+                  <button
+                    type="button"
+                    onClick={() => setMobileTelemetryOpen((v) => !v)}
+                    className="focus-ring min-h-12 w-full rounded-xl border border-slate-700/70 bg-slate-900/70 px-4 text-sm font-semibold text-slate-200"
+                  >
+                    {mobileTelemetryOpen ? "Hide Speech Insights" : "Show Speech Insights"}
+                  </button>
+                </div>
+
+                <div className="hidden gap-2 border-b border-cyan-500/10 p-3 sm:grid sm:grid-cols-3">
                   <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Mic Level</p>
                     <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-800">
@@ -1109,6 +1165,28 @@ export function SermonAssistantPanel() {
                     </div>
                   </div>
                 </div>
+
+                {mobileTelemetryOpen && (
+                  <div className="grid gap-2 border-b border-cyan-500/10 p-3 sm:hidden">
+                    <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Mic Level</p>
+                      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                        <div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${volumeLevel}%` }} />
+                      </div>
+                      <p className="mt-2 text-sm font-bold text-cyan-300">{volumeLevel}%</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Current WPM</p>
+                        <p className="mt-2 text-2xl font-black text-slate-100">{currentWpm}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Average WPM</p>
+                        <p className="mt-2 text-2xl font-black text-slate-100">{avgWpm}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="min-h-0 flex-1 overflow-y-auto p-4 text-base leading-relaxed text-slate-200">
                   {transcriptPreview ? (
@@ -1148,8 +1226,26 @@ export function SermonAssistantPanel() {
                     {isGenerating ? "Processing..." : "Generate Outline"}
                   </button>
                 </div>
-                <div className="grid min-h-0 flex-1 gap-3 p-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.8fr)]">
-                  <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70">
+
+                <div className="flex gap-2 border-b border-cyan-500/10 px-3 py-2 sm:hidden">
+                  <button
+                    type="button"
+                    onClick={() => setMobileOrganizedView("outline")}
+                    className={`focus-ring min-h-12 flex-1 rounded-xl border px-3 text-sm font-semibold ${mobileOrganizedView === "outline" ? "border-cyan-400 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
+                  >
+                    Outline
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobileOrganizedView("manual")}
+                    className={`focus-ring min-h-12 flex-1 rounded-xl border px-3 text-sm font-semibold ${mobileOrganizedView === "manual" ? "border-cyan-400 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
+                  >
+                    Manual Notes
+                  </button>
+                </div>
+
+                <div className="grid min-h-0 flex-1 gap-3 p-3 lg:grid-cols-[minmax(0,1.9fr)_minmax(260px,0.7fr)] xl:grid-cols-[minmax(0,2.15fr)_minmax(280px,0.65fr)]">
+                  <div className={`min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 ${mobileOrganizedView === "manual" ? "hidden sm:block" : ""}`}>
                     {isEditingOrganized ? (
                       <textarea
                         value={organizedMarkdown}
@@ -1169,7 +1265,7 @@ export function SermonAssistantPanel() {
                       </div>
                     )}
                   </div>
-                  <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70">
+                  <div className={`min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 ${mobileOrganizedView === "outline" ? "hidden sm:block" : ""}`}>
                     <div className="border-b border-cyan-500/10 px-4 py-3">
                       <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Manual Notes</p>
                     </div>
@@ -1234,7 +1330,7 @@ export function SermonAssistantPanel() {
             )}
           </div>
 
-          <aside className="hidden min-h-0 flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:flex">
+          <aside className="hidden min-h-0 flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:col-span-3 lg:flex">
             <div className="border-b border-cyan-500/20 px-4 py-3">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400">References</p>
             </div>
