@@ -1,13 +1,13 @@
 import type { ModelState, PipelineStage } from "@/lib/types";
 
 const STAGE_LABELS: Record<PipelineStage, string> = {
-  idle: "All agents standing by",
-  ingesting: "Analyst scanning content…",
-  reasoning: "Engineer architecting schema…",
-  generating: "Designer rendering interface…",
-  producing: "Curator packaging academy…",
-  done: "Build complete — ready to deploy",
-  error: "Pipeline error"
+  idle: "Define your academy objective and source material.",
+  ingesting: "Analysing inputs into a structured blueprint.",
+  reasoning: "Designing the execution architecture.",
+  generating: "Composing interface and learner experience.",
+  producing: "Packaging a complete academy output.",
+  done: "Pipeline complete. Ready for review and deployment.",
+  error: "Pipeline halted. Resolve errors, then continue."
 };
 
 const STAGE_COLORS: Record<PipelineStage, string> = {
@@ -35,7 +35,7 @@ type StatusBarProps = {
   assistantActive?: boolean;
 };
 
-export function StatusBar({ stage, models, onAssistant, assistantActive }: StatusBarProps) {
+export function StatusBar({ stage, models: _models, onAssistant, assistantActive }: StatusBarProps) {
   return (
     <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-cyan-500/15 px-4 glass-light">
       {/* Brand */}
@@ -43,30 +43,15 @@ export function StatusBar({ stage, models, onAssistant, assistantActive }: Statu
         Nexus Director
       </span>
 
-      {/* Agent routing pills — hidden on mobile, visible sm+ */}
-      <div className="hidden items-center gap-2 sm:flex sm:gap-3">
-        {models.map((m) => {
-          const dot = MODEL_DOT[m.status] ?? MODEL_DOT.standby;
-          const isActive = m.status === "active";
-          return (
-            <div key={m.handle} className="flex items-center gap-1.5">
-              <span
-                className={`h-2 w-2 flex-shrink-0 rounded-full transition-all ${dot.bg}`}
-                style={dot.glow ? { boxShadow: dot.glow } : undefined}
-              />
-              <span className={`text-[10px] font-medium sm:text-[11px] ${isActive ? "text-cyan-300" : "text-slate-500"}`}>
-                {m.name}
-              </span>
-            </div>
-          );
-        })}
+      {/* Stage objective label */}
+      <div className="min-w-0 flex-1 px-3 sm:px-6">
+        <p className={`truncate text-[11px] font-semibold sm:text-xs ${STAGE_COLORS[stage]}`}>
+          {STAGE_LABELS[stage]}
+        </p>
       </div>
 
       {/* Right: pipeline stage + Director AI button */}
       <div className="flex items-center gap-3">
-        <span className={`hidden text-[11px] font-semibold sm:block sm:text-xs ${STAGE_COLORS[stage]}`}>
-          {STAGE_LABELS[stage]}
-        </span>
         {onAssistant && (
           <button
             type="button"

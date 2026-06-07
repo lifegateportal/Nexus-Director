@@ -3026,7 +3026,7 @@ export function EbookPipeline({
   );
 
   return (
-    <div className="flex flex-col gap-5 pb-[max(env(safe-area-inset-bottom),3.75rem)] lg:pb-6">
+    <div className="flex flex-col gap-5 pb-2 lg:pb-6">
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">

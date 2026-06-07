@@ -7,15 +7,10 @@ import { usePathname, useRouter } from "next/navigation";
 type NavItem = { id: string; label: string; href?: string };
 
 const NAV_ITEMS: NavItem[] = [
-  { id: "overview",  label: "Overview"  },
-  { id: "analyse",   label: "Analyse"   },
-  { id: "architect", label: "Architect" },
-  { id: "design",    label: "Design"    },
-  { id: "produce",   label: "Produce"   },
-  { id: "deploy",    label: "Deploy"    },
-  { id: "projects",  label: "Projects"  },
-  { id: "ebook",     label: "Ebook"     },
-  { id: "sermon",    label: "Sermon"    },
+  { id: "overview", label: "Academy" },
+  { id: "ebook", label: "Book" },
+  { id: "projects", label: "Projects" },
+  { id: "sermon", label: "Sermon" },
 ];
 
 /** Overview — mission control hub */
@@ -30,53 +25,13 @@ function IconGrid() {
   );
 }
 
-/** Analyse — Gemini watches all footage */
-function IconEye() {
+/** Ebook — audio to ebook production */
+function IconEbook() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <path d="M2 12s3.64-7 10-7 10 7 10 7-3.64 7-10 7S2 12 2 12z" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-/** Architect — DeepSeek builds the backend */
-function IconCode() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <path d="m16 18 6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="m8 6-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-/** Design — Claude renders the UI */
-function IconLayout() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <rect x="3" y="3" width="18" height="18" rx="2.5" />
-      <path d="M3 9h18M9 9v12" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Produce — Kling AI cuts promotional clips */
-function IconFilm() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <rect x="2" y="4" width="20" height="16" rx="2" />
-      <path d="M7 4v16M17 4v16M2 9h5M17 9h5M2 15h5M17 15h5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Deploy — Manus ships to live internet */
-function IconDeploy() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="m16 6-4-4-4 4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M12 2v13" strokeLinecap="round" />
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 7h7M9 11h5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -88,17 +43,6 @@ function IconProjects() {
       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" strokeLinecap="round" strokeLinejoin="round" />
       <line x1="12" y1="11" x2="12" y2="17" strokeLinecap="round" />
       <line x1="9" y1="14" x2="15" y2="14" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Ebook — audio to ebook production */
-function IconEbook() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M9 7h7M9 11h5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -115,7 +59,12 @@ function IconSermon() {
   );
 }
 
-const NAV_ICONS = [IconGrid, IconEye, IconCode, IconLayout, IconFilm, IconDeploy, IconProjects, IconEbook, IconSermon];
+const NAV_ICONS: Record<string, () => React.JSX.Element> = {
+  overview: IconGrid,
+  ebook: IconEbook,
+  projects: IconProjects,
+  sermon: IconSermon,
+};
 
 type NexusNavProps = {
   active: string;
@@ -163,9 +112,14 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         <div className="mb-4"><LogoMark /></div>
 
         <div className="flex flex-col gap-1">
-          {NAV_ITEMS.map((item, i) => {
-            const Icon = NAV_ICONS[i];
-            const isActive = item.href ? pathname.startsWith(item.href) : active === item.id;
+          {NAV_ITEMS.map((item) => {
+            const Icon = NAV_ICONS[item.id] ?? IconGrid;
+            const isAcademyGroup = item.id === "overview";
+            const isActive = item.href
+              ? pathname.startsWith(item.href)
+              : isAcademyGroup
+                ? active !== "ebook" && active !== "sermon" && active !== "projects"
+                : active === item.id;
             const btnClass = [
               "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
               isActive
@@ -254,10 +208,14 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
           <span className="text-[9px] font-medium">Logout</span>
         </button>
 
-        {NAV_ITEMS.filter((item) => item.id !== "overview").map((item, i) => {
-          // offset by 1 because we skipped overview (index 0)
-          const Icon = NAV_ICONS[i + 1];
-          const isActive = item.href ? pathname.startsWith(item.href) : active === item.id;
+        {NAV_ITEMS.map((item) => {
+          const Icon = NAV_ICONS[item.id] ?? IconGrid;
+          const isAcademyGroup = item.id === "overview";
+          const isActive = item.href
+            ? pathname.startsWith(item.href)
+            : isAcademyGroup
+              ? active !== "ebook" && active !== "sermon" && active !== "projects"
+              : active === item.id;
           const inner = (
             <>
               <span className={isActive ? "text-cyan-400" : "text-slate-500"}>

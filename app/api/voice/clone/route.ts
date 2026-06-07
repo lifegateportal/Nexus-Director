@@ -41,10 +41,36 @@ export async function POST(req: NextRequest) {
     const sampleUrl = await resolveR2ObjectUrl(input.sampleUrl);
     const safeExt = (input.ext ?? "wav").toLowerCase().replace(/[^a-z0-9]/g, "") || "wav";
 
+    const sampleRes = await fetch(sampleUrl);
+    if (!sampleRes.ok) {
+      const body = await sampleRes.text();
+      throw new Error(`Sample fetch failed (${sampleRes.status}): ${body.slice(0, 300)}`);
+    }
+    const sampleBuffer = Buffer.from(await sampleRes.arrayBuffer());
+
+    // RunPod request bodies are capped at 10 MiB. Base64 adds ~33% overhead,
+    // so keep raw payloads <= 7 MiB on the inline path.
+    const MAX_INLINE_BYTES = 7 * 1024 * 1024;
+    const shouldInlineBase64 = sampleBuffer.byteLength <= MAX_INLINE_BYTES;
+
+    const runpodInput = shouldInlineBase64
+      ? {
+          action: "clone",
+          audio_base64: sampleBuffer.toString("base64"),
+          ext: safeExt,
+        }
+      : {
+          action: "clone",
+          // Prefer the original uploaded URL when available to avoid very long
+          // signed query strings in workers that infer extension from URL text.
+          audio_url: /^https?:\/\//i.test(input.sampleUrl) ? input.sampleUrl : sampleUrl,
+          ext: safeExt,
+        };
+
     const submitRes = await fetch(`https://api.runpod.ai/v2/${endpointId}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNPOD_API_KEY}` },
-      body: JSON.stringify({ input: { action: "clone", audio_url: sampleUrl, ext: safeExt } }),
+      body: JSON.stringify({ input: runpodInput }),
     });
     if (!submitRes.ok) {
       const body = await submitRes.text();

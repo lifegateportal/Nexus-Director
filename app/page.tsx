@@ -646,13 +646,15 @@ export default function HomePage() {
   const focusedTab = NAV_TAB[activeNav] ?? undefined;
   const isFocused = activeNav !== "overview";
   const isSermonView = activeNav === "sermon";
+  const isBookView = activeNav === "ebook";
+  const showActivityPanel = !isSermonView && !isBookView;
 
   return (
     <div className="flex min-h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame">
       <NexusNav active={activeNav} onSelect={setActiveNav} />
 
       {/* Content column — reserves bottom space for mobile bottom nav (~60px) */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
+      <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${isSermonView ? "pb-[max(env(safe-area-inset-bottom),_0.5rem)]" : "pb-[max(env(safe-area-inset-bottom),_3.75rem)]"} lg:pb-0`}>
         <StatusBar
           stage={stage}
           models={models}
@@ -664,14 +666,14 @@ export default function HomePage() {
           Mobile: flex-col + overflow-y-auto so panels stack and scroll.
           Desktop (lg+): grid 5-cols + overflow-hidden so panels fill height.
         */}
-        <main className={isSermonView ? "flex min-h-0 flex-1 overflow-hidden" : "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5"}>
+        <main className={isSermonView ? "flex min-h-0 flex-1 overflow-hidden" : `flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 ${isBookView ? "pb-3" : "pb-24"} lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5`}>
 
           {/* ── Focused agent views (non-overview nav) ── */}
           {isFocused ? (
             <>
               {/* Terminal — hidden for sermon mode to maximize writing/presentation space */}
-              {!isSermonView && (
-                <div className="hidden lg:block lg:min-h-0 lg:col-span-2">
+              {showActivityPanel && (
+                <div className="hidden lg:block lg:min-h-0 lg:col-span-1">
                   <TerminalLog
                     entries={logs}
                     isStreaming={stage === "ingesting" || stage === "reasoning"}
@@ -680,7 +682,7 @@ export default function HomePage() {
               )}
 
               {/* Primary panel — full width on mobile, sermon uses full desktop width */}
-              <div className={isSermonView ? "flex h-full flex-col" : `min-h-[65dvh] lg:min-h-0 ${"lg:col-span-3"}`}>
+              <div className={isSermonView ? "flex h-full flex-col" : `min-h-[65dvh] lg:min-h-0 ${showActivityPanel ? "lg:col-span-4" : "lg:col-span-5"}`}>
                 {activeNav === "projects" ? (
                   <ProjectsPanel
                     projects={projects}
@@ -773,7 +775,7 @@ export default function HomePage() {
             /* ── Overview (default) layout ── */
             <>
               {/* Terminal log — full width mobile, 3/5 desktop */}
-              <div className="min-h-[280px] lg:min-h-0 lg:col-span-3">
+              <div className="min-h-[220px] lg:min-h-0 lg:col-span-2">
                 <TerminalLog
                   entries={logs}
                   isStreaming={stage === "ingesting" || stage === "reasoning"}
@@ -781,7 +783,7 @@ export default function HomePage() {
               </div>
 
               {/* Right column — full width mobile (stacked), 2/5 desktop (grid-rows-2) */}
-              <div className="flex flex-col gap-3 lg:col-span-2 lg:grid lg:min-h-0 lg:grid-rows-2">
+              <div className="flex flex-col gap-3 lg:col-span-3 lg:grid lg:min-h-0 lg:grid-rows-2">
                 {blueprint !== null ? (
                   <>
                     <PipelineResults
@@ -806,15 +808,15 @@ export default function HomePage() {
                   <ProjectCard
                     title="Mission Control"
                     status="Healthy"
-                    detail="Upload raw footage, workshop recordings, or podcast archives. One command builds a live paid academy — complete with video ad campaign and deployed SaaS infrastructure."
+                    detail="Upload raw footage, workshop recordings, or podcast archives. One command builds a complete academy with structured outputs."
                     metrics={[
-                      { label: "AI Agents", value: "5 staged"       },
-                      { label: "Pipeline",  value: "Analyse → Deploy" },
-                      { label: "Runtime",   value: "Node.js"         },
-                      { label: "Viewport",  value: "iPad-safe"       }
+                      { label: "Pipeline", value: "Academy" },
+                      { label: "Book", value: "Ready" },
+                      { label: "Sermon", value: "Ready" },
+                      { label: "Viewport", value: "Mobile-first" },
                     ]}
                   />
-                  )}
+                )}
 
                 <MediaUpload
                   onLog={addLog}
@@ -826,7 +828,7 @@ export default function HomePage() {
           )}
         </main>
 
-        {!isSermonView && (
+        {!isSermonView && !isBookView && (
           <PromptBar
             stage={stage}
             onLog={addLog}

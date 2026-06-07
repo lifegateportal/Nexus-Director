@@ -295,8 +295,9 @@ export function SermonAssistantPanel() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<SermonProjectRecord[]>([]);
   const [isEditingOrganized, setIsEditingOrganized] = useState(false);
-  const [manualNotesOpen, setManualNotesOpen] = useState(false);
-  const [mobileView, setMobileView] = useState<"outline" | "manual">("outline");
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+  const [mobileTelemetryOpen, setMobileTelemetryOpen] = useState(false);
+  const [mobileOrganizedView, setMobileOrganizedView] = useState<"outline" | "manual">("outline");
 
   const [volumeLevel, setVolumeLevel] = useState(0);
   const [currentWpm, setCurrentWpm] = useState(0);
@@ -861,6 +862,54 @@ export function SermonAssistantPanel() {
     }
   }, [currentProjectId, deriveProjectName, manualNotes, organizedMarkdown, pushToast, rawTranscript, scriptureCards]);
 
+  const startNewBlankProject = useCallback(() => {
+    if (isRecording) stopRecording();
+    if (audioDownloadUrl) URL.revokeObjectURL(audioDownloadUrl);
+
+    audioChunksRef.current = [];
+    setAudioDownloadUrl(null);
+    setAudioFileName("sermon-session.webm");
+
+    setRawTranscript("");
+    setOrganizedMarkdown("");
+    setManualNotes("");
+    setScriptureCards([]);
+    setChatEntries([]);
+    setAssistantInput("");
+    setInterimText("");
+
+    setCurrentProjectId("");
+    setProjectName("");
+    setHistoryOpen(false);
+    setIsEditingOrganized(false);
+    setActiveTab("raw");
+    setStatusText("Ready");
+
+    setCurrentWpm(0);
+    setAvgWpm(0);
+    setCadencePoints([]);
+    totalWordsRef.current = 0;
+    totalSpeechSecondsRef.current = 0;
+    recordingStartedAtRef.current = null;
+    lastFinalAtRef.current = null;
+
+    setMobileToolsOpen(false);
+    setMobileTelemetryOpen(false);
+    setMobileOrganizedView("outline");
+
+    setPulpitOpen(false);
+    setPulpitIndex(0);
+    setPulpitStartedAt(null);
+
+    localStorage.removeItem(STORAGE_KEYS.raw);
+    localStorage.removeItem(STORAGE_KEYS.organized);
+    localStorage.removeItem(STORAGE_KEYS.notes);
+    localStorage.removeItem(STORAGE_KEYS.projectId);
+    localStorage.removeItem(STORAGE_KEYS.projectName);
+
+    pushToast("Started a new blank project.", "success");
+  }, [audioDownloadUrl, isRecording, pushToast, stopRecording]);
+
   const openHistory = useCallback(async () => {
     setHistoryOpen(true);
     try {
@@ -970,7 +1019,7 @@ export function SermonAssistantPanel() {
 
   return (
     <>
-      <section className="relative flex h-full min-h-[65dvh] flex-col overflow-hidden rounded-2xl border border-cyan-500/20 glass">
+      <section className="relative flex h-full flex-col overflow-hidden rounded-2xl border border-cyan-500/20 glass">
         <header className="flex shrink-0 flex-col gap-3 border-b border-cyan-500/20 px-4 py-3 sm:px-5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
@@ -988,12 +1037,55 @@ export function SermonAssistantPanel() {
               </div>
             </div>
 
+            <div className="hidden items-center gap-2 sm:flex">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                title="Upload transcript"
+                className="focus-ring flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700/80 text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 20h16"/></svg>
+              </button>
+              <button
+                type="button"
+                onClick={openHistory}
+                title="History"
+                className="focus-ring flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700/80 text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/><path d="M12 7v6l4 2"/></svg>
+              </button>
+              <button
+                type="button"
+                onClick={startNewBlankProject}
+                title="Start new blank project"
+                className="focus-ring flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700/80 text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4"><path d="M12 5v14"/><path d="M5 12h14"/><path d="M4 4h16v16H4z"/></svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveToCloud("update")}
+                title="Save update"
+                className="focus-ring flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-500/50 bg-cyan-500/15 text-cyan-300 transition hover:bg-cyan-500/25"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveToCloud("new")}
+                title="Save as new"
+                className="focus-ring flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-500/50 bg-emerald-500/15 text-emerald-300 transition hover:bg-emerald-500/25"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() => setMobileToolsOpen((v) => !v)}
               className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-200 sm:hidden"
             >
-              {mobileToolsOpen ? "Close Tools" : "Tools"}
+              {mobileToolsOpen ? "Close" : "Tools"}
             </button>
           </div>
 
@@ -1005,37 +1097,6 @@ export function SermonAssistantPanel() {
               placeholder="Sermon title / save name"
               className="focus-ring min-h-12 w-full rounded-xl border border-slate-700/80 bg-slate-950/70 px-4 text-base text-slate-100 placeholder:text-slate-500"
             />
-          </div>
-
-          <div className="hidden grid-cols-2 gap-2 sm:grid sm:auto-cols-fr sm:grid-flow-col sm:items-center">
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300"
-            >
-              Upload
-            </button>
-            <button
-              type="button"
-              onClick={openHistory}
-              className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-300"
-            >
-              History
-            </button>
-            <button
-              type="button"
-              onClick={() => void saveToCloud("update")}
-              className="focus-ring min-h-12 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/25"
-            >
-              Save Update
-            </button>
-            <button
-              type="button"
-              onClick={() => void saveToCloud("new")}
-              className="focus-ring min-h-12 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/25"
-            >
-              Save As New
-            </button>
           </div>
 
           {mobileToolsOpen && (
@@ -1053,6 +1114,13 @@ export function SermonAssistantPanel() {
                 className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300"
               >
                 History
+              </button>
+              <button
+                type="button"
+                onClick={startNewBlankProject}
+                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300"
+              >
+                New Blank
               </button>
               <button
                 type="button"
@@ -1074,8 +1142,8 @@ export function SermonAssistantPanel() {
           <input ref={fileRef} type="file" accept=".txt" className="hidden" onChange={onUploadTranscript} />
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 pb-24 lg:grid lg:grid-cols-12 lg:overflow-hidden lg:pb-3">
-          <div className="flex min-h-[45dvh] flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:col-span-9 lg:min-h-0">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2 lg:grid lg:grid-cols-12 lg:gap-3 lg:p-3">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:col-span-9">
             <div className="flex shrink-0 border-b border-cyan-500/20">
               {(["raw", "organized", "assistant"] as TabId[]).map((tab) => (
                 <button
