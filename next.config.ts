@@ -15,6 +15,12 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
   webpack: (config, { isServer }) => {
+    config.resolve = config.resolve ?? {};
+    config.resolve.alias = {
+      ...(config.resolve.alias ?? {}),
+      "next/dist/next-devtools/userspace/app/segment-explorer-node.js": false,
+    };
+
     if (isServer) {
       const existing = Array.isArray(config.externals) ? config.externals : [config.externals].filter(Boolean);
       config.externals = [

@@ -27,16 +27,6 @@ type CadencePoint = {
 
 type SpeechLanguage = "auto" | "english" | "spanish" | "french" | "portuguese" | "german" | "swahili" | "twi" | "kikuyu";
 
-type TargetLanguage = "none" | "english" | "spanish" | "french" | "portuguese" | "german" | "swahili" | "twi" | "kikuyu";
-
-type TranslationChunk = {
-  containerId: string;
-  sourceText: string;
-  targetLanguage: Exclude<TargetLanguage, "none">;
-  status: "loading" | "done" | "error";
-  translatedText: string;
-};
-
 type PulpitBlock = {
   kind: "paragraph" | "bullet" | "quote" | "subheading";
   text: string;
@@ -113,6 +103,7 @@ const THEOLOGY_HINTS = [
   "david",
   "ezekiel",
 ] as const;
+
 
 function escapeHtml(value: string): string {
   return value
@@ -366,8 +357,6 @@ export function SermonAssistantPanel() {
   const [desktopTelemetryOpen, setDesktopTelemetryOpen] = useState(false);
   const [mobileOrganizedView, setMobileOrganizedView] = useState<"outline" | "manual">("outline");
   const [speechLanguage, setSpeechLanguage] = useState<SpeechLanguage>("auto");
-  const [targetLanguage, setTargetLanguage] = useState<TargetLanguage>("none");
-  const [translationChunks, setTranslationChunks] = useState<TranslationChunk[]>([]);
 
   const [volumeLevel, setVolumeLevel] = useState(0);
   const [currentWpm, setCurrentWpm] = useState(0);
@@ -481,7 +470,7 @@ export function SermonAssistantPanel() {
     const el = transcriptScrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [rawTranscript, interimText, translationChunks]);
+  }, [rawTranscript, interimText]);
 
   const transcriptPreview = useMemo(() => {
     if (!rawTranscript.trim() && !interimText.trim()) return "";
@@ -502,21 +491,6 @@ export function SermonAssistantPanel() {
     };
     return labels[speechLanguage];
   }, [speechLanguage]);
-
-  const targetLanguageLabel = useMemo(() => {
-    const labels: Record<TargetLanguage, string> = {
-      none: "Off",
-      english: "English",
-      spanish: "Spanish",
-      french: "French",
-      portuguese: "Portuguese",
-      german: "German",
-      swahili: "Swahili",
-      twi: "Twi",
-      kikuyu: "Kikuyu",
-    };
-    return labels[targetLanguage];
-  }, [targetLanguage]);
 
   const pulpitSections = useMemo(() => buildPulpitSections(organizedMarkdown), [organizedMarkdown]);
 
@@ -622,48 +596,6 @@ export function SermonAssistantPanel() {
     setStatusText("Paused");
     refreshAudioDownload();
   }, [closeAudioNodes, refreshAudioDownload]);
-
-  const executeTranslation = useCallback(async (text: string, lang: Exclude<TargetLanguage, "none">, containerId: string) => {
-    try {
-      const res = await fetch("/api/sermon-assistant/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, lang }),
-      });
-
-      const json = await res.json() as { translation?: string; error?: string };
-      if (!res.ok || !json.translation) {
-        throw new Error(json.error ?? "Translation failed");
-      }
-
-      setTranslationChunks((prev) => prev.map((chunk) => (
-        chunk.containerId === containerId
-          ? { ...chunk, status: "done", translatedText: json.translation ?? "" }
-          : chunk
-      )));
-    } catch {
-      setTranslationChunks((prev) => prev.map((chunk) => (
-        chunk.containerId === containerId
-          ? { ...chunk, status: "error", translatedText: "Translation failed. Please continue speaking or try again." }
-          : chunk
-      )));
-    }
-  }, []);
-
-  const appendTranslatedChunk = useCallback((text: string, lang: Exclude<TargetLanguage, "none">) => {
-    const containerId = `translated-chunk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    setTranslationChunks((prev) => [
-      ...prev,
-      {
-        containerId,
-        sourceText: text,
-        targetLanguage: lang,
-        status: "loading",
-        translatedText: "",
-      },
-    ]);
-    void executeTranslation(text, lang, containerId);
-  }, [executeTranslation]);
 
   const detectScripture = useCallback((chunk: string) => {
     const normalized = normalizeForTriggers(chunk);
@@ -782,7 +714,8 @@ export function SermonAssistantPanel() {
       }
 
       const tokenData = await tokenRes.json() as { apiKey?: string };
-      if (!tokenData.apiKey) {
+      const apiKey = tokenData.apiKey?.trim();
+      if (!apiKey) {
         pushToast("Deepgram key is unavailable.", "error");
         return;
       }
@@ -791,110 +724,54 @@ export function SermonAssistantPanel() {
       streamRef.current = stream;
       setStatusText("Connecting...");
 
-      const speechLanguageCodes: Record<Exclude<SpeechLanguage, "auto">, string[]> = {
-        english: ["en"],
-        spanish: ["es"],
-        french: ["fr"],
-        portuguese: ["pt"],
-        german: ["de"],
-        swahili: ["sw"],
-        // Try both primary and fallback tags where provider support can vary.
-        twi: ["ak", "twi"],
-        kikuyu: ["ki", "kikuyu"],
+      const manualLanguageCode: Record<Exclude<SpeechLanguage, "auto" | "twi" | "kikuyu">, string> = {
+        english: "en",
+        spanish: "es",
+        french: "fr",
+        portuguese: "pt",
+        german: "de",
+        swahili: "sw",
       };
 
-      const buildAutoDetectParams = () => new URLSearchParams({
-        model: "nova-3",
-        language: "multi",
-        detect_language: "true",
+      const isLimitedLanguage = speechLanguage === "twi" || speechLanguage === "kikuyu";
+      if (isLimitedLanguage) {
+        pushToast("Using Deepgram multilingual auto-detect for Twi/Kikuyu.", "info");
+      }
+
+      const primaryParams = new URLSearchParams({
+        model: "nova-2",
         endpointing: "500",
         punctuate: "true",
         interim_results: "true",
         smart_format: "true",
       });
 
-      const buildCompatibilityParams = () => new URLSearchParams({
-        model: "nova-3",
-        endpointing: "500",
+      if (speechLanguage === "auto" || isLimitedLanguage) {
+        primaryParams.set("detect_language", "true");
+      } else {
+        primaryParams.set("language", manualLanguageCode[speechLanguage]);
+      }
+
+      const fallbackParams = new URLSearchParams({
+        model: "nova-2",
         punctuate: "true",
         interim_results: "true",
-        smart_format: "true",
       });
-
-      const manualLanguageAttempts = speechLanguage === "auto"
-        ? []
-        : speechLanguageCodes[speechLanguage].flatMap((code) => [
-            {
-              label: `${speechLanguage} manual (${code})`,
-              authMethod: "query" as const,
-              params: new URLSearchParams({
-                model: "nova-3",
-                language: code,
-                detect_language: "true",
-                endpointing: "500",
-                punctuate: "true",
-                interim_results: "true",
-                smart_format: "true",
-              }),
-            },
-            {
-              label: `${speechLanguage} query-token (${code})`,
-              authMethod: "protocol" as const,
-              params: new URLSearchParams({
-                model: "nova-3",
-                language: code,
-                detect_language: "true",
-                endpointing: "500",
-                punctuate: "true",
-                interim_results: "true",
-                smart_format: "true",
-              }),
-            },
-          ]);
-
-      const speechNeedsAutoFallback = speechLanguage === "auto" || manualLanguageAttempts.length === 0;
 
       const connectionAttempts = [
-        ...(speechNeedsAutoFallback
-          ? [
-              {
-                label: speechLanguage === "auto" ? "auto-detect" : `${speechLanguage} via auto-detect`,
-                authMethod: "query" as const,
-                params: buildAutoDetectParams(),
-              },
-              {
-                label: "auto-detect query-token",
-                authMethod: "protocol" as const,
-                params: buildAutoDetectParams(),
-              },
-              {
-                label: "multi compatibility",
-                authMethod: "query" as const,
-                params: buildCompatibilityParams(),
-              },
-            ]
-          : manualLanguageAttempts),
-        // Always keep final multilingual fallbacks.
-        {
-          label: "final auto-detect fallback",
-          authMethod: "query" as const,
-          params: buildAutoDetectParams(),
-        },
-        {
-          label: "final protocol fallback",
-          authMethod: "protocol" as const,
-          params: buildCompatibilityParams(),
-        },
+        { label: "protocol-primary", authMethod: "protocol" as const, params: primaryParams },
+        { label: "protocol-fallback", authMethod: "protocol" as const, params: fallbackParams },
+        { label: "query-fallback", authMethod: "query" as const, params: fallbackParams },
       ];
 
       const connectDeepgram = (attemptIndex: number) => {
         const attempt = connectionAttempts[attemptIndex];
         let opened = false;
 
-        const wsUrl = `wss://api.deepgram.com/v1/listen?${attempt.params.toString()}${attempt.authMethod === "query" ? `&token=${encodeURIComponent(tokenData.apiKey)}` : ""}`;
+        const wsUrl = `wss://api.deepgram.com/v1/listen?${attempt.params.toString()}${attempt.authMethod === "query" ? `&token=${encodeURIComponent(apiKey)}` : ""}`;
         const socket = attempt.authMethod === "query"
           ? new WebSocket(wsUrl)
-          : new WebSocket(wsUrl, ["token", tokenData.apiKey]);
+          : new WebSocket(wsUrl, ["token", apiKey]);
         socketRef.current = socket;
 
         socket.onopen = () => {
@@ -923,15 +800,15 @@ export function SermonAssistantPanel() {
         };
 
         socket.onmessage = (event) => {
-          const payload = JSON.parse(event.data) as {
-            type?: string;
-            error?: string;
-            is_final?: boolean;
-            channel?: {
-              detected_language?: string;
-              alternatives?: Array<{ transcript?: string }>;
-            };
+        const payload = JSON.parse(event.data) as {
+          type?: string;
+          error?: string;
+          is_final?: boolean;
+          channel?: {
+            detected_language?: string;
+            alternatives?: Array<{ transcript?: string }>;
           };
+        };
 
           if (payload.type === "Error") {
             pushToast(payload.error ?? "Deepgram rejected this transcription request.", "error");
@@ -944,6 +821,7 @@ export function SermonAssistantPanel() {
           if (detectedLanguage) {
             setStatusText(`Listening (${detectedLanguage.toUpperCase()})`);
           }
+
           if (!transcript) return;
 
           if (payload.is_final) {
@@ -973,21 +851,18 @@ export function SermonAssistantPanel() {
               return next.slice(-36);
             });
 
-            if (targetLanguage === "none") {
-              appendTranscript(transcript);
-            } else {
-              appendTranslatedChunk(transcript, targetLanguage);
-            }
+            appendTranscript(transcript);
           } else {
             setInterimText(transcript);
           }
         };
 
-        socket.onerror = (event) => {
-          if (!opened && attemptIndex < connectionAttempts.length - 1) return;
-          const details = event.type ? ` (${event.type})` : "";
-          pushToast(`Live transcription connection failed${details}.`, "error");
-          stopRecording();
+        socket.onerror = () => {
+          if (!opened) {
+            setStatusText("Connection issue, retrying...");
+            return;
+          }
+          pushToast("Live transcription socket encountered an error.", "error");
         };
 
         socket.onclose = (event) => {
@@ -1000,7 +875,10 @@ export function SermonAssistantPanel() {
 
           if (!opened && !event.wasClean) {
             const reason = event.reason ? ` ${event.reason}` : "";
-            pushToast(`Deepgram closed the connection before streaming started (code ${event.code}).${reason}`, "error");
+            pushToast(`Deepgram closed connection (code ${event.code}).${reason}`, "error");
+          }
+          if (!opened && event.wasClean) {
+            pushToast("Live transcription connection failed.", "error");
           }
           stopRecording();
         };
@@ -1011,7 +889,7 @@ export function SermonAssistantPanel() {
       pushToast("Microphone access denied.", "error");
       stopRecording();
     }
-  }, [appendTranscript, appendTranslatedChunk, detectScripture, isRecording, pushToast, refreshAudioDownload, speechLanguage, startVolumeTelemetry, stopRecording, targetLanguage]);
+  }, [appendTranscript, detectScripture, isRecording, pushToast, refreshAudioDownload, speechLanguage, startVolumeTelemetry, stopRecording]);
 
   const generateOutline = useCallback(async () => {
     if (!rawTranscript.trim()) {
@@ -1170,8 +1048,6 @@ export function SermonAssistantPanel() {
     setCurrentProjectId("");
     setProjectName("");
     setSpeechLanguage("auto");
-    setTargetLanguage("none");
-    setTranslationChunks([]);
     setHistoryOpen(false);
     setIsEditingOrganized(false);
     setActiveTab("raw");
@@ -1426,51 +1302,39 @@ export function SermonAssistantPanel() {
             </button>
           </div>
 
-          <div className="min-w-0">
+          <div className="grid items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/70 px-2 py-2 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1fr)_170px_auto]">
             <input
               type="text"
               value={projectName}
               onChange={(event) => setProjectName(event.target.value)}
               placeholder="Sermon title / save name"
-              className="focus-ring h-10 w-full rounded-xl border border-slate-700/80 bg-slate-950/70 px-4 text-sm text-slate-100 placeholder:text-slate-500"
+              className="focus-ring h-10 min-w-0 rounded-xl border border-slate-700/80 bg-slate-950/70 px-3 text-sm text-slate-100 placeholder:text-slate-500"
             />
-          </div>
-
-          <div className="grid items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/70 px-3 py-2 sm:grid-cols-2 lg:grid-cols-[auto_170px_auto_170px]">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Speech: {speechLanguageLabel}</p>
             <select
               value={speechLanguage}
               onChange={(event) => setSpeechLanguage(event.target.value as SpeechLanguage)}
-              className="focus-ring h-9 rounded-xl border border-slate-600/50 bg-slate-900 px-3 text-sm font-semibold text-slate-200"
+              className="focus-ring h-10 rounded-xl border border-slate-600/50 bg-slate-900 px-3 text-sm font-semibold text-slate-200"
               aria-label="Spoken language"
             >
-              <option value="auto">Auto detect</option>
-              <option value="english">English</option>
-              <option value="spanish">Spanish</option>
-              <option value="french">French</option>
-              <option value="portuguese">Portuguese</option>
-              <option value="german">German</option>
-              <option value="swahili">Swahili</option>
-              <option value="twi">Twi</option>
-              <option value="kikuyu">Kikuyu</option>
+              <option value="auto">Speech: Auto</option>
+              <option value="english">Speech: English</option>
+              <option value="spanish">Speech: Spanish</option>
+              <option value="french">Speech: French</option>
+              <option value="portuguese">Speech: Portuguese</option>
+              <option value="german">Speech: German</option>
+              <option value="swahili">Speech: Swahili</option>
+              <option value="twi">Speech: Twi</option>
+              <option value="kikuyu">Speech: Kikuyu</option>
             </select>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Translate: {targetLanguageLabel}</p>
-            <select
-              value={targetLanguage}
-              onChange={(event) => setTargetLanguage(event.target.value as TargetLanguage)}
-              className="focus-ring h-9 rounded-xl border border-cyan-500/35 bg-slate-900 px-3 text-sm font-semibold text-cyan-200"
-              aria-label="Target translation language"
-            >
-              <option value="none">Translate: Off</option>
-              <option value="english">English</option>
-              <option value="spanish">Spanish</option>
-              <option value="french">French</option>
-              <option value="portuguese">Portuguese</option>
-              <option value="german">German</option>
-              <option value="swahili">Swahili</option>
-              <option value="twi">Twi</option>
-              <option value="kikuyu">Kikuyu</option>
-            </select>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-3 text-xs font-semibold text-slate-300"
+              >
+                Upload Transcript
+              </button>
+            </div>
           </div>
 
           {mobileToolsOpen && (
@@ -1630,41 +1494,11 @@ export function SermonAssistantPanel() {
                 )}
 
                 <div ref={transcriptScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4 text-base leading-relaxed text-slate-200">
-                  {targetLanguage === "none" ? (
-                    transcriptPreview ? (
-                      <p className="whitespace-pre-wrap break-words">{transcriptPreview}</p>
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-center text-slate-500">
-                        <p>Click Start and begin speaking. Try paraphrasing passages too, semantic suggestions will auto-appear.</p>
-                      </div>
-                    )
+                  {transcriptPreview ? (
+                    <p className="whitespace-pre-wrap break-words">{transcriptPreview}</p>
                   ) : (
-                    <div className="space-y-3">
-                      {translationChunks.length === 0 ? (
-                        <div className="flex h-full items-center justify-center text-center text-slate-500">
-                          <p>Live cascaded translation is active. Start speaking to stream translated chunks.</p>
-                        </div>
-                      ) : (
-                        translationChunks.map((chunk) => (
-                          <div
-                            key={chunk.containerId}
-                            id={chunk.containerId}
-                            className="rounded-xl border border-cyan-500/20 bg-slate-900/70 p-3"
-                          >
-                            <p className="whitespace-pre-wrap break-words text-sm text-white">{chunk.sourceText}</p>
-                            {chunk.status === "loading" ? (
-                              <div className="mt-2 flex items-center gap-2 text-sm text-cyan-200">
-                                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-300/40 border-t-cyan-300" />
-                                <span>Translating to {chunk.targetLanguage}... ({chunk.containerId})</span>
-                              </div>
-                            ) : (
-                              <p className="mt-2 whitespace-pre-wrap break-words text-sm" style={{ color: "#00ffcc" }}>
-                                {chunk.translatedText}
-                              </p>
-                            )}
-                          </div>
-                        ))
-                      )}
+                    <div className="flex h-full items-center justify-center text-center text-slate-500">
+                      <p>Click Start and begin speaking. Try paraphrasing passages too, semantic suggestions will auto-appear.</p>
                     </div>
                   )}
                 </div>

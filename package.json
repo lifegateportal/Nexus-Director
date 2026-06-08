@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "rm -rf .next && NEXT_DISABLE_DEVTOOLS=1 next dev",
+    "clean:next": "rm -rf .next",
     "build": "next build",
     "start": "node server.mjs",
     "lint": "next lint",
@@ -22,6 +23,7 @@
     "docx": "^9.6.1",
     "epub-gen-memory": "^1.1.2",
     "next": "^15.1.6",
+    "pdf-parse": "^1.1.1",
     "pdfkit": "^0.15.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
