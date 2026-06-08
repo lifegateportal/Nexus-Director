@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlignmentType, Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
 
 type TabId = "raw" | "organized" | "assistant";
 
@@ -22,6 +23,18 @@ type ChatEntry = {
 type CadencePoint = {
   tSec: number;
   wpm: number;
+};
+
+type SpeechLanguage = "auto" | "english" | "spanish" | "french" | "portuguese" | "german" | "swahili" | "twi" | "kikuyu";
+
+type TargetLanguage = "none" | "english" | "spanish" | "french" | "portuguese" | "german" | "swahili" | "twi" | "kikuyu";
+
+type TranslationChunk = {
+  containerId: string;
+  sourceText: string;
+  targetLanguage: Exclude<TargetLanguage, "none">;
+  status: "loading" | "done" | "error";
+  translatedText: string;
 };
 
 type PulpitBlock = {
@@ -276,6 +289,59 @@ function extractScriptureRefs(text: string): string[] {
   return [...unique];
 }
 
+function slugifyFileName(input: string): string {
+  const normalized = input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return normalized || "sermon-notes";
+}
+
+function buildDocxParagraphs(markdown: string): Paragraph[] {
+  const lines = markdown.split(/\r?\n/);
+  const paragraphs: Paragraph[] = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      paragraphs.push(new Paragraph({ text: "" }));
+      continue;
+    }
+
+    if (line.startsWith("### ")) {
+      paragraphs.push(new Paragraph({ text: line.slice(4), heading: HeadingLevel.HEADING_3 }));
+      continue;
+    }
+
+    if (line.startsWith("## ")) {
+      paragraphs.push(new Paragraph({ text: line.slice(3), heading: HeadingLevel.HEADING_2 }));
+      continue;
+    }
+
+    if (line.startsWith("# ")) {
+      paragraphs.push(new Paragraph({ text: line.slice(2), heading: HeadingLevel.HEADING_1 }));
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      paragraphs.push(new Paragraph({
+        text: line.replace(/^[-*]\s+/, ""),
+        bullet: { level: 0 },
+      }));
+      continue;
+    }
+
+    if (line.startsWith("> ")) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun({ text: line.slice(2), italics: true })],
+      }));
+      continue;
+    }
+
+    paragraphs.push(new Paragraph({ text: line }));
+  }
+
+  return paragraphs;
+}
+
 export function SermonAssistantPanel() {
   const [activeTab, setActiveTab] = useState<TabId>("raw");
   const [rawTranscript, setRawTranscript] = useState("");
@@ -297,7 +363,11 @@ export function SermonAssistantPanel() {
   const [isEditingOrganized, setIsEditingOrganized] = useState(false);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [mobileTelemetryOpen, setMobileTelemetryOpen] = useState(false);
+  const [desktopTelemetryOpen, setDesktopTelemetryOpen] = useState(false);
   const [mobileOrganizedView, setMobileOrganizedView] = useState<"outline" | "manual">("outline");
+  const [speechLanguage, setSpeechLanguage] = useState<SpeechLanguage>("auto");
+  const [targetLanguage, setTargetLanguage] = useState<TargetLanguage>("none");
+  const [translationChunks, setTranslationChunks] = useState<TranslationChunk[]>([]);
 
   const [volumeLevel, setVolumeLevel] = useState(0);
   const [currentWpm, setCurrentWpm] = useState(0);
@@ -317,6 +387,7 @@ export function SermonAssistantPanel() {
   const socketRef = useRef<WebSocket | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioMimeRef = useRef("audio/webm");
 
@@ -406,10 +477,46 @@ export function SermonAssistantPanel() {
     el.scrollTop = el.scrollHeight;
   }, [chatEntries, isAssistantThinking]);
 
+  useEffect(() => {
+    const el = transcriptScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [rawTranscript, interimText, translationChunks]);
+
   const transcriptPreview = useMemo(() => {
     if (!rawTranscript.trim() && !interimText.trim()) return "";
     return `${rawTranscript}${interimText ? ` ${interimText}` : ""}`.trim();
   }, [interimText, rawTranscript]);
+
+  const speechLanguageLabel = useMemo(() => {
+    const labels: Record<SpeechLanguage, string> = {
+      auto: "Auto",
+      english: "English",
+      spanish: "Spanish",
+      french: "French",
+      portuguese: "Portuguese",
+      german: "German",
+      swahili: "Swahili",
+      twi: "Twi",
+      kikuyu: "Kikuyu",
+    };
+    return labels[speechLanguage];
+  }, [speechLanguage]);
+
+  const targetLanguageLabel = useMemo(() => {
+    const labels: Record<TargetLanguage, string> = {
+      none: "Off",
+      english: "English",
+      spanish: "Spanish",
+      french: "French",
+      portuguese: "Portuguese",
+      german: "German",
+      swahili: "Swahili",
+      twi: "Twi",
+      kikuyu: "Kikuyu",
+    };
+    return labels[targetLanguage];
+  }, [targetLanguage]);
 
   const pulpitSections = useMemo(() => buildPulpitSections(organizedMarkdown), [organizedMarkdown]);
 
@@ -516,6 +623,48 @@ export function SermonAssistantPanel() {
     refreshAudioDownload();
   }, [closeAudioNodes, refreshAudioDownload]);
 
+  const executeTranslation = useCallback(async (text: string, lang: Exclude<TargetLanguage, "none">, containerId: string) => {
+    try {
+      const res = await fetch("/api/sermon-assistant/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, lang }),
+      });
+
+      const json = await res.json() as { translation?: string; error?: string };
+      if (!res.ok || !json.translation) {
+        throw new Error(json.error ?? "Translation failed");
+      }
+
+      setTranslationChunks((prev) => prev.map((chunk) => (
+        chunk.containerId === containerId
+          ? { ...chunk, status: "done", translatedText: json.translation ?? "" }
+          : chunk
+      )));
+    } catch {
+      setTranslationChunks((prev) => prev.map((chunk) => (
+        chunk.containerId === containerId
+          ? { ...chunk, status: "error", translatedText: "Translation failed. Please continue speaking or try again." }
+          : chunk
+      )));
+    }
+  }, []);
+
+  const appendTranslatedChunk = useCallback((text: string, lang: Exclude<TargetLanguage, "none">) => {
+    const containerId = `translated-chunk-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setTranslationChunks((prev) => [
+      ...prev,
+      {
+        containerId,
+        sourceText: text,
+        targetLanguage: lang,
+        status: "loading",
+        translatedText: "",
+      },
+    ]);
+    void executeTranslation(text, lang, containerId);
+  }, [executeTranslation]);
+
   const detectScripture = useCallback((chunk: string) => {
     const normalized = normalizeForTriggers(chunk);
     const hits = SCRIPTURE_DB.filter((entry) => entry.triggers.some((trigger) => normalized.includes(trigger)));
@@ -580,6 +729,14 @@ export function SermonAssistantPanel() {
     }, 1200);
   }, [mergeScriptureCards]);
 
+  const appendTranscript = useCallback((text: string) => {
+    setRawTranscript((prev) => {
+      const merged = `${prev}${prev ? " " : ""}${text}`;
+      scheduleSemanticSuggest(merged.slice(-1400));
+      return merged;
+    });
+  }, [scheduleSemanticSuggest]);
+
   const startVolumeTelemetry = useCallback((stream: MediaStream) => {
     closeAudioNodes();
     const context = new AudioContext();
@@ -634,95 +791,227 @@ export function SermonAssistantPanel() {
       streamRef.current = stream;
       setStatusText("Connecting...");
 
-      const socket = new WebSocket(
-        "wss://api.deepgram.com/v1/listen?punctuate=true&interim_results=true&smart_format=true&language=en",
-        ["token", tokenData.apiKey],
-      );
-      socketRef.current = socket;
+      const speechLanguageCodes: Record<Exclude<SpeechLanguage, "auto">, string[]> = {
+        english: ["en"],
+        spanish: ["es"],
+        french: ["fr"],
+        portuguese: ["pt"],
+        german: ["de"],
+        swahili: ["sw"],
+        // Try both primary and fallback tags where provider support can vary.
+        twi: ["ak", "twi"],
+        kikuyu: ["ki", "kikuyu"],
+      };
 
-      socket.onopen = () => {
-        const mimeType = chooseRecorderMimeType();
-        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-        recorderRef.current = recorder;
-        audioMimeRef.current = recorder.mimeType || mimeType || "audio/webm";
+      const buildAutoDetectParams = () => new URLSearchParams({
+        model: "nova-3",
+        language: "multi",
+        detect_language: "true",
+        endpointing: "500",
+        punctuate: "true",
+        interim_results: "true",
+        smart_format: "true",
+      });
 
-        recorder.ondataavailable = (event) => {
-          if (event.data.size <= 0) return;
-          audioChunksRef.current.push(event.data);
-          if (socket.readyState === WebSocket.OPEN) socket.send(event.data);
+      const buildCompatibilityParams = () => new URLSearchParams({
+        model: "nova-3",
+        endpointing: "500",
+        punctuate: "true",
+        interim_results: "true",
+        smart_format: "true",
+      });
+
+      const manualLanguageAttempts = speechLanguage === "auto"
+        ? []
+        : speechLanguageCodes[speechLanguage].flatMap((code) => [
+            {
+              label: `${speechLanguage} manual (${code})`,
+              authMethod: "query" as const,
+              params: new URLSearchParams({
+                model: "nova-3",
+                language: code,
+                detect_language: "true",
+                endpointing: "500",
+                punctuate: "true",
+                interim_results: "true",
+                smart_format: "true",
+              }),
+            },
+            {
+              label: `${speechLanguage} query-token (${code})`,
+              authMethod: "protocol" as const,
+              params: new URLSearchParams({
+                model: "nova-3",
+                language: code,
+                detect_language: "true",
+                endpointing: "500",
+                punctuate: "true",
+                interim_results: "true",
+                smart_format: "true",
+              }),
+            },
+          ]);
+
+      const speechNeedsAutoFallback = speechLanguage === "auto" || manualLanguageAttempts.length === 0;
+
+      const connectionAttempts = [
+        ...(speechNeedsAutoFallback
+          ? [
+              {
+                label: speechLanguage === "auto" ? "auto-detect" : `${speechLanguage} via auto-detect`,
+                authMethod: "query" as const,
+                params: buildAutoDetectParams(),
+              },
+              {
+                label: "auto-detect query-token",
+                authMethod: "protocol" as const,
+                params: buildAutoDetectParams(),
+              },
+              {
+                label: "multi compatibility",
+                authMethod: "query" as const,
+                params: buildCompatibilityParams(),
+              },
+            ]
+          : manualLanguageAttempts),
+        // Always keep final multilingual fallbacks.
+        {
+          label: "final auto-detect fallback",
+          authMethod: "query" as const,
+          params: buildAutoDetectParams(),
+        },
+        {
+          label: "final protocol fallback",
+          authMethod: "protocol" as const,
+          params: buildCompatibilityParams(),
+        },
+      ];
+
+      const connectDeepgram = (attemptIndex: number) => {
+        const attempt = connectionAttempts[attemptIndex];
+        let opened = false;
+
+        const wsUrl = `wss://api.deepgram.com/v1/listen?${attempt.params.toString()}${attempt.authMethod === "query" ? `&token=${encodeURIComponent(tokenData.apiKey)}` : ""}`;
+        const socket = attempt.authMethod === "query"
+          ? new WebSocket(wsUrl)
+          : new WebSocket(wsUrl, ["token", tokenData.apiKey]);
+        socketRef.current = socket;
+
+        socket.onopen = () => {
+          opened = true;
+          const mimeType = chooseRecorderMimeType();
+          const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+          recorderRef.current = recorder;
+          audioMimeRef.current = recorder.mimeType || mimeType || "audio/webm";
+
+          recorder.ondataavailable = (event) => {
+            if (event.data.size <= 0) return;
+            audioChunksRef.current.push(event.data);
+            if (socket.readyState === WebSocket.OPEN) socket.send(event.data);
+          };
+
+          recorder.onstop = () => {
+            refreshAudioDownload();
+          };
+
+          recorder.start(250);
+          recordingStartedAtRef.current = performance.now();
+          lastFinalAtRef.current = performance.now();
+          startVolumeTelemetry(stream);
+          setIsRecording(true);
+          setStatusText("Listening");
         };
 
-        recorder.onstop = () => {
-          refreshAudioDownload();
+        socket.onmessage = (event) => {
+          const payload = JSON.parse(event.data) as {
+            type?: string;
+            error?: string;
+            is_final?: boolean;
+            channel?: {
+              detected_language?: string;
+              alternatives?: Array<{ transcript?: string }>;
+            };
+          };
+
+          if (payload.type === "Error") {
+            pushToast(payload.error ?? "Deepgram rejected this transcription request.", "error");
+            stopRecording();
+            return;
+          }
+
+          const transcript = payload.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
+          const detectedLanguage = payload.channel?.detected_language?.trim();
+          if (detectedLanguage) {
+            setStatusText(`Listening (${detectedLanguage.toUpperCase()})`);
+          }
+          if (!transcript) return;
+
+          if (payload.is_final) {
+            setInterimText("");
+            detectScripture(transcript);
+
+            const now = performance.now();
+            const previous = lastFinalAtRef.current ?? now;
+            const deltaSec = Math.max(0.3, (now - previous) / 1000);
+            const words = countWords(transcript);
+            const chunkWpm = Math.round((words / deltaSec) * 60);
+
+            lastFinalAtRef.current = now;
+            totalWordsRef.current += words;
+            totalSpeechSecondsRef.current += deltaSec;
+            setCurrentWpm(chunkWpm);
+
+            const overall = totalSpeechSecondsRef.current > 0
+              ? Math.round((totalWordsRef.current / totalSpeechSecondsRef.current) * 60)
+              : 0;
+            setAvgWpm(overall);
+
+            const started = recordingStartedAtRef.current ?? now;
+            const tSec = Math.max(0, Math.round((now - started) / 1000));
+            setCadencePoints((prev) => {
+              const next = [...prev, { tSec, wpm: chunkWpm }];
+              return next.slice(-36);
+            });
+
+            if (targetLanguage === "none") {
+              appendTranscript(transcript);
+            } else {
+              appendTranslatedChunk(transcript, targetLanguage);
+            }
+          } else {
+            setInterimText(transcript);
+          }
         };
 
-        recorder.start(250);
-        recordingStartedAtRef.current = performance.now();
-        lastFinalAtRef.current = performance.now();
-        startVolumeTelemetry(stream);
-        setIsRecording(true);
-        setStatusText("Listening");
-      };
-
-      socket.onmessage = (event) => {
-        const payload = JSON.parse(event.data) as {
-          is_final?: boolean;
-          channel?: { alternatives?: Array<{ transcript?: string }> };
+        socket.onerror = (event) => {
+          if (!opened && attemptIndex < connectionAttempts.length - 1) return;
+          const details = event.type ? ` (${event.type})` : "";
+          pushToast(`Live transcription connection failed${details}.`, "error");
+          stopRecording();
         };
 
-        const transcript = payload.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
-        if (!transcript) return;
+        socket.onclose = (event) => {
+          if (!opened && attemptIndex < connectionAttempts.length - 1) {
+            const next = connectionAttempts[attemptIndex + 1];
+            setStatusText(`Retrying ${next.label}...`);
+            connectDeepgram(attemptIndex + 1);
+            return;
+          }
 
-        if (payload.is_final) {
-          setInterimText("");
-          detectScripture(transcript);
-
-          const now = performance.now();
-          const previous = lastFinalAtRef.current ?? now;
-          const deltaSec = Math.max(0.3, (now - previous) / 1000);
-          const words = countWords(transcript);
-          const chunkWpm = Math.round((words / deltaSec) * 60);
-
-          lastFinalAtRef.current = now;
-          totalWordsRef.current += words;
-          totalSpeechSecondsRef.current += deltaSec;
-          setCurrentWpm(chunkWpm);
-
-          const overall = totalSpeechSecondsRef.current > 0
-            ? Math.round((totalWordsRef.current / totalSpeechSecondsRef.current) * 60)
-            : 0;
-          setAvgWpm(overall);
-
-          const started = recordingStartedAtRef.current ?? now;
-          const tSec = Math.max(0, Math.round((now - started) / 1000));
-          setCadencePoints((prev) => {
-            const next = [...prev, { tSec, wpm: chunkWpm }];
-            return next.slice(-36);
-          });
-
-          setRawTranscript((prev) => {
-            const merged = `${prev}${prev ? " " : ""}${transcript}`;
-            scheduleSemanticSuggest(merged.slice(-1400));
-            return merged;
-          });
-        } else {
-          setInterimText(transcript);
-        }
+          if (!opened && !event.wasClean) {
+            const reason = event.reason ? ` ${event.reason}` : "";
+            pushToast(`Deepgram closed the connection before streaming started (code ${event.code}).${reason}`, "error");
+          }
+          stopRecording();
+        };
       };
 
-      socket.onerror = () => {
-        pushToast("Live transcription connection failed.", "error");
-        stopRecording();
-      };
-
-      socket.onclose = () => {
-        stopRecording();
-      };
+      connectDeepgram(0);
     } catch {
       pushToast("Microphone access denied.", "error");
       stopRecording();
     }
-  }, [detectScripture, isRecording, pushToast, refreshAudioDownload, scheduleSemanticSuggest, startVolumeTelemetry, stopRecording]);
+  }, [appendTranscript, appendTranslatedChunk, detectScripture, isRecording, pushToast, refreshAudioDownload, speechLanguage, startVolumeTelemetry, stopRecording, targetLanguage]);
 
   const generateOutline = useCallback(async () => {
     if (!rawTranscript.trim()) {
@@ -880,6 +1169,9 @@ export function SermonAssistantPanel() {
 
     setCurrentProjectId("");
     setProjectName("");
+    setSpeechLanguage("auto");
+    setTargetLanguage("none");
+    setTranslationChunks([]);
     setHistoryOpen(false);
     setIsEditingOrganized(false);
     setActiveTab("raw");
@@ -895,6 +1187,7 @@ export function SermonAssistantPanel() {
 
     setMobileToolsOpen(false);
     setMobileTelemetryOpen(false);
+    setDesktopTelemetryOpen(false);
     setMobileOrganizedView("outline");
 
     setPulpitOpen(false);
@@ -968,6 +1261,50 @@ export function SermonAssistantPanel() {
     anchor.click();
     document.body.removeChild(anchor);
   }, [audioDownloadUrl, audioFileName]);
+
+  const downloadSermonNotesDocx = useCallback(async () => {
+    const sourceMarkdown = organizedMarkdown.trim() || rawTranscript.trim();
+    if (!sourceMarkdown) {
+      pushToast("No sermon notes available to download.", "error");
+      return;
+    }
+
+    try {
+      const title = deriveProjectName();
+      const doc = new Document({
+        creator: "Nexus Director",
+        title,
+        sections: [{
+          children: [
+            new Paragraph({
+              text: title,
+              heading: HeadingLevel.TITLE,
+              alignment: AlignmentType.CENTER,
+            }),
+            new Paragraph({
+              children: [new TextRun({ text: `Generated ${new Date().toLocaleString()}`, italics: true })],
+              alignment: AlignmentType.CENTER,
+            }),
+            new Paragraph({ text: "" }),
+            ...buildDocxParagraphs(sourceMarkdown),
+          ],
+        }],
+      });
+
+      const blob = await Packer.toBlob(doc);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${slugifyFileName(title)}-sermon-notes.docx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      pushToast("Sermon notes downloaded as Word document.", "success");
+    } catch {
+      pushToast("Could not generate Word download.", "error");
+    }
+  }, [deriveProjectName, organizedMarkdown, pushToast, rawTranscript]);
 
   const openPulpitMode = useCallback(() => {
     if (!organizedMarkdown.trim()) {
@@ -1095,8 +1432,45 @@ export function SermonAssistantPanel() {
               value={projectName}
               onChange={(event) => setProjectName(event.target.value)}
               placeholder="Sermon title / save name"
-              className="focus-ring min-h-12 w-full rounded-xl border border-slate-700/80 bg-slate-950/70 px-4 text-base text-slate-100 placeholder:text-slate-500"
+              className="focus-ring h-10 w-full rounded-xl border border-slate-700/80 bg-slate-950/70 px-4 text-sm text-slate-100 placeholder:text-slate-500"
             />
+          </div>
+
+          <div className="grid items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/70 px-3 py-2 sm:grid-cols-2 lg:grid-cols-[auto_170px_auto_170px]">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Speech: {speechLanguageLabel}</p>
+            <select
+              value={speechLanguage}
+              onChange={(event) => setSpeechLanguage(event.target.value as SpeechLanguage)}
+              className="focus-ring h-9 rounded-xl border border-slate-600/50 bg-slate-900 px-3 text-sm font-semibold text-slate-200"
+              aria-label="Spoken language"
+            >
+              <option value="auto">Auto detect</option>
+              <option value="english">English</option>
+              <option value="spanish">Spanish</option>
+              <option value="french">French</option>
+              <option value="portuguese">Portuguese</option>
+              <option value="german">German</option>
+              <option value="swahili">Swahili</option>
+              <option value="twi">Twi</option>
+              <option value="kikuyu">Kikuyu</option>
+            </select>
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Translate: {targetLanguageLabel}</p>
+            <select
+              value={targetLanguage}
+              onChange={(event) => setTargetLanguage(event.target.value as TargetLanguage)}
+              className="focus-ring h-9 rounded-xl border border-cyan-500/35 bg-slate-900 px-3 text-sm font-semibold text-cyan-200"
+              aria-label="Target translation language"
+            >
+              <option value="none">Translate: Off</option>
+              <option value="english">English</option>
+              <option value="spanish">Spanish</option>
+              <option value="french">French</option>
+              <option value="portuguese">Portuguese</option>
+              <option value="german">German</option>
+              <option value="swahili">Swahili</option>
+              <option value="twi">Twi</option>
+              <option value="kikuyu">Kikuyu</option>
+            </select>
           </div>
 
           {mobileToolsOpen && (
@@ -1168,6 +1542,13 @@ export function SermonAssistantPanel() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
+                      onClick={() => setDesktopTelemetryOpen((v) => !v)}
+                      className="focus-ring hidden h-10 rounded-xl border border-slate-700/70 px-3 text-xs font-semibold text-slate-200 sm:inline-flex sm:items-center"
+                    >
+                      {desktopTelemetryOpen ? "Hide Insights" : "Show Insights"}
+                    </button>
+                    <button
+                      type="button"
                       onClick={toggleRecording}
                       className={`focus-ring min-h-12 rounded-xl px-5 text-sm font-bold transition ${
                         isRecording
@@ -1199,39 +1580,31 @@ export function SermonAssistantPanel() {
                   </button>
                 </div>
 
-                <div className="hidden gap-2 border-b border-cyan-500/10 p-3 sm:grid sm:grid-cols-3">
-                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Mic Level</p>
-                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                      <div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${volumeLevel}%` }} />
+                <div className="hidden border-b border-cyan-500/10 p-2 sm:block">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-2 py-1 text-cyan-200">Mic {volumeLevel}%</span>
+                    <span className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-2 py-1 text-slate-200">Now {currentWpm} WPM</span>
+                    <span className="rounded-lg border border-slate-700/70 bg-slate-900/70 px-2 py-1 text-slate-200">Avg {avgWpm} WPM</span>
+                  </div>
+                  {desktopTelemetryOpen && (
+                    <div className="mt-2 rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Cadence Trend</p>
+                      <div className="mt-2 flex h-14 items-end gap-1">
+                        {cadencePoints.length === 0 ? (
+                          <p className="text-xs text-slate-500">Begin speaking to generate cadence telemetry.</p>
+                        ) : (
+                          cadencePoints.map((point) => (
+                            <span
+                              key={`${point.tSec}-${point.wpm}`}
+                              className="w-2 rounded-t bg-cyan-400/90"
+                              title={`${point.wpm} WPM at ${point.tSec}s`}
+                              style={{ height: `${Math.max(10, Math.min(100, Math.round((point.wpm / 220) * 100)))}%` }}
+                            />
+                          ))
+                        )}
+                      </div>
                     </div>
-                    <p className="mt-2 text-sm font-bold text-cyan-300">{volumeLevel}%</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Current WPM</p>
-                    <p className="mt-2 text-2xl font-black text-slate-100">{currentWpm}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Average WPM</p>
-                    <p className="mt-2 text-2xl font-black text-slate-100">{avgWpm}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3 sm:col-span-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Cadence Trend</p>
-                    <div className="mt-2 flex h-14 items-end gap-1">
-                      {cadencePoints.length === 0 ? (
-                        <p className="text-xs text-slate-500">Begin speaking to generate cadence telemetry.</p>
-                      ) : (
-                        cadencePoints.map((point) => (
-                          <span
-                            key={`${point.tSec}-${point.wpm}`}
-                            className="w-2 rounded-t bg-cyan-400/90"
-                            title={`${point.wpm} WPM at ${point.tSec}s`}
-                            style={{ height: `${Math.max(10, Math.min(100, Math.round((point.wpm / 220) * 100)))}%` }}
-                          />
-                        ))
-                      )}
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {mobileTelemetryOpen && (
@@ -1256,12 +1629,42 @@ export function SermonAssistantPanel() {
                   </div>
                 )}
 
-                <div className="min-h-0 flex-1 overflow-y-auto p-4 text-base leading-relaxed text-slate-200">
-                  {transcriptPreview ? (
-                    <p className="whitespace-pre-wrap break-words">{transcriptPreview}</p>
+                <div ref={transcriptScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4 text-base leading-relaxed text-slate-200">
+                  {targetLanguage === "none" ? (
+                    transcriptPreview ? (
+                      <p className="whitespace-pre-wrap break-words">{transcriptPreview}</p>
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-center text-slate-500">
+                        <p>Click Start and begin speaking. Try paraphrasing passages too, semantic suggestions will auto-appear.</p>
+                      </div>
+                    )
                   ) : (
-                    <div className="flex h-full items-center justify-center text-center text-slate-500">
-                      <p>Click Start and begin speaking. Try paraphrasing passages too, semantic suggestions will auto-appear.</p>
+                    <div className="space-y-3">
+                      {translationChunks.length === 0 ? (
+                        <div className="flex h-full items-center justify-center text-center text-slate-500">
+                          <p>Live cascaded translation is active. Start speaking to stream translated chunks.</p>
+                        </div>
+                      ) : (
+                        translationChunks.map((chunk) => (
+                          <div
+                            key={chunk.containerId}
+                            id={chunk.containerId}
+                            className="rounded-xl border border-cyan-500/20 bg-slate-900/70 p-3"
+                          >
+                            <p className="whitespace-pre-wrap break-words text-sm text-white">{chunk.sourceText}</p>
+                            {chunk.status === "loading" ? (
+                              <div className="mt-2 flex items-center gap-2 text-sm text-cyan-200">
+                                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-300/40 border-t-cyan-300" />
+                                <span>Translating to {chunk.targetLanguage}... ({chunk.containerId})</span>
+                              </div>
+                            ) : (
+                              <p className="mt-2 whitespace-pre-wrap break-words text-sm" style={{ color: "#00ffcc" }}>
+                                {chunk.translatedText}
+                              </p>
+                            )}
+                          </div>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
@@ -1284,6 +1687,13 @@ export function SermonAssistantPanel() {
                     className="focus-ring min-h-12 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 text-sm font-bold text-amber-300 transition hover:bg-amber-500/20"
                   >
                     Pulpit Mode
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void downloadSermonNotesDocx()}
+                    className="focus-ring min-h-12 rounded-xl border border-emerald-500/45 bg-emerald-500/10 px-4 text-sm font-bold text-emerald-300 transition hover:bg-emerald-500/20"
+                  >
+                    Download Word
                   </button>
                   <button
                     type="button"
