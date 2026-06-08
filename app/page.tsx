@@ -654,7 +654,7 @@ export default function HomePage() {
       <NexusNav active={activeNav} onSelect={setActiveNav} />
 
       {/* Content column — reserves bottom space for mobile bottom nav (~60px) */}
-      <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${isSermonView ? "pb-[max(env(safe-area-inset-bottom),_0.5rem)]" : "pb-[max(env(safe-area-inset-bottom),_3.75rem)]"} lg:pb-0`}>
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
         <StatusBar
           stage={stage}
           models={models}
@@ -666,7 +666,7 @@ export default function HomePage() {
           Mobile: flex-col + overflow-y-auto so panels stack and scroll.
           Desktop (lg+): grid 5-cols + overflow-hidden so panels fill height.
         */}
-        <main className={isSermonView ? "flex min-h-0 flex-1 overflow-hidden" : `flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 ${isBookView ? "pb-3" : "pb-24"} lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5`}>
+        <main className={isSermonView ? "flex min-h-0 flex-1 overflow-hidden" : isBookView ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-3 lg:min-h-0 lg:overflow-hidden lg:pb-3" : "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5"}>
 
           {/* ── Focused agent views (non-overview nav) ── */}
           {isFocused ? (
@@ -682,7 +682,10 @@ export default function HomePage() {
               )}
 
               {/* Primary panel — full width on mobile, sermon uses full desktop width */}
-              <div className={isSermonView ? "flex h-full flex-col" : `min-h-[65dvh] lg:min-h-0 ${showActivityPanel ? "lg:col-span-4" : "lg:col-span-5"}`}>
+              <div
+                key={activeNav}
+                className={isSermonView ? "flex h-full flex-col" : isBookView ? "flex min-h-[65dvh] flex-col animate-fade-up lg:flex-1 lg:min-h-0" : `min-h-[65dvh] animate-fade-up lg:min-h-0 ${showActivityPanel ? "lg:col-span-4" : "lg:col-span-5"}`}
+              >
                 {activeNav === "projects" ? (
                   <ProjectsPanel
                     projects={projects}
@@ -697,7 +700,7 @@ export default function HomePage() {
                     onUpdateImages={handleUpdateImages}
                   />
                 ) : activeNav === "ebook" ? (
-                  <div className="flex h-full flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
+                  <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
                     <EbookPipeline
                       key={ebookPipelineKey}
                       ebookManifest={ebookManifest}

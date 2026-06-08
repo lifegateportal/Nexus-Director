@@ -9,6 +9,7 @@ type NavItem = { id: string; label: string; href?: string };
 const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Academy" },
   { id: "ebook", label: "Book" },
+  { id: "translate", label: "Translate", href: "/translate" },
   { id: "projects", label: "Projects" },
   { id: "sermon", label: "Sermon" },
 ];
@@ -47,6 +48,20 @@ function IconProjects() {
   );
 }
 
+/** Translate — standalone translation pipeline */
+function IconTranslate() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+      <path d="M4 5h8" strokeLinecap="round" />
+      <path d="M4 10h5" strokeLinecap="round" />
+      <path d="m7 5 2 5 2-5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m14 8 3-4 3 4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14 18h6" strokeLinecap="round" />
+      <path d="m16.5 11 0 7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** Sermon — live sermon restructuring assistant */
 function IconSermon() {
   return (
@@ -62,6 +77,7 @@ function IconSermon() {
 const NAV_ICONS: Record<string, () => React.JSX.Element> = {
   overview: IconGrid,
   ebook: IconEbook,
+  translate: IconTranslate,
   projects: IconProjects,
   sermon: IconSermon,
 };
@@ -119,6 +135,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
               ? pathname.startsWith(item.href)
               : isAcademyGroup
                 ? active !== "ebook" && active !== "sermon" && active !== "projects"
+                  && active !== "translate"
                 : active === item.id;
             const btnClass = [
               "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
@@ -183,16 +200,16 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
 
       {/* ── Mobile bottom bar (<lg) ───────────────────────────── */}
       <nav
-        className="lg:hidden fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around border-t border-cyan-500/20 glass-light"
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around border-t border-cyan-500/20 glass-light select-none"
         style={{ paddingBottom: "max(env(safe-area-inset-bottom), 6px)" }}
         aria-label="Nexus Director navigation"
       >
         {/* Logo tap — goes to overview */}
         <button
           type="button"
-          onClick={() => onSelect("overview")}
+          onPointerUp={() => onSelect("overview")}
           aria-label="Overview"
-          className="flex flex-col items-center justify-center gap-0.5 px-1 pt-2"
+          className="flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2"
         >
           <LogoMark />
         </button>
@@ -200,9 +217,9 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         {/* Logout — far right of mobile bar */}
         <button
           type="button"
-          onClick={handleLogout}
+          onPointerUp={handleLogout}
           aria-label="Log out"
-          className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 text-slate-600 hover:text-rose-400 transition-colors"
+          className="relative flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 text-slate-600 hover:text-rose-400 transition-colors"
         >
           <IconLogout />
           <span className="text-[9px] font-medium">Logout</span>
@@ -215,44 +232,38 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
             ? pathname.startsWith(item.href)
             : isAcademyGroup
               ? active !== "ebook" && active !== "sermon" && active !== "projects"
+                && active !== "translate"
               : active === item.id;
           const inner = (
             <>
-              <span className={isActive ? "text-cyan-400" : "text-slate-500"}>
+              <span className={`transition-colors duration-150 ${isActive ? "text-cyan-400" : "text-slate-500"}`}>
                 <Icon />
               </span>
-              <span className={`text-[9px] font-medium ${isActive ? "text-cyan-400" : "text-slate-600"}`}>
+              <span className={`text-[9px] font-medium transition-colors duration-150 ${isActive ? "text-cyan-400" : "text-slate-600"}`}>
                 {item.label}
               </span>
-              {isActive && (
-                <span
-                  className="absolute top-0 h-0.5 w-10 rounded-full bg-cyan-400"
-                  style={{ boxShadow: "0 0 6px rgba(6,182,212,0.80)" }}
-                />
-              )}
+              <span
+                className={`absolute top-0 h-0.5 w-10 rounded-full bg-cyan-400 transition-all duration-200 ${
+                  isActive ? "opacity-100 scale-x-100" : "opacity-0 scale-x-0"
+                }`}
+                style={{ boxShadow: isActive ? "0 0 6px rgba(6,182,212,0.80)" : undefined }}
+              />
             </>
           );
-          if (item.href) {
-            return (
-              <Link
-                key={item.id}
-                href={item.href}
-                aria-label={item.label}
-                aria-current={isActive ? "page" : undefined}
-                className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
-              >
-                {inner}
-              </Link>
-            );
-          }
           return (
             <button
               key={item.id}
               type="button"
-              onClick={() => onSelect(item.id)}
+              onPointerUp={() => {
+                if (item.href) {
+                  router.push(item.href);
+                  return;
+                }
+                onSelect(item.id);
+              }}
               aria-label={item.label}
               aria-current={isActive ? "page" : undefined}
-              className="relative flex min-h-[52px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
+              className="relative flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
             >
               {inner}
             </button>

@@ -1,9 +1,12 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { EbookProjectsPanel } from "@/app/components/EbookProjectsPanel";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
+import { NexusNav } from "@/app/components/NexusNav";
+import { StatusBar } from "@/app/components/StatusBar";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import { EbookManifestSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest, EbookJobState } from "@/lib/schemas/ebook";
@@ -23,6 +26,7 @@ const VOICE_STUDIO_STORAGE_PREFIX = "nexus_voice_studio_";
 type Tab = "pipeline" | "projects";
 
 export default function EbookPage() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<Tab>("pipeline");
   const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
   const [ebookPipelineSnapshot, setEbookPipelineSnapshot] = useState<EbookPipelineSnapshot | null>(null);
@@ -341,11 +345,29 @@ export default function EbookPage() {
     URL.revokeObjectURL(url);
   }, [ebookManifest]);
 
+  const handleNavSelect = useCallback((id: string) => {
+    if (id === "ebook") {
+      router.push("/ebook");
+      return;
+    }
+    if (id === "translate") {
+      router.push("/translate");
+      return;
+    }
+    router.push("/");
+  }, [router]);
+
   return (
-    <main className="min-h-dvh bg-slate-950 text-slate-100">
+    <div className="flex min-h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame text-slate-100">
+      <NexusNav active="ebook" onSelect={handleNavSelect} />
+
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
+        <StatusBar stage="idle" models={[]} />
+
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="sticky top-0 z-10 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md">
-        <div className="mx-auto max-w-3xl px-4 lg:px-8">
+        <div className="w-full px-4 lg:px-8">
           {/* Title row */}
           <div className="flex items-center justify-between gap-3 py-3">
             <div className="flex items-center gap-3">
@@ -439,7 +461,7 @@ export default function EbookPage() {
 
       {/* Status message */}
       {statusMsg && (
-        <div className="mx-auto mt-3 max-w-3xl px-4 lg:px-8">
+        <div className="mt-3 w-full px-4 lg:px-8">
           <p className={`rounded-xl border px-3 py-2 text-xs ${statusMsg.type === "error" ? "border-red-500/30 bg-red-500/10 text-red-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
             {statusMsg.text}
           </p>
@@ -448,7 +470,7 @@ export default function EbookPage() {
 
       {/* ── Pipeline tab (always mounted — pipeline must never lose in-flight state) */}
       <div className={activeTab === "pipeline" ? "block" : "hidden"}>
-        <div className="mx-auto max-w-3xl px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:px-8 lg:pt-6">
+        <div className="w-full px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:h-full lg:min-h-0 lg:px-8 lg:pt-6 lg:pb-6">
           <EbookPipeline
             key={pipelineKey}
             ebookManifest={ebookManifest}
@@ -461,7 +483,7 @@ export default function EbookPage() {
 
       {/* ── Projects tab ──────────────────────────────────────────────────── */}
       <div className={activeTab === "projects" ? "block" : "hidden"}>
-        <div className="mx-auto max-w-3xl px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:px-8 lg:pt-6">
+        <div className="w-full px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:h-full lg:min-h-0 lg:px-8 lg:pt-6 lg:pb-6">
           <EbookProjectsPanel
             projects={projects}
             suggestedName={suggestedName}
@@ -495,6 +517,8 @@ export default function EbookPage() {
         onEbookUpdate={handleEbookUpdate}
         ebookPipelineSnapshot={ebookPipelineSnapshot}
       />
-    </main>
+        </main>
+      </div>
+    </div>
   );
 }
