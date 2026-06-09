@@ -602,6 +602,11 @@ export default function EbookPage() {
   }, [ebookManifest]);
 
   const handleStartFreshProject = useCallback(() => {
+    const confirmed = window.confirm(
+      "Start a fresh book project? This will clear the current in-progress pipeline from this screen, but your saved projects will remain available."
+    );
+    if (!confirmed) return;
+
     try {
       localStorage.removeItem(JOB_STATE_KEY);
       localStorage.removeItem(PENDING_MOUNT_KEY);
