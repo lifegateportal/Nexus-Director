@@ -188,6 +188,8 @@ export default function TranslatePage() {
   const [sessions, setSessions] = useState<TranslateSession[]>([]);
   const [sessionSearch, setSessionSearch] = useState("");
   const [mobileTerminologyOpen, setMobileTerminologyOpen] = useState(false);
+  const [textViewTab, setTextViewTab] = useState<"source" | "translated">("source");
+  const [documentViewTab, setDocumentViewTab] = useState<"source" | "translated">("source");
 
   const targetLabel = useMemo(
     () => LANGUAGE_OPTIONS.find((item) => item.value === targetLanguage)?.label ?? "English",
@@ -455,6 +457,7 @@ export default function TranslatePage() {
       return;
     }
     await runTranslation(text, targetLanguage);
+    setTextViewTab("translated");
   }, [runTranslation, sourceText, targetLanguage]);
 
   const handleUploadDocument = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -476,6 +479,7 @@ export default function TranslatePage() {
       setDocExtractedText(extracted);
       setSourceText(extracted);
       await runTranslation(extracted, targetLanguage);
+      setDocumentViewTab("translated");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Document upload/translation failed.");
     } finally {
@@ -676,94 +680,117 @@ export default function TranslatePage() {
                 >
                   JSON
                 </button>
+                {mode === "document" && (
+                  <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={isTranslating}
+                    className="focus-ring shrink-0 min-h-9 rounded-lg border border-emerald-500/45 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-300 disabled:opacity-60"
+                  >
+                    {isTranslating ? `Processing ${progress}%` : "Upload"}
+                  </button>
+                )}
               </div>
             </header>
 
             <div className="grid min-h-0 flex-1 gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_320px]">
               <div className="grid min-h-0 gap-3 overflow-hidden">
                 {mode === "text" && (
-                  <div className="grid min-h-0 gap-3 lg:grid-cols-2">
-                    <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
-                      <div className="border-b border-cyan-500/10 px-4 py-3">
-                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Source Text</p>
-                      </div>
-                      <textarea
-                        value={sourceText}
-                        onChange={(event) => setSourceText(event.target.value)}
-                        placeholder="Paste source content here..."
-                        className="focus-ring h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] w-full resize-none border-0 bg-transparent p-4 text-base leading-relaxed text-slate-100 placeholder:text-slate-500"
-                      />
+                  <div className="flex min-h-0 flex-1 flex-col gap-3">
+                    <div className="flex items-center gap-2 overflow-x-auto rounded-xl border border-cyan-500/20 bg-slate-950/70 p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <button
+                        type="button"
+                        onClick={() => setTextViewTab("source")}
+                        className={`focus-ring min-h-10 shrink-0 rounded-lg px-3 text-xs font-bold uppercase tracking-wide ${textViewTab === "source" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-400"}`}
+                      >
+                        Source
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTextViewTab("translated")}
+                        className={`focus-ring min-h-10 shrink-0 rounded-lg px-3 text-xs font-bold uppercase tracking-wide ${textViewTab === "translated" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-400"}`}
+                      >
+                        Translated
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleTranslateText()}
+                        disabled={isTranslating}
+                        className="focus-ring ml-auto min-h-10 shrink-0 rounded-lg border border-cyan-500/50 bg-cyan-500/15 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-60"
+                      >
+                        {isTranslating ? `Translating ${progress}%` : "Translate"}
+                      </button>
                     </div>
 
-                    <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
-                      <div className="flex items-center justify-between gap-2 border-b border-cyan-500/10 px-4 py-3">
-                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Translation ({targetLabel})</p>
-                        <button
-                          type="button"
-                          onClick={() => void handleTranslateText()}
-                          disabled={isTranslating}
-                          className="focus-ring min-h-10 rounded-lg border border-cyan-500/50 bg-cyan-500/15 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-60"
-                        >
-                          {isTranslating ? `Translating ${progress}%` : "Translate"}
-                        </button>
+                    <div className="min-h-[35dvh] min-w-0 flex-1 overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
+                      <div className="border-b border-cyan-500/10 px-4 py-3">
+                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{textViewTab === "source" ? "Source Text" : `Translation (${targetLabel})`}</p>
                       </div>
-                      <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-base leading-relaxed text-slate-100">
-                        {translatedText ? <p className="whitespace-pre-wrap break-words">{translatedText}</p> : <p className="text-slate-500">Translation output appears here.</p>}
-                      </div>
+                      {textViewTab === "source" ? (
+                        <textarea
+                          value={sourceText}
+                          onChange={(event) => setSourceText(event.target.value)}
+                          placeholder="Paste source content here..."
+                          className="focus-ring h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] w-full resize-none border-0 bg-transparent p-4 text-base leading-relaxed text-slate-100 placeholder:text-slate-500"
+                        />
+                      ) : (
+                        <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-base leading-relaxed text-slate-100">
+                          {translatedText ? <p className="whitespace-pre-wrap break-words">{translatedText}</p> : <p className="text-slate-500">Translation output appears here.</p>}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
 
                 {mode === "document" && (
-                  <div className="grid min-h-0 gap-3">
-                    <div className="shrink-0 rounded-xl border border-cyan-500/15 bg-slate-950/70 p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => fileRef.current?.click()}
-                          disabled={isTranslating}
-                          className="focus-ring min-h-10 rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-4 text-sm font-bold text-emerald-300 disabled:opacity-60"
-                        >
-                          {isTranslating ? `Processing ${progress}%` : "Upload Document"}
-                        </button>
-                        <p className="text-xs text-slate-500">{sourceName ? `Loaded: ${sourceName}` : "No file selected"}</p>
-                      </div>
-                      <input
-                        ref={fileRef}
-                        type="file"
-                        accept=".txt,.md,.markdown,.srt,.csv,.tsv,.json,.pdf"
-                        className="hidden"
-                        onChange={handleUploadDocument}
-                      />
-                      {isTranslating && (
-                        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                          <div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${progress}%` }} />
-                        </div>
-                      )}
-                      {documentWasTruncated && (
-                        <p className="mt-3 text-xs text-amber-300">
-                          Document was truncated for processing. Showing {docExtractedText.length.toLocaleString()} of {documentOriginalLength?.toLocaleString() ?? docExtractedText.length.toLocaleString()} characters.
-                        </p>
-                      )}
+                  <div className="flex min-h-0 flex-1 flex-col gap-3">
+                    <div className="flex items-center gap-2 overflow-x-auto rounded-xl border border-cyan-500/20 bg-slate-950/70 p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <button
+                        type="button"
+                        onClick={() => setDocumentViewTab("source")}
+                        className={`focus-ring min-h-10 shrink-0 rounded-lg px-3 text-xs font-bold uppercase tracking-wide ${documentViewTab === "source" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-400"}`}
+                      >
+                        Source Document
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDocumentViewTab("translated")}
+                        className={`focus-ring min-h-10 shrink-0 rounded-lg px-3 text-xs font-bold uppercase tracking-wide ${documentViewTab === "translated" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-400"}`}
+                      >
+                        Translated
+                      </button>
+                      <span className="ml-auto shrink-0 text-xs text-slate-500">{sourceName ? `Loaded: ${sourceName}` : "No file selected"}</span>
                     </div>
 
-                    <div className="grid min-h-0 gap-3 lg:grid-cols-2">
-                      <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
-                        <div className="border-b border-cyan-500/10 px-4 py-3">
-                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Source Document</p>
-                        </div>
-                        <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-sm leading-relaxed text-slate-300">
-                          {docExtractedText ? <p className="whitespace-pre-wrap break-words">{docExtractedText}</p> : "Extracted document appears here."}
-                        </div>
-                      </div>
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept=".txt,.md,.markdown,.srt,.csv,.tsv,.json,.pdf"
+                      className="hidden"
+                      onChange={handleUploadDocument}
+                    />
 
-                      <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
-                        <div className="border-b border-cyan-500/10 px-4 py-3">
-                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Translated Document ({targetLabel})</p>
-                        </div>
-                        <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-base leading-relaxed text-slate-100">
-                          {translatedText ? <p className="whitespace-pre-wrap break-words">{translatedText}</p> : <p className="text-slate-500">Document translation output appears here.</p>}
-                        </div>
+                    {isTranslating && (
+                      <div className="shrink-0 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                        <div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${progress}%` }} />
+                      </div>
+                    )}
+                    {documentWasTruncated && (
+                      <p className="shrink-0 text-xs text-amber-300">
+                        Document was truncated for processing. Showing {docExtractedText.length.toLocaleString()} of {documentOriginalLength?.toLocaleString() ?? docExtractedText.length.toLocaleString()} characters.
+                      </p>
+                    )}
+
+                    <div className="min-h-[35dvh] min-w-0 flex-1 overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
+                      <div className="border-b border-cyan-500/10 px-4 py-3">
+                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                          {documentViewTab === "source" ? "Source Document" : `Translated Document (${targetLabel})`}
+                        </p>
+                      </div>
+                      <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-base leading-relaxed text-slate-100">
+                        {documentViewTab === "source"
+                          ? (docExtractedText ? <p className="whitespace-pre-wrap break-words text-slate-300">{docExtractedText}</p> : <p className="text-slate-500">Extracted document appears here.</p>)
+                          : (translatedText ? <p className="whitespace-pre-wrap break-words">{translatedText}</p> : <p className="text-slate-500">Document translation output appears here.</p>)}
                       </div>
                     </div>
                   </div>
