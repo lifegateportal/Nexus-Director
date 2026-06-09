@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { EbookProjectsPanel } from "@/app/components/EbookProjectsPanel";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
@@ -27,6 +27,7 @@ type Tab = "pipeline" | "projects";
 
 export default function EbookPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>("pipeline");
   const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
   const [ebookPipelineSnapshot, setEbookPipelineSnapshot] = useState<EbookPipelineSnapshot | null>(null);
@@ -41,8 +42,78 @@ export default function EbookPage() {
   const [pipelineKey, setPipelineKey] = useState(0);
 
   useEffect(() => {
-    void listEbookProjects().then(setProjects).catch(() => {});
+    void (async () => {
+      const localProjects = await listEbookProjects().catch(() => []);
+      setProjects(localProjects);
+
+      try {
+        const res = await fetch("/api/projects");
+        if (!res.ok) return;
+
+        const payload = await res.json() as {
+          projects?: Array<{
+            id?: string;
+            name?: string;
+            createdAt?: string;
+            updatedAt?: string;
+            ebookJobState?: unknown;
+            publishedSlug?: string;
+            coverImageUrl?: string;
+            authorImageUrl?: string;
+          }>;
+        };
+
+        const remote = Array.isArray(payload.projects) ? payload.projects : [];
+        const localById = new Map(localProjects.map((p) => [p.id, p]));
+        let changed = false;
+
+        for (const item of remote) {
+          if (!item.id || !item.name || !item.ebookJobState) continue;
+          const parsed = EbookJobStateSchema.safeParse(item.ebookJobState);
+          if (!parsed.success) continue;
+
+          const existing = localById.get(item.id);
+          const localTs = existing ? new Date(existing.updatedAt).getTime() : 0;
+          const remoteTs = new Date(item.updatedAt ?? item.createdAt ?? 0).getTime();
+          if (existing && localTs >= remoteTs) continue;
+
+          const job = parsed.data;
+          const normalized: EbookProject = {
+            id: item.id,
+            name: item.name,
+            createdAt: item.createdAt ?? new Date().toISOString(),
+            updatedAt: item.updatedAt ?? new Date().toISOString(),
+            bookTitle: job.architecture?.bookTitle ?? item.name,
+            chapterCount: job.chapters?.length ?? 0,
+            totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+            status: job.status,
+            jobState: job,
+            publishedSlug: item.publishedSlug,
+            coverImageUrl: item.coverImageUrl,
+            authorImageUrl: item.authorImageUrl,
+          };
+
+          await saveEbookProject(normalized).catch(() => {});
+          changed = true;
+        }
+
+        if (changed) {
+          setProjects(await listEbookProjects());
+        }
+      } catch {
+        // Cloud sync is best-effort; local projects remain usable offline.
+      }
+    })();
   }, []);
+
+  const requestedTab = searchParams.get("tab");
+  useEffect(() => {
+    if (requestedTab === "projects" || requestedTab === "pipeline") {
+      setActiveTab(requestedTab);
+      return;
+    }
+    setActiveTab("pipeline");
+  }, [requestedTab]);
 
   const suggestedName = ebookPipelineSnapshot?.bookTitle ?? ebookManifest?.bookTitle ?? "";
 
@@ -347,7 +418,7 @@ export default function EbookPage() {
 
   const handleNavSelect = useCallback((id: string) => {
     if (id === "ebook") {
-      router.push("/ebook");
+      router.push("/ebook?tab=pipeline");
       return;
     }
     if (id === "translate") {
@@ -358,165 +429,151 @@ export default function EbookPage() {
   }, [router]);
 
   return (
-    <div className="flex min-h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame text-slate-100">
+    <div className="flex h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame text-slate-100">
       <NexusNav active="ebook" onSelect={handleNavSelect} />
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
         <StatusBar stage="idle" models={[]} />
 
-        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-10 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md">
-        <div className="w-full px-4 lg:px-8">
-          {/* Title row */}
-          <div className="flex items-center justify-between gap-3 py-3">
-            <div className="flex items-center gap-3">
-              <div
-                className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-cyan-500/15 ring-1 ring-cyan-400/30"
-                style={{ boxShadow: "0 0 14px rgba(6,182,212,0.20)" }}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-cyan-400">
-                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M9 7h7M9 11h5" strokeLinecap="round" />
-                </svg>
-              </div>
-              <div>
-                <h1 className="text-sm font-bold text-slate-100 leading-none">Ebook Production Studio</h1>
-                <p className="text-[11px] text-slate-400 mt-0.5">Audio → Voice DNA → Chapters → PDF + EPUB</p>
-              </div>
-            </div>
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="shrink-0 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md">
+            <div className="w-full px-4 lg:px-8">
+              <div className="flex items-center justify-between gap-3 py-3">
+                <div className="flex items-center gap-3">
+                  <div
+                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-cyan-500/15 ring-1 ring-cyan-400/30"
+                    style={{ boxShadow: "0 0 14px rgba(6,182,212,0.20)" }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-cyan-400">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M9 7h7M9 11h5" strokeLinecap="round" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h1 className="text-sm font-bold leading-none text-slate-100">Ebook Production Studio</h1>
+                    <p className="mt-0.5 text-[11px] text-slate-400">Audio → Voice DNA → Chapters → PDF + EPUB</p>
+                  </div>
+                </div>
 
-            {/* Action buttons — right side */}
-            <div className="flex items-center gap-2">
-              {ebookManifest && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setAssistantOpen(true)}
-                    className="flex items-center gap-2 min-h-[44px] rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-300 transition hover:border-cyan-400/60 hover:bg-cyan-500/15 active:scale-[0.97]"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="M9 12h6M12 9v6" strokeLinecap="round" />
-                    </svg>
-                    <span className="hidden sm:inline">Director AI</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleExportJson}
-                    className="flex items-center gap-2 min-h-[44px] rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-300 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 active:scale-[0.97]"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                      <path d="M12 3v12" strokeLinecap="round" />
-                      <polyline points="17 12 12 17 7 12" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
-                    </svg>
-                    <span className="hidden sm:inline">Export</span>
-                  </button>
-                </>
-              )}
+                <div className="flex items-center gap-2">
+                  {ebookManifest && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setAssistantOpen(true)}
+                        className="flex min-h-[44px] items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-300 transition hover:border-cyan-400/60 hover:bg-cyan-500/15 active:scale-[0.97]"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                          <circle cx="12" cy="12" r="10" />
+                          <path d="M9 12h6M12 9v6" strokeLinecap="round" />
+                        </svg>
+                        <span className="hidden sm:inline">Director AI</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExportJson}
+                        className="flex min-h-[44px] items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-300 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 active:scale-[0.97]"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                          <path d="M12 3v12" strokeLinecap="round" />
+                          <polyline points="17 12 12 17 7 12" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
+                        </svg>
+                        <span className="hidden sm:inline">Export</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-1 pb-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("pipeline")}
+                  className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${activeTab === "pipeline" ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-400 hover:text-slate-200"}`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                    <path d="M5 3h14M5 8h14M5 13l4 4 4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Pipeline
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("projects")}
+                  className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${activeTab === "projects" ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-400 hover:text-slate-200"}`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                    <rect x="2" y="7" width="20" height="14" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Projects
+                  {projects.length > 0 && (
+                    <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-cyan-500/25 px-1 text-[10px] font-bold text-cyan-300">
+                      {projects.length}
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
 
-          {/* Tab bar */}
-          <div className="flex gap-1 pb-0">
-            <button
-              type="button"
-              onClick={() => setActiveTab("pipeline")}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
-                activeTab === "pipeline"
-                  ? "border-cyan-400 text-cyan-300"
-                  : "border-transparent text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                <path d="M5 3h14M5 8h14M5 13l4 4 4-4 4 4" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Pipeline
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("projects")}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
-                activeTab === "projects"
-                  ? "border-cyan-400 text-cyan-300"
-                  : "border-transparent text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
-                <rect x="2" y="7" width="20" height="14" rx="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Projects
-              {projects.length > 0 && (
-                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-cyan-500/25 px-1 text-[10px] font-bold text-cyan-300">
-                  {projects.length}
-                </span>
-              )}
-            </button>
+          {statusMsg && (
+            <div className="shrink-0 px-4 pt-3 lg:px-8">
+              <p className={`rounded-xl border px-3 py-2 text-xs ${statusMsg.type === "error" ? "border-red-500/30 bg-red-500/10 text-red-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
+                {statusMsg.text}
+              </p>
+            </div>
+          )}
+
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className={activeTab === "pipeline" ? "flex min-h-0 flex-1 overflow-hidden" : "hidden"}>
+              <div className="h-full w-full overflow-y-auto overscroll-contain px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:px-8 lg:pt-6 lg:pb-6" style={{ WebkitOverflowScrolling: "touch" }}>
+                <EbookPipeline
+                  key={pipelineKey}
+                  ebookManifest={ebookManifest}
+                  onManifestReady={handleManifestReady}
+                  onPipelineSnapshotChange={handlePipelineSnapshotChange}
+                  onSaveProject={(name) => void handleSaveProject(name)}
+                />
+              </div>
+            </div>
+
+            <div className={activeTab === "projects" ? "flex min-h-0 flex-1 overflow-hidden" : "hidden"}>
+              <div className="h-full w-full overflow-y-auto overscroll-contain px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:px-8 lg:pt-6 lg:pb-6" style={{ WebkitOverflowScrolling: "touch" }}>
+                <EbookProjectsPanel
+                  projects={projects}
+                  suggestedName={suggestedName}
+                  canSave
+                  onSave={handleSaveProject}
+                  onLoad={handleLoadProject}
+                  onDelete={handleDeleteProject}
+                  onImport={handleImportProject}
+                  onImportManifestJson={buildManifestFromJob}
+                  onPublish={handlePublish}
+                  onUnpublish={handleUnpublish}
+                  onUpdateImages={handleUpdateImages}
+                  onManifestLoaded={(manifest) => {
+                    setEbookManifest(manifest);
+                    setActiveTab("pipeline");
+                    setStatusMsg({ type: "success", text: `"${manifest.bookTitle}" loaded into pipeline.` });
+                  }}
+                />
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Status message */}
-      {statusMsg && (
-        <div className="mt-3 w-full px-4 lg:px-8">
-          <p className={`rounded-xl border px-3 py-2 text-xs ${statusMsg.type === "error" ? "border-red-500/30 bg-red-500/10 text-red-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
-            {statusMsg.text}
-          </p>
-        </div>
-      )}
-
-      {/* ── Pipeline tab (always mounted — pipeline must never lose in-flight state) */}
-      <div className={activeTab === "pipeline" ? "block" : "hidden"}>
-        <div className="w-full px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:h-full lg:min-h-0 lg:px-8 lg:pt-6 lg:pb-6">
-          <EbookPipeline
-            key={pipelineKey}
+          <AssistantPanel
+            isOpen={assistantOpen}
+            onClose={() => setAssistantOpen(false)}
+            academy={null}
+            onUpdate={() => {}}
+            siteConfig={siteConfig}
+            onSiteUpdate={() => {}}
             ebookManifest={ebookManifest}
-            onManifestReady={handleManifestReady}
-            onPipelineSnapshotChange={handlePipelineSnapshotChange}
-            onSaveProject={(name) => void handleSaveProject(name)}
+            onEbookUpdate={handleEbookUpdate}
+            ebookPipelineSnapshot={ebookPipelineSnapshot}
           />
-        </div>
-      </div>
-
-      {/* ── Projects tab ──────────────────────────────────────────────────── */}
-      <div className={activeTab === "projects" ? "block" : "hidden"}>
-        <div className="w-full px-4 pt-5 pb-[max(env(safe-area-inset-bottom),1.5rem)] lg:h-full lg:min-h-0 lg:px-8 lg:pt-6 lg:pb-6">
-          <EbookProjectsPanel
-            projects={projects}
-            suggestedName={suggestedName}
-            canSave
-            onSave={handleSaveProject}
-            onLoad={handleLoadProject}
-            onDelete={handleDeleteProject}
-            onImport={handleImportProject}
-            onImportManifestJson={buildManifestFromJob}
-            onPublish={handlePublish}
-            onUnpublish={handleUnpublish}
-            onUpdateImages={handleUpdateImages}
-            onManifestLoaded={(manifest) => {
-              setEbookManifest(manifest);
-              setActiveTab("pipeline");
-              setStatusMsg({ type: "success", text: `"${manifest.bookTitle}" loaded into pipeline.` });
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Nexus Director AI — ebook post-production assistant */}
-      <AssistantPanel
-        isOpen={assistantOpen}
-        onClose={() => setAssistantOpen(false)}
-        academy={null}
-        onUpdate={() => {}}
-        siteConfig={siteConfig}
-        onSiteUpdate={() => {}}
-        ebookManifest={ebookManifest}
-        onEbookUpdate={handleEbookUpdate}
-        ebookPipelineSnapshot={ebookPipelineSnapshot}
-      />
         </main>
       </div>
     </div>
