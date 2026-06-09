@@ -352,6 +352,7 @@ export function SermonAssistantPanel() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<SermonProjectRecord[]>([]);
   const [isEditingOrganized, setIsEditingOrganized] = useState(false);
+  const [isCompactLayout, setIsCompactLayout] = useState(false);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [mobileTelemetryOpen, setMobileTelemetryOpen] = useState(false);
   const [desktopTelemetryOpen, setDesktopTelemetryOpen] = useState(false);
@@ -394,6 +395,14 @@ export function SermonAssistantPanel() {
   const scriptureCardsRef = useRef<ScriptureCard[]>([]);
 
   const pulpitTouchStartXRef = useRef<number | null>(null);
+  const tabOrder = isCompactLayout
+    ? (["organized", "raw", "assistant"] as TabId[])
+    : (["raw", "organized", "assistant"] as TabId[]);
+
+  const getPreferredLandingTab = useCallback((organizedValue: string): TabId => {
+    if (isCompactLayout && organizedValue.trim()) return "organized";
+    return "raw";
+  }, [isCompactLayout]);
 
   const mergeScriptureCards = useCallback((incoming: ScriptureCard[]) => {
     if (incoming.length === 0) return;
@@ -405,12 +414,35 @@ export function SermonAssistantPanel() {
   }, []);
 
   useEffect(() => {
-    setRawTranscript(localStorage.getItem(STORAGE_KEYS.raw) ?? "");
-    setOrganizedMarkdown(localStorage.getItem(STORAGE_KEYS.organized) ?? "");
+    const media = window.matchMedia("(max-width: 1023px)");
+    const syncLayout = (event?: MediaQueryList | MediaQueryListEvent) => {
+      setIsCompactLayout((event ?? media).matches);
+    };
+
+    syncLayout(media);
+    const onChange = (event: MediaQueryListEvent) => {
+      syncLayout(event);
+    };
+
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    const storedRaw = localStorage.getItem(STORAGE_KEYS.raw) ?? "";
+    const storedOrganized = localStorage.getItem(STORAGE_KEYS.organized) ?? "";
+    setRawTranscript(storedRaw);
+    setOrganizedMarkdown(storedOrganized);
     setManualNotes(localStorage.getItem(STORAGE_KEYS.notes) ?? "");
     setCurrentProjectId(localStorage.getItem(STORAGE_KEYS.projectId) ?? "");
     setProjectName(localStorage.getItem(STORAGE_KEYS.projectName) ?? "");
-  }, []);
+    setActiveTab(getPreferredLandingTab(storedOrganized));
+  }, [getPreferredLandingTab]);
+
+  useEffect(() => {
+    if (!isCompactLayout || !organizedMarkdown.trim()) return;
+    setActiveTab((current) => (current === "raw" ? "organized" : current));
+  }, [isCompactLayout, organizedMarkdown]);
 
   useEffect(() => {
     scriptureCardsRef.current = scriptureCards;
@@ -1103,9 +1135,10 @@ export function SermonAssistantPanel() {
     setOrganizedMarkdown(item.sermonAssistant.organizedMarkdown ?? "");
     setManualNotes(item.sermonAssistant.manualNotes ?? "");
     setScriptureCards(item.sermonAssistant.scriptureCards ?? []);
+    setActiveTab(getPreferredLandingTab(item.sermonAssistant.organizedMarkdown ?? ""));
     setHistoryOpen(false);
     pushToast("Project loaded.", "success");
-  }, [pushToast]);
+  }, [getPreferredLandingTab, pushToast]);
 
   const deleteHistoryItem = useCallback(async (id: string) => {
     try {
@@ -1233,7 +1266,7 @@ export function SermonAssistantPanel() {
   return (
     <>
       <section className="relative flex h-full flex-col overflow-hidden rounded-2xl border border-cyan-500/20 glass">
-        <header className="flex shrink-0 flex-col gap-3 border-b border-cyan-500/20 px-4 py-3 sm:px-5">
+        <header className="flex shrink-0 flex-col gap-2 border-b border-cyan-500/20 px-3 py-3 sm:gap-3 sm:px-5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 ring-1 ring-cyan-400/50">
@@ -1296,84 +1329,87 @@ export function SermonAssistantPanel() {
             <button
               type="button"
               onClick={() => setMobileToolsOpen((v) => !v)}
-              className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-200 sm:hidden"
+              className="focus-ring min-h-10 rounded-xl border border-slate-700/80 px-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-200 sm:hidden"
             >
               {mobileToolsOpen ? "Close" : "Tools"}
             </button>
           </div>
 
-          <div className="grid items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/70 px-2 py-2 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1fr)_170px_auto]">
+          <div className="grid grid-cols-[minmax(0,1fr)_7.5rem_auto] items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/70 px-2 py-2 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1fr)_170px_auto]">
             <input
               type="text"
               value={projectName}
               onChange={(event) => setProjectName(event.target.value)}
               placeholder="Sermon title / save name"
-              className="focus-ring h-10 min-w-0 rounded-xl border border-slate-700/80 bg-slate-950/70 px-3 text-sm text-slate-100 placeholder:text-slate-500"
+              className="focus-ring h-11 min-w-0 rounded-xl border border-slate-700/80 bg-slate-950/70 px-3 text-base text-slate-100 placeholder:text-slate-500"
             />
             <select
               value={speechLanguage}
               onChange={(event) => setSpeechLanguage(event.target.value as SpeechLanguage)}
-              className="focus-ring h-10 rounded-xl border border-slate-600/50 bg-slate-900 px-3 text-sm font-semibold text-slate-200"
+              className="focus-ring h-11 min-w-0 rounded-xl border border-slate-600/50 bg-slate-900 px-2 text-base font-semibold text-slate-200"
               aria-label="Spoken language"
             >
-              <option value="auto">Speech: Auto</option>
-              <option value="english">Speech: English</option>
-              <option value="spanish">Speech: Spanish</option>
-              <option value="french">Speech: French</option>
-              <option value="portuguese">Speech: Portuguese</option>
-              <option value="german">Speech: German</option>
-              <option value="swahili">Speech: Swahili</option>
-              <option value="twi">Speech: Twi</option>
-              <option value="kikuyu">Speech: Kikuyu</option>
+              <option value="auto">Auto</option>
+              <option value="english">English</option>
+              <option value="spanish">Spanish</option>
+              <option value="french">French</option>
+              <option value="portuguese">Portuguese</option>
+              <option value="german">German</option>
+              <option value="swahili">Swahili</option>
+              <option value="twi">Twi</option>
+              <option value="kikuyu">Kikuyu</option>
             </select>
             <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => fileRef.current?.click()}
-                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-3 text-xs font-semibold text-slate-300"
+                className="focus-ring h-11 whitespace-nowrap rounded-xl border border-slate-700/80 px-3 text-sm font-semibold text-slate-300"
               >
-                Upload Transcript
+                <span className="sm:hidden">Upload</span>
+                <span className="hidden sm:inline">Upload Transcript</span>
               </button>
             </div>
           </div>
 
           {mobileToolsOpen && (
-            <div className="grid grid-cols-2 gap-2 sm:hidden">
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300"
-              >
-                Upload
-              </button>
-              <button
-                type="button"
-                onClick={openHistory}
-                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300"
-              >
-                History
-              </button>
-              <button
-                type="button"
-                onClick={startNewBlankProject}
-                className="focus-ring min-h-12 rounded-xl border border-slate-700/80 px-4 text-sm font-semibold text-slate-300"
-              >
-                New Blank
-              </button>
-              <button
-                type="button"
-                onClick={() => void saveToCloud("update")}
-                className="focus-ring min-h-12 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-300"
-              >
-                Save Update
-              </button>
-              <button
-                type="button"
-                onClick={() => void saveToCloud("new")}
-                className="focus-ring min-h-12 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-4 text-sm font-semibold text-emerald-300"
-              >
-                Save As New
-              </button>
+            <div className="w-full max-w-full overflow-hidden pb-1 sm:hidden">
+              <div className="grid grid-cols-5 gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
+                >
+                  Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={openHistory}
+                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
+                >
+                  History
+                </button>
+                <button
+                  type="button"
+                  onClick={startNewBlankProject}
+                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
+                >
+                  New
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveToCloud("update")}
+                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-2 text-[11px] font-semibold text-cyan-300"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveToCloud("new")}
+                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-2 text-[11px] font-semibold text-emerald-300"
+                >
+                  Save+
+                </button>
+              </div>
             </div>
           )}
 
@@ -1382,19 +1418,20 @@ export function SermonAssistantPanel() {
 
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2 lg:grid lg:grid-cols-12 lg:gap-3 lg:p-3">
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950/55 lg:col-span-9">
-            <div className="flex shrink-0 border-b border-cyan-500/20">
-              {(["raw", "organized", "assistant"] as TabId[]).map((tab) => (
+            <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-cyan-500/20 px-2 py-2 lg:gap-0 lg:px-0 lg:py-0">
+              {tabOrder.map((tab) => (
                 <button
                   key={tab}
                   type="button"
                   onClick={() => setActiveTab(tab)}
-                  className={`focus-ring min-h-12 flex-1 border-b-2 text-sm font-bold uppercase tracking-wide transition ${
+                  className={`focus-ring min-h-10 shrink-0 whitespace-nowrap rounded-lg border px-3 text-xs font-bold uppercase tracking-[0.18em] transition lg:min-h-12 lg:flex-1 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:border-b-2 lg:px-2 lg:text-sm lg:tracking-wide ${
                     activeTab === tab
-                      ? "border-cyan-400 bg-cyan-500/10 text-cyan-300"
-                      : "border-transparent text-slate-400 hover:bg-slate-900/80 hover:text-slate-200"
+                      ? "border-cyan-400/70 bg-cyan-500/10 text-cyan-300 lg:border-cyan-400"
+                      : "border-slate-800 text-slate-400 hover:bg-slate-900/80 hover:text-slate-200 lg:border-transparent"
                   }`}
                 >
-                  {tab === "raw" ? "Raw Transcript" : tab === "organized" ? "Organized Notes" : "Nexus Agent"}
+                  <span className="sm:hidden">{tab === "raw" ? "Transcript" : tab === "organized" ? "Notes" : "Agent"}</span>
+                  <span className="hidden sm:inline">{tab === "raw" ? "Raw Transcript" : tab === "organized" ? "Organized Notes" : "Nexus Agent"}</span>
                 </button>
               ))}
             </div>
@@ -1410,6 +1447,13 @@ export function SermonAssistantPanel() {
                       className="focus-ring hidden h-10 rounded-xl border border-slate-700/70 px-3 text-xs font-semibold text-slate-200 sm:inline-flex sm:items-center"
                     >
                       {desktopTelemetryOpen ? "Hide Insights" : "Show Insights"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMobileTelemetryOpen((v) => !v)}
+                      className="focus-ring min-h-12 rounded-xl border border-slate-700/70 px-3 text-sm font-semibold text-slate-200 sm:hidden"
+                    >
+                      {mobileTelemetryOpen ? "Hide Insights" : "Show Insights"}
                     </button>
                     <button
                       type="button"
@@ -1432,16 +1476,6 @@ export function SermonAssistantPanel() {
                       </button>
                     )}
                   </div>
-                </div>
-
-                <div className="border-b border-cyan-500/10 px-3 py-2 sm:hidden">
-                  <button
-                    type="button"
-                    onClick={() => setMobileTelemetryOpen((v) => !v)}
-                    className="focus-ring min-h-12 w-full rounded-xl border border-slate-700/70 bg-slate-900/70 px-4 text-sm font-semibold text-slate-200"
-                  >
-                    {mobileTelemetryOpen ? "Hide Speech Insights" : "Show Speech Insights"}
-                  </button>
                 </div>
 
                 <div className="hidden border-b border-cyan-500/10 p-2 sm:block">
@@ -1507,7 +1541,7 @@ export function SermonAssistantPanel() {
 
             {activeTab === "organized" && (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex flex-wrap items-center justify-end gap-2 border-b border-cyan-500/10 px-4 py-3">
+                <div className="hidden flex-wrap items-center justify-end gap-2 border-b border-cyan-500/10 px-4 py-3 sm:flex">
                   <button
                     type="button"
                     onClick={() => setIsEditingOrganized((value) => !value)}
@@ -1539,34 +1573,44 @@ export function SermonAssistantPanel() {
                   </button>
                 </div>
 
-                <div className="flex gap-2 border-b border-cyan-500/10 px-3 py-2 sm:hidden">
-                  <button
-                    type="button"
-                    onClick={() => setMobileOrganizedView("outline")}
-                    className={`focus-ring min-h-12 flex-1 rounded-xl border px-3 text-sm font-semibold ${mobileOrganizedView === "outline" ? "border-cyan-400 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
-                  >
-                    Outline
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMobileOrganizedView("manual")}
-                    className={`focus-ring min-h-12 flex-1 rounded-xl border px-3 text-sm font-semibold ${mobileOrganizedView === "manual" ? "border-cyan-400 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
-                  >
-                    Manual Notes
-                  </button>
+                <div className="shrink-0 border-b border-cyan-500/10 px-2 py-2 sm:hidden">
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={generateOutline}
+                      disabled={isGenerating}
+                      className="focus-ring min-h-10 min-w-0 rounded-xl bg-cyan-400 px-2 text-[11px] font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isGenerating ? "Processing" : organizedMarkdown.trim() ? "Refresh" : "Generate"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMobileOrganizedView("outline")}
+                      className={`focus-ring min-h-10 min-w-0 rounded-xl border px-2 text-[11px] font-semibold ${mobileOrganizedView === "outline" ? "border-cyan-400 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
+                    >
+                      Outline
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMobileOrganizedView("manual")}
+                      className={`focus-ring min-h-10 min-w-0 rounded-xl border px-2 text-[11px] font-semibold ${mobileOrganizedView === "manual" ? "border-cyan-400 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
+                    >
+                      Manual
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid min-h-0 flex-1 gap-3 p-3 lg:grid-cols-[minmax(0,1.9fr)_minmax(260px,0.7fr)] xl:grid-cols-[minmax(0,2.15fr)_minmax(280px,0.65fr)]">
-                  <div className={`min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 ${mobileOrganizedView === "manual" ? "hidden sm:block" : ""}`}>
+                <div className="grid min-h-0 flex-1 gap-2 p-2 sm:gap-3 sm:p-3 lg:grid-cols-[minmax(0,1.9fr)_minmax(260px,0.7fr)] xl:grid-cols-[minmax(0,2.15fr)_minmax(280px,0.65fr)]">
+                  <div className={`min-h-0 overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 sm:min-h-[35dvh] ${mobileOrganizedView === "manual" ? "hidden sm:block" : ""}`}>
                     {isEditingOrganized ? (
                       <textarea
                         value={organizedMarkdown}
                         onChange={(event) => setOrganizedMarkdown(event.target.value)}
                         placeholder="Generated sermon structure will appear here. You can manually rewrite, reorder, and add notes directly."
-                        className="focus-ring h-full min-h-[35dvh] w-full resize-none border-0 bg-transparent p-5 text-base leading-relaxed text-slate-100 placeholder:text-slate-500"
+                        className="focus-ring h-full min-h-0 w-full resize-none border-0 bg-transparent p-4 text-base leading-relaxed text-slate-100 placeholder:text-slate-500 sm:min-h-[35dvh] sm:p-5"
                       />
                     ) : (
-                      <div className="prose prose-invert h-full max-w-none overflow-y-auto p-5">
+                      <div className="prose prose-invert h-full max-w-none overflow-y-auto p-4 sm:p-5">
                         {organizedMarkdown ? (
                           <div dangerouslySetInnerHTML={{ __html: renderMarkdown(organizedMarkdown) }} />
                         ) : (
@@ -1577,7 +1621,7 @@ export function SermonAssistantPanel() {
                       </div>
                     )}
                   </div>
-                  <div className={`min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 ${mobileOrganizedView === "outline" ? "hidden sm:block" : ""}`}>
+                  <div className={`min-h-0 overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 sm:min-h-[35dvh] ${mobileOrganizedView === "outline" ? "hidden sm:block" : ""}`}>
                     <div className="border-b border-cyan-500/10 px-4 py-3">
                       <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Manual Notes</p>
                     </div>
@@ -1585,8 +1629,42 @@ export function SermonAssistantPanel() {
                       value={manualNotes}
                       onChange={(event) => setManualNotes(event.target.value)}
                       placeholder="Add transitions, illustrations, altar call notes, delivery cues, or anything you want to manually keep alongside the organized sermon."
-                      className="focus-ring h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] w-full resize-none border-0 bg-transparent p-4 text-base leading-relaxed text-slate-100 placeholder:text-slate-500"
+                      className="focus-ring h-[calc(100%-49px)] min-h-0 w-full resize-none border-0 bg-transparent p-4 text-base leading-relaxed text-slate-100 placeholder:text-slate-500 sm:min-h-[calc(35dvh-49px)]"
                     />
+                  </div>
+                </div>
+
+                <div className="shrink-0 border-t border-cyan-500/10 bg-slate-950/85 px-2 pt-2 pb-[max(env(safe-area-inset-bottom),1rem)] sm:hidden">
+                  <div className="grid grid-cols-4 gap-2">
+                    <button
+                    type="button"
+                    onClick={() => setIsEditingOrganized((value) => !value)}
+                    className="focus-ring min-h-10 min-w-0 rounded-xl border border-slate-600/80 px-2 text-xs font-bold text-slate-200 transition hover:border-cyan-500/50 hover:text-cyan-300"
+                  >
+                    {isEditingOrganized ? "Preview" : "Edit"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openPulpitMode}
+                    className="focus-ring min-h-10 min-w-0 rounded-xl border border-amber-400/40 bg-amber-500/10 px-2 text-xs font-bold text-amber-300 transition hover:bg-amber-500/20"
+                  >
+                    Pulpit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void downloadSermonNotesDocx()}
+                    className="focus-ring min-h-10 min-w-0 rounded-xl border border-emerald-500/45 bg-emerald-500/10 px-2 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/20"
+                  >
+                    Word
+                  </button>
+                  <button
+                    type="button"
+                    onClick={generateOutline}
+                    disabled={isGenerating}
+                    className="focus-ring min-h-10 min-w-0 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-2 text-xs font-bold text-cyan-300 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isGenerating ? "Processing" : "Again"}
+                  </button>
                   </div>
                 </div>
               </div>
