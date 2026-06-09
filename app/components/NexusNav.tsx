@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
-import Link from "next/link";
+import { useCallback, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 type NavItem = { id: string; label: string; href?: string };
@@ -101,6 +100,20 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
   const pathname = usePathname();
   const router = useRouter();
 
+  const navigateTo = useCallback((href: string) => {
+    // Skip redundant pushes to avoid unnecessary route remounts.
+    if (href === "/translate" && pathname.startsWith("/translate")) return;
+    if (href.startsWith("/ebook") && pathname.startsWith("/ebook")) return;
+    if (href === "/" && pathname === "/") return;
+    router.push(href);
+  }, [pathname, router]);
+
+  useEffect(() => {
+    router.prefetch("/");
+    router.prefetch("/ebook?tab=pipeline");
+    router.prefetch("/translate");
+  }, [router]);
+
   const handleLogout = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
@@ -151,9 +164,10 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
             ) : null;
             if (item.href) {
               return (
-                <Link
+                <button
                   key={item.id}
-                  href={item.href}
+                  type="button"
+                  onClick={() => navigateTo(item.href)}
                   aria-label={item.label}
                   aria-current={isActive ? "page" : undefined}
                   className={btnClass}
@@ -161,7 +175,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
                 >
                   {indicator}
                   <Icon />
-                </Link>
+                </button>
               );
             }
             return (
@@ -207,9 +221,9 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         {/* Logo tap — goes to overview */}
         <button
           type="button"
-          onPointerUp={() => onSelect("overview")}
+          onClick={() => onSelect("overview")}
           aria-label="Overview"
-          className="flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2"
+          className="flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 active:bg-slate-800/40"
         >
           <LogoMark />
         </button>
@@ -217,9 +231,9 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         {/* Logout — far right of mobile bar */}
         <button
           type="button"
-          onPointerUp={handleLogout}
+          onClick={() => void handleLogout()}
           aria-label="Log out"
-          className="relative flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 text-slate-600 hover:text-rose-400 transition-colors"
+          className="relative flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 text-slate-600 hover:text-rose-400 transition-colors active:bg-slate-800/40"
         >
           <IconLogout />
           <span className="text-[9px] font-medium">Logout</span>
@@ -254,16 +268,16 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
             <button
               key={item.id}
               type="button"
-              onPointerUp={() => {
+              onClick={() => {
                 if (item.href) {
-                  router.push(item.href);
+                  navigateTo(item.href);
                   return;
                 }
                 onSelect(item.id);
               }}
               aria-label={item.label}
               aria-current={isActive ? "page" : undefined}
-              className="relative flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors"
+              className="relative flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 transition-colors active:bg-slate-800/40"
             >
               {inner}
             </button>

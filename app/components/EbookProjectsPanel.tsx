@@ -4,6 +4,7 @@ import { useRef, useState, useEffect } from "react";
 import type { EbookProject } from "@/lib/ebook-project-store";
 import type { EbookJobState, EbookManifest } from "@/lib/schemas/ebook";
 import { EbookManifestSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
+import type { ProjectSnapshot } from "@/lib/project-store";
 import type { PublishedBookEntry } from "@/lib/schemas/published-book";
 
 type EbookProjectsPanelProps = {
@@ -97,11 +98,44 @@ export function EbookProjectsPanel({
     reader.onload = (ev) => {
       try {
         const parsed = JSON.parse(ev.target?.result as string) as EbookProject;
+        const now = new Date().toISOString();
+
+        // Accept both Book-only exports and workspace-style project snapshots that carry ebookJobState.
+        if (parsed && typeof parsed === "object" && "ebookJobState" in parsed) {
+          const snapshot = parsed as unknown as ProjectSnapshot;
+          if (!snapshot.id || !snapshot.name || !snapshot.ebookJobState) {
+            throw new Error("Invalid ebook project file.");
+          }
+          const jobParse = EbookJobStateSchema.safeParse(snapshot.ebookJobState);
+          if (!jobParse.success) throw new Error("Invalid ebook job state in project file.");
+
+          onImport({
+            id: snapshot.id,
+            name: snapshot.name,
+            createdAt: snapshot.createdAt ?? now,
+            updatedAt: now,
+            bookTitle: jobParse.data.architecture?.bookTitle ?? snapshot.name,
+            chapterCount: jobParse.data.chapters?.length ?? 0,
+            totalWordCount: (jobParse.data.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+            status: jobParse.data.status,
+            jobState: jobParse.data,
+            publishedSlug: snapshot.publishedSlug,
+            coverImageUrl: snapshot.coverImageUrl,
+            authorImageUrl: snapshot.authorImageUrl,
+          });
+          setImportSuccess(`"${snapshot.name}" imported into saved projects.`);
+          setImportError(null);
+          return;
+        }
+
         if (!parsed.id || !parsed.name || !parsed.jobState) throw new Error("Invalid ebook project file.");
+        const jobParse = EbookJobStateSchema.safeParse(parsed.jobState);
+        if (!jobParse.success) throw new Error("Invalid ebook job state in project file.");
         onImport({
           ...parsed,
+          jobState: jobParse.data,
           id: `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
         });
         setImportSuccess(`"${parsed.name}" imported into saved projects.`);
         setImportError(null);
@@ -564,6 +598,12 @@ export function EbookProjectsPanel({
           <div className="flex flex-col gap-2">
             {liveBooks.map((book) => (
               <div key={book.slug} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                {(() => {
+                  const linkedProject = projects.find((p) => p.publishedSlug === book.slug);
+                  const coverUrl = book.coverImageUrl ?? linkedProject?.coverImageUrl;
+                  const authorUrl = book.authorImageUrl ?? linkedProject?.authorImageUrl;
+                  return (
+                    <>
                 {/* Book info */}
                 <p className="truncate font-semibold text-slate-100">{book.title}</p>
                 {book.subtitle && (
@@ -574,6 +614,41 @@ export function EbookProjectsPanel({
                   {" · "}
                   {new Date(book.publishedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                 </p>
+
+                <div className="mt-3 flex items-center gap-3 rounded-xl border border-slate-700/40 bg-slate-800/30 p-3">
+                  <div className="relative flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-600 bg-slate-800">
+                    {coverUrl ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img src={coverUrl} alt="Cover" className="h-full w-full object-cover" />
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-slate-500">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </div>
+
+                  <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full border border-slate-600 bg-slate-800">
+                    {authorUrl ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img src={authorUrl} alt="Author" className="h-full w-full object-cover" />
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5 text-slate-500">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" strokeLinecap="round" strokeLinejoin="round" />
+                        <circle cx="12" cy="7" r="4" strokeLinecap="round" />
+                      </svg>
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-slate-400">
+                      {coverUrl ? "Cover uploaded" : "No cover image"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-600">
+                      {authorUrl ? "Author photo set" : "No author image"}
+                    </p>
+                  </div>
+                </div>
 
                 {/* Actions */}
                 <div className="mt-3 flex gap-2">
@@ -634,6 +709,9 @@ export function EbookProjectsPanel({
                     </button>
                   )}
                 </div>
+                    </>
+                  );
+                })()}
               </div>
             ))}
           </div>

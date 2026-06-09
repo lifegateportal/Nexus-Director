@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlignmentType, Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
 import { NexusNav } from "@/app/components/NexusNav";
 import { StatusBar } from "@/app/components/StatusBar";
 
@@ -229,7 +228,7 @@ export default function TranslatePage() {
 
   const handleNavSelect = useCallback((id: string) => {
     if (id === "ebook") {
-      router.push("/ebook");
+      router.push("/ebook?tab=pipeline");
       return;
     }
     if (id === "translate") {
@@ -534,6 +533,7 @@ export default function TranslatePage() {
   }, [downloadText, liveTurns]);
 
   const exportDocx = useCallback(async () => {
+    const { AlignmentType, Document, HeadingLevel, Packer, Paragraph, TextRun } = await import("docx");
     const text = mode === "live" ? liveTranslatedText : translatedText;
     if (!text.trim()) return;
     const title = `Nexus Translate - ${targetLabel}`;

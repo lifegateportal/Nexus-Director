@@ -1847,7 +1847,21 @@ export function EbookPipeline({
       const filterInfo = parseSignalFilterLog(job.errorLog ?? []);
       setSignalFilterState(filterInfo.state);
       setSignalFilterDetail(filterInfo.detail);
-      if (job.chapters.length === 0 && job.status !== "complete" && job.status !== "failed") return;
+      const hasRecoverableState = Boolean(
+        (job.masterTranscript && job.masterTranscript.length > 0) ||
+        (job.transcripts?.length ?? 0) > 0 ||
+        job.voiceDNA ||
+        job.contentMap ||
+        job.architecture ||
+        (job.sectionAssignments?.length ?? 0) > 0 ||
+        (job.sections?.length ?? 0) > 0 ||
+        (job.chapters?.length ?? 0) > 0 ||
+        job.frontMatter ||
+        (job.progress?.completed ?? 0) > 0 ||
+        job.status === "complete" ||
+        job.status === "failed"
+      );
+      if (!hasRecoverableState) return;
       jobIdRef.current = job.jobId;
       setStage(job.status as PipelineStage);
       logRef.current = job.errorLog ?? [];

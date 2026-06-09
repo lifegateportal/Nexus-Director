@@ -44,7 +44,8 @@ export function ProjectsPanel({
   onUnpublish,
   onUpdateImages,
 }: ProjectsPanelProps) {
-  const projects = allProjects;
+  // Workspace keeps academy projects only; Book-specific snapshots stay in the /ebook project store.
+  const projects = allProjects.filter((p) => !p.ebookManifest && !p.ebookJobState);
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [confirmUnpublish, setConfirmUnpublish] = useState<string | null>(null);
@@ -480,4 +481,3 @@ export function ProjectsPanel({
     </div>
   );
 }
-

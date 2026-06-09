@@ -58,6 +58,58 @@ type SermonApiResponse = {
   markdown: string;
 };
 
+function normalizeSermonProjectRecord(input: unknown): SermonProjectRecord | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  const rawSermon = record.sermonAssistant;
+  if (!rawSermon) return null;
+
+  const decoded = (() => {
+    if (typeof rawSermon === "string") {
+      try {
+        return JSON.parse(rawSermon) as unknown;
+      } catch {
+        return null;
+      }
+    }
+    return rawSermon;
+  })();
+
+  if (!decoded || typeof decoded !== "object") return null;
+  const sermon = decoded as Record<string, unknown>;
+
+  const scriptureCards = Array.isArray(sermon.scriptureCards)
+    ? sermon.scriptureCards.filter((card): card is ScriptureCard => (
+        !!card &&
+        typeof card === "object" &&
+        typeof (card as Record<string, unknown>).id === "string" &&
+        typeof (card as Record<string, unknown>).ref === "string" &&
+        typeof (card as Record<string, unknown>).text === "string" &&
+        (((card as Record<string, unknown>).source === "detected") || ((card as Record<string, unknown>).source === "suggested"))
+      ))
+    : [];
+
+  const id = typeof record.id === "string" && record.id.trim()
+    ? record.id
+    : `sermon-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const name = typeof record.name === "string" && record.name.trim() ? record.name : "Sermon";
+  const createdAt = typeof record.createdAt === "string" && record.createdAt ? record.createdAt : new Date().toISOString();
+  const updatedAt = typeof record.updatedAt === "string" && record.updatedAt ? record.updatedAt : createdAt;
+
+  return {
+    id,
+    name,
+    createdAt,
+    updatedAt,
+    sermonAssistant: {
+      rawTranscript: typeof sermon.rawTranscript === "string" ? sermon.rawTranscript : "",
+      organizedMarkdown: typeof sermon.organizedMarkdown === "string" ? sermon.organizedMarkdown : "",
+      manualNotes: typeof sermon.manualNotes === "string" ? sermon.manualNotes : "",
+      scriptureCards,
+    },
+  };
+}
+
 type SuggestionResponse = {
   suggestions: Array<{
     ref: string;
@@ -1118,15 +1170,45 @@ export function SermonAssistantPanel() {
       if (!res.ok) throw new Error("load failed");
       const data = await res.json() as { projects?: Array<Record<string, unknown>> };
       const items = (data.projects ?? [])
-        .filter((project): project is Record<string, unknown> & { sermonAssistant: SermonCloudSnapshot } =>
-          typeof project === "object" && project !== null && "sermonAssistant" in project)
-        .map((project) => project as unknown as SermonProjectRecord)
+        .map((project) => normalizeSermonProjectRecord(project))
+        .filter((project): project is SermonProjectRecord => project !== null)
         .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+      // Fallback: include current local sermon state if cloud has no valid entries.
+      if (items.length === 0 && (rawTranscript.trim() || organizedMarkdown.trim() || manualNotes.trim())) {
+        items.push({
+          id: currentProjectId || `local-sermon-${Date.now()}`,
+          name: deriveProjectName(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          sermonAssistant: {
+            rawTranscript,
+            organizedMarkdown,
+            manualNotes,
+            scriptureCards,
+          },
+        });
+      }
       setHistoryItems(items);
     } catch {
-      pushToast("Failed to load history.", "error");
+      const fallbackItems = (rawTranscript.trim() || organizedMarkdown.trim() || manualNotes.trim())
+        ? [{
+            id: currentProjectId || `local-sermon-${Date.now()}`,
+            name: deriveProjectName(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            sermonAssistant: {
+              rawTranscript,
+              organizedMarkdown,
+              manualNotes,
+              scriptureCards,
+            },
+          }]
+        : [];
+      setHistoryItems(fallbackItems);
+      pushToast("Cloud history failed — showing local sermon state.", "error");
     }
-  }, [pushToast]);
+  }, [currentProjectId, deriveProjectName, manualNotes, organizedMarkdown, pushToast, rawTranscript, scriptureCards]);
 
   const loadHistoryItem = useCallback((item: SermonProjectRecord) => {
     setCurrentProjectId(item.id);

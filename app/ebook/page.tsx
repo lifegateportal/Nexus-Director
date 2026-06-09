@@ -21,7 +21,13 @@ import {
 import type { EbookProject } from "@/lib/ebook-project-store";
 
 const JOB_STATE_KEY = "nexus_ebook_job_state";
+const PENDING_MOUNT_KEY = "nexus_ebook_pending_mount";
 const VOICE_STUDIO_STORAGE_PREFIX = "nexus_voice_studio_";
+const VALID_JOB_STATUSES = new Set([
+  "idle", "transcribing", "filtering", "analyzing", "mapping",
+  "architecting", "assigning", "writing", "polishing",
+  "frontmatter", "exporting", "complete", "failed",
+]);
 
 type Tab = "pipeline" | "projects";
 
@@ -40,6 +46,7 @@ export default function EbookPage() {
   const [currentProjectId, setCurrentProjectId] = useState<string>("");
   // Incrementing this key remounts <EbookPipeline> so it re-reads localStorage on load
   const [pipelineKey, setPipelineKey] = useState(0);
+  const hydratedLoadRef = useRef<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -57,6 +64,7 @@ export default function EbookPage() {
             createdAt?: string;
             updatedAt?: string;
             ebookJobState?: unknown;
+            jobState?: unknown;
             publishedSlug?: string;
             coverImageUrl?: string;
             authorImageUrl?: string;
@@ -68,14 +76,51 @@ export default function EbookPage() {
         let changed = false;
 
         for (const item of remote) {
-          if (!item.id || !item.name || !item.ebookJobState) continue;
-          const parsed = EbookJobStateSchema.safeParse(item.ebookJobState);
+          if (!item.id || !item.name) continue;
+          const sourceJobState = item.ebookJobState ?? item.jobState;
+          if (!sourceJobState) continue;
+
+          const rawState = typeof sourceJobState === "string"
+            ? (() => {
+                try {
+                  return JSON.parse(sourceJobState) as unknown;
+                } catch {
+                  return null;
+                }
+              })()
+            : sourceJobState;
+          if (!rawState || typeof rawState !== "object") continue;
+
+          const record = rawState as Record<string, unknown>;
+          const rawStatus = typeof record.status === "string" ? record.status : "idle";
+          const normalizedState = {
+            ...record,
+            jobId: typeof record.jobId === "string" && record.jobId ? record.jobId : item.id,
+            status: VALID_JOB_STATUSES.has(rawStatus) ? rawStatus : "idle",
+            createdAt: (() => {
+              const source = typeof record.createdAt === "string" ? record.createdAt : item.createdAt;
+              const ts = source ? Date.parse(source) : NaN;
+              return Number.isFinite(ts) ? new Date(ts).toISOString() : new Date().toISOString();
+            })(),
+            updatedAt: (() => {
+              const source = typeof record.updatedAt === "string" ? record.updatedAt : item.updatedAt;
+              const ts = source ? Date.parse(source) : NaN;
+              return Number.isFinite(ts) ? new Date(ts).toISOString() : new Date().toISOString();
+            })(),
+          };
+
+          const parsed = EbookJobStateSchema.safeParse(normalizedState);
           if (!parsed.success) continue;
 
           const existing = localById.get(item.id);
           const localTs = existing ? new Date(existing.updatedAt).getTime() : 0;
           const remoteTs = new Date(item.updatedAt ?? item.createdAt ?? 0).getTime();
-          if (existing && localTs >= remoteTs) continue;
+          const hasRemoteImageUpdates = Boolean(
+            (item.coverImageUrl && !existing?.coverImageUrl) ||
+            (item.authorImageUrl && !existing?.authorImageUrl) ||
+            (item.publishedSlug && !existing?.publishedSlug)
+          );
+          if (existing && localTs >= remoteTs && !hasRemoteImageUpdates) continue;
 
           const job = parsed.data;
           const normalized: EbookProject = {
@@ -88,9 +133,9 @@ export default function EbookPage() {
             totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
             status: job.status,
             jobState: job,
-            publishedSlug: item.publishedSlug,
-            coverImageUrl: item.coverImageUrl,
-            authorImageUrl: item.authorImageUrl,
+            publishedSlug: item.publishedSlug ?? existing?.publishedSlug,
+            coverImageUrl: item.coverImageUrl ?? existing?.coverImageUrl,
+            authorImageUrl: item.authorImageUrl ?? existing?.authorImageUrl,
           };
 
           await saveEbookProject(normalized).catch(() => {});
@@ -107,6 +152,7 @@ export default function EbookPage() {
   }, []);
 
   const requestedTab = searchParams.get("tab");
+  const requestedLoad = searchParams.get("load");
   useEffect(() => {
     if (requestedTab === "projects" || requestedTab === "pipeline") {
       setActiveTab(requestedTab);
@@ -114,6 +160,87 @@ export default function EbookPage() {
     }
     setActiveTab("pipeline");
   }, [requestedTab]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PENDING_MOUNT_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        projectId?: string;
+        projectName?: string;
+        jobState?: unknown;
+        ebookManifest?: unknown;
+        coverImageUrl?: string | null;
+        authorImageUrl?: string | null;
+        ts?: number;
+      };
+      if (typeof parsed.ts !== "number" || Date.now() - parsed.ts > 120000) {
+        localStorage.removeItem(PENDING_MOUNT_KEY);
+        return;
+      }
+      const jobParsed = EbookJobStateSchema.safeParse(parsed.jobState);
+      if (!jobParsed.success) {
+        localStorage.removeItem(PENDING_MOUNT_KEY);
+        return;
+      }
+
+      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(jobParsed.data));
+      if (typeof parsed.projectId === "string") setCurrentProjectId(parsed.projectId);
+
+      const manifestParsed = EbookManifestSchema.safeParse(parsed.ebookManifest);
+      if (manifestParsed.success) {
+        setEbookManifest({
+          ...manifestParsed.data,
+          coverImageUrl: manifestParsed.data.coverImageUrl ?? parsed.coverImageUrl ?? null,
+          authorImageUrl: manifestParsed.data.authorImageUrl ?? parsed.authorImageUrl ?? null,
+        });
+      }
+
+      setPipelineKey((k) => k + 1);
+      setActiveTab("pipeline");
+      setStatusMsg({ type: "success", text: `"${parsed.projectName ?? "Project"}" mounted in standalone pipeline.` });
+      localStorage.removeItem(PENDING_MOUNT_KEY);
+    } catch {
+      localStorage.removeItem(PENDING_MOUNT_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!requestedLoad || projects.length === 0) return;
+    if (hydratedLoadRef.current === requestedLoad) return;
+    const project = projects.find((p) => p.id === requestedLoad);
+    if (!project) return;
+
+    try {
+      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
+      setCurrentProjectId(project.id);
+      const job = project.jobState;
+      if (job.architecture && job.frontMatter && job.contentMap) {
+        setEbookManifest({
+          jobId: job.jobId,
+          bookTitle: job.architecture.bookTitle,
+          subtitle: job.architecture.subtitle,
+          authorName: job.architecture.authorName,
+          frontMatter: job.frontMatter,
+          chapters: job.chapters ?? [],
+          totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+          allQuotes: job.contentMap.allQuotes ?? [],
+          generatedAt: new Date().toISOString(),
+          selectedTemplate: "devotional",
+          printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false },
+          coverImageUrl: project.coverImageUrl ?? null,
+          authorImageUrl: project.authorImageUrl ?? null,
+        });
+      }
+      setPipelineKey((k) => k + 1);
+      setActiveTab("pipeline");
+      hydratedLoadRef.current = requestedLoad;
+      setStatusMsg({ type: "success", text: `"${project.name}" mounted in standalone pipeline.` });
+      router.replace("/ebook?tab=pipeline");
+    } catch (err) {
+      setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Project mount failed." });
+    }
+  }, [requestedLoad, projects, router]);
 
   const suggestedName = ebookPipelineSnapshot?.bookTitle ?? ebookManifest?.bookTitle ?? "";
 
@@ -146,11 +273,15 @@ export default function EbookPage() {
   const handleSaveProject = useCallback(async (name: string) => {
     try {
       const raw = localStorage.getItem(JOB_STATE_KEY);
-      if (!raw) {
+      const fallbackProject = currentProjectId
+        ? projects.find((p) => p.id === currentProjectId)
+        : null;
+      const parsedRaw = raw ? JSON.parse(raw) as unknown : fallbackProject?.jobState;
+      if (!parsedRaw) {
         setStatusMsg({ type: "error", text: "Nothing to save yet — start the pipeline first." });
         return;
       }
-      const jobState = EbookJobStateSchema.parse(JSON.parse(raw) as unknown);
+      const jobState = EbookJobStateSchema.parse(parsedRaw);
       const id = currentProjectId || generateEbookProjectId();
       const existing = projects.find((p) => p.id === id);
       const project: EbookProject = {
@@ -163,8 +294,12 @@ export default function EbookPage() {
         totalWordCount: (jobState.chapters ?? []).reduce((s, c) => s + (c.totalWordCount ?? 0), 0),
         status: jobState.status,
         jobState,
+        publishedSlug: existing?.publishedSlug,
+        coverImageUrl: existing?.coverImageUrl,
+        authorImageUrl: existing?.authorImageUrl,
       };
       await saveEbookProject(project);
+      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
       setCurrentProjectId(id);
       setProjects(await listEbookProjects());
       setStatusMsg({ type: "success", text: `"${name}" saved.` });
@@ -187,6 +322,8 @@ export default function EbookPage() {
             ebookManifest: null,
             ebookJobState: project.jobState,
             publishedSlug: project.publishedSlug,
+            coverImageUrl: project.coverImageUrl,
+            authorImageUrl: project.authorImageUrl,
           },
         }),
       }).catch(() => {});
@@ -201,7 +338,26 @@ export default function EbookPage() {
     try {
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(p.jobState));
       setCurrentProjectId(p.id);
-      setEbookManifest(null);
+      const job = p.jobState;
+      if (job.architecture && job.frontMatter && job.contentMap) {
+        setEbookManifest({
+          jobId: job.jobId,
+          bookTitle: job.architecture.bookTitle,
+          subtitle: job.architecture.subtitle,
+          authorName: job.architecture.authorName,
+          frontMatter: job.frontMatter,
+          chapters: job.chapters ?? [],
+          totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+          allQuotes: job.contentMap.allQuotes ?? [],
+          generatedAt: new Date().toISOString(),
+          selectedTemplate: "devotional",
+          printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false },
+          coverImageUrl: p.coverImageUrl ?? null,
+          authorImageUrl: p.authorImageUrl ?? null,
+        });
+      } else {
+        setEbookManifest(null);
+      }
       setActiveTab("pipeline");
       setStatusMsg({ type: "success", text: `"${p.name}" loaded — resuming pipeline.` });
       setPipelineKey((k) => k + 1);
@@ -264,7 +420,34 @@ export default function EbookPage() {
   const handleImportProject = useCallback(async (project: EbookProject) => {
     await saveEbookProject(project);
     setProjects(await listEbookProjects());
-    setStatusMsg({ type: "success", text: `"${project.name}" imported.` });
+    setCurrentProjectId(project.id);
+    localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
+    setPipelineKey((k) => k + 1);
+    // Mirror imported project to cloud snapshot store (best-effort)
+    fetch("/api/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: {
+          id: project.id,
+          name: project.name,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+          academy: null,
+          siteConfig: {},
+          deliveryInstructions: "",
+          chatHistory: [],
+          blueprint: null,
+          logicResult: null,
+          uiResult: null,
+          ebookManifest: null,
+          ebookJobState: project.jobState,
+          publishedSlug: project.publishedSlug,
+          coverImageUrl: project.coverImageUrl,
+          authorImageUrl: project.authorImageUrl,
+        },
+      }),
+    }).catch(() => {});
+    setStatusMsg({ type: "success", text: `"${project.name}" imported and loaded.` });
   }, []);
 
   // ── Publish handler ───────────────────────────────────────────────────────
@@ -286,7 +469,7 @@ export default function EbookPage() {
       allQuotes:     job.contentMap?.allQuotes ?? [],
       generatedAt:   job.updatedAt ?? new Date().toISOString(),
       selectedTemplate: "devotional",
-      printSpec:     { trimSize: "6x9", runningHeaders: true },
+      printSpec:     { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false },
       coverImageUrl:  project.coverImageUrl  ?? null,
       authorImageUrl: project.authorImageUrl ?? null,
       narrationUrls:  readNarrationUrls(job.jobId),
@@ -364,6 +547,8 @@ export default function EbookPage() {
       totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
       allQuotes: job.contentMap.allQuotes ?? [],
       generatedAt: new Date().toISOString(),
+      selectedTemplate: "devotional",
+      printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false },
     };
   }, []);
 
@@ -416,6 +601,25 @@ export default function EbookPage() {
     URL.revokeObjectURL(url);
   }, [ebookManifest]);
 
+  const handleStartFreshProject = useCallback(() => {
+    try {
+      localStorage.removeItem(JOB_STATE_KEY);
+      localStorage.removeItem(PENDING_MOUNT_KEY);
+    } catch {
+      // localStorage unavailable; in-memory reset still applies
+    }
+
+    hydratedLoadRef.current = null;
+    setCurrentProjectId("");
+    setEbookManifest(null);
+    setEbookPipelineSnapshot(null);
+    setAssistantOpen(false);
+    setActiveTab("pipeline");
+    setPipelineKey((k) => k + 1);
+    setStatusMsg({ type: "success", text: "Started a fresh book project." });
+    router.replace("/ebook?tab=pipeline");
+  }, [router]);
+
   const handleNavSelect = useCallback((id: string) => {
     if (id === "ebook") {
       router.push("/ebook?tab=pipeline");
@@ -457,6 +661,18 @@ export default function EbookPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleStartFreshProject}
+                    className="flex min-h-12 items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 px-3.5 py-2 text-xs font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/15 active:scale-[0.97]"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                      <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 0 0 4.582 9" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M20 20v-5h-.581m0 0a8.003 8.003 0 0 1-15.357-2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <span className="hidden sm:inline">New Project</span>
+                    <span className="sm:hidden">New</span>
+                  </button>
                   {ebookManifest && (
                     <>
                       <button
@@ -561,6 +777,7 @@ export default function EbookPage() {
                 />
               </div>
             </div>
+
           </div>
 
           <AssistantPanel
