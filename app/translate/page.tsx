@@ -81,6 +81,8 @@ const LANGUAGE_OPTIONS: Array<{ value: TranslateLanguage; label: string }> = [
 ];
 
 const SESSION_KEY = "nexus_translate_sessions_v1";
+const DOCUMENT_CHUNK_SIZE = 4200;
+const DOCUMENT_CONCURRENCY = 3;
 
 function splitChunks(text: string, maxChars = 1800): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
@@ -169,6 +171,8 @@ export default function TranslatePage() {
   const [translatedText, setTranslatedText] = useState("");
   const [docExtractedText, setDocExtractedText] = useState("");
   const [sourceName, setSourceName] = useState("");
+  const [documentWasTruncated, setDocumentWasTruncated] = useState(false);
+  const [documentOriginalLength, setDocumentOriginalLength] = useState<number | null>(null);
 
   const [liveTurns, setLiveTurns] = useState<LiveTurn[]>([]);
   const [interimSpeech, setInterimSpeech] = useState("");
@@ -247,7 +251,7 @@ export default function TranslatePage() {
   }, [glossary, protectedTerms]);
 
   const runTranslation = useCallback(async (text: string, lang: TranslateLanguage) => {
-    const chunks = splitChunks(text, 1800);
+    const chunks = splitChunks(text, DOCUMENT_CHUNK_SIZE);
     if (chunks.length === 0) {
       setStatus("No text to translate");
       return;
@@ -261,11 +265,25 @@ export default function TranslatePage() {
     setStatus("Translating...");
 
     try {
-      const out: string[] = [];
-      for (let i = 0; i < chunks.length; i += 1) {
-        out.push(await requestTranslate(chunks[i], lang));
-        setProgress(Math.round(((i + 1) / chunks.length) * 100));
+      const out = new Array<string>(chunks.length);
+      let completed = 0;
+
+      for (let start = 0; start < chunks.length; start += DOCUMENT_CONCURRENCY) {
+        const batch = chunks.slice(start, start + DOCUMENT_CONCURRENCY);
+        const results = await Promise.all(
+          batch.map(async (chunk, offset) => {
+            const translated = await requestTranslate(chunk, lang);
+            completed += 1;
+            setProgress(Math.round((completed / chunks.length) * 100));
+            return { index: start + offset, translated };
+          }),
+        );
+
+        for (const result of results) {
+          out[result.index] = result.translated;
+        }
       }
+
       setTranslatedText(out.join("\n\n").trim());
       setStatus(`Translated to ${targetLabel}.`);
     } catch {
@@ -450,14 +468,16 @@ export default function TranslatePage() {
         method: "POST",
         body: formData,
       });
-      const json = await res.json() as { text?: string; error?: string };
+      const json = await res.json() as { text?: string; error?: string; truncated?: boolean; originalLength?: number };
       if (!res.ok || !json.text) throw new Error(json.error ?? "Could not extract document text");
       const extracted = json.text.trim();
+      setDocumentWasTruncated(Boolean(json.truncated));
+      setDocumentOriginalLength(typeof json.originalLength === "number" ? json.originalLength : extracted.length);
       setDocExtractedText(extracted);
       setSourceText(extracted);
       await runTranslation(extracted, targetLanguage);
-    } catch {
-      setStatus("Document upload/translation failed.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Document upload/translation failed.");
     } finally {
       event.target.value = "";
     }
@@ -696,7 +716,7 @@ export default function TranslatePage() {
 
                 {mode === "document" && (
                   <div className="grid min-h-0 gap-3 lg:grid-cols-2">
-                    <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 p-4 lg:min-h-0">
+                    <div className="flex min-h-[35dvh] flex-col overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 p-4 lg:min-h-0">
                       <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Document Pipeline</p>
                       <p className="mt-2 text-sm text-slate-400">Upload TXT, Markdown, CSV, JSON, or PDF and translate with terminology guard.</p>
                       <button
@@ -720,8 +740,13 @@ export default function TranslatePage() {
                           <div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${progress}%` }} />
                         </div>
                       )}
-                      <div className="mt-4 max-h-[24dvh] overflow-y-auto rounded-lg border border-slate-700/60 bg-slate-900/70 p-3 text-sm text-slate-300">
-                        {docExtractedText ? docExtractedText.slice(0, 1800) : "Extracted document preview appears here."}
+                      {documentWasTruncated && (
+                        <p className="mt-3 text-xs text-amber-300">
+                          Document was truncated for processing. Showing {docExtractedText.length.toLocaleString()} of {documentOriginalLength?.toLocaleString() ?? docExtractedText.length.toLocaleString()} characters.
+                        </p>
+                      )}
+                      <div className="mt-4 min-h-0 flex-1 overflow-y-auto rounded-lg border border-slate-700/60 bg-slate-900/70 p-3 text-sm text-slate-300">
+                        {docExtractedText ? <p className="whitespace-pre-wrap break-words">{docExtractedText}</p> : "Extracted document preview appears here."}
                       </div>
                     </div>
 

@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 
 const FileMetaSchema = z.object({
   name: z.string().min(1),
-  size: z.number().positive().max(10_000_000),
+  size: z.number().positive().max(40_000_000),
   type: z.string().optional(),
 });
 
@@ -39,21 +39,37 @@ export async function POST(request: NextRequest) {
 
     let text = "";
     if (ext === "pdf") {
-      const pdfParse = (await import("pdf-parse")).default;
-      const buffer = Buffer.from(await rawFile.arrayBuffer());
-      const parsed = await pdfParse(buffer);
-      text = parsed.text ?? "";
+      try {
+        const pdfParse = (await import("pdf-parse")).default;
+        const buffer = Buffer.from(await rawFile.arrayBuffer());
+        const parsed = await pdfParse(buffer);
+        text = parsed.text ?? "";
+      } catch (error) {
+        return NextResponse.json(
+          {
+            error: error instanceof Error
+              ? `PDF extraction failed: ${error.message}`
+              : "PDF extraction failed. The file may be image-only, encrypted, or malformed.",
+          },
+          { status: 422 },
+        );
+      }
     } else {
       text = await rawFile.text();
     }
 
     const normalized = text.replace(/\u0000/g, "").trim();
     if (!normalized) {
-      return NextResponse.json({ error: "No readable text extracted" }, { status: 422 });
+      return NextResponse.json(
+        { error: ext === "pdf" ? "No readable text extracted from PDF. This PDF may be scanned/image-only and needs OCR support." : "No readable text extracted" },
+        { status: 422 },
+      );
     }
 
-    const capped = normalized.length > 120_000 ? normalized.slice(0, 120_000) : normalized;
-    return NextResponse.json({ text: capped });
+    const maxChars = 240_000;
+    const truncated = normalized.length > maxChars;
+    const capped = truncated ? normalized.slice(0, maxChars) : normalized;
+    return NextResponse.json({ text: capped, truncated, originalLength: normalized.length });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Document extraction failed" },
