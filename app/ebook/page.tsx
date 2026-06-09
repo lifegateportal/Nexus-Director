@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { Suspense, useState, useCallback, useRef, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { EbookProjectsPanel } from "@/app/components/EbookProjectsPanel";
@@ -32,6 +32,18 @@ const VALID_JOB_STATUSES = new Set([
 type Tab = "pipeline" | "projects";
 
 export default function EbookPage() {
+  return (
+    <Suspense fallback={(
+      <div className="flex h-dvh items-center justify-center bg-shell-950 text-sm text-slate-400">
+        Loading book workspace...
+      </div>
+    )}>
+      <EbookPageClient />
+    </Suspense>
+  );
+}
+
+function EbookPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>("pipeline");
