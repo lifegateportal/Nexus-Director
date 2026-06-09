@@ -715,18 +715,19 @@ export default function TranslatePage() {
                 )}
 
                 {mode === "document" && (
-                  <div className="grid min-h-0 gap-3 lg:grid-cols-2">
-                    <div className="flex min-h-[35dvh] flex-col overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 p-4 lg:min-h-0">
-                      <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Document Pipeline</p>
-                      <p className="mt-2 text-sm text-slate-400">Upload TXT, Markdown, CSV, JSON, or PDF and translate with terminology guard.</p>
-                      <button
-                        type="button"
-                        onClick={() => fileRef.current?.click()}
-                        disabled={isTranslating}
-                        className="focus-ring mt-4 min-h-12 rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-4 text-sm font-bold text-emerald-300 disabled:opacity-60"
-                      >
-                        {isTranslating ? `Processing ${progress}%` : "Upload Document"}
-                      </button>
+                  <div className="grid min-h-0 gap-3">
+                    <div className="shrink-0 rounded-xl border border-cyan-500/15 bg-slate-950/70 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileRef.current?.click()}
+                          disabled={isTranslating}
+                          className="focus-ring min-h-10 rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-4 text-sm font-bold text-emerald-300 disabled:opacity-60"
+                        >
+                          {isTranslating ? `Processing ${progress}%` : "Upload Document"}
+                        </button>
+                        <p className="text-xs text-slate-500">{sourceName ? `Loaded: ${sourceName}` : "No file selected"}</p>
+                      </div>
                       <input
                         ref={fileRef}
                         type="file"
@@ -734,7 +735,6 @@ export default function TranslatePage() {
                         className="hidden"
                         onChange={handleUploadDocument}
                       />
-                      <p className="mt-3 text-xs text-slate-500">{sourceName ? `Loaded: ${sourceName}` : "No file selected"}</p>
                       {isTranslating && (
                         <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
                           <div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${progress}%` }} />
@@ -745,17 +745,25 @@ export default function TranslatePage() {
                           Document was truncated for processing. Showing {docExtractedText.length.toLocaleString()} of {documentOriginalLength?.toLocaleString() ?? docExtractedText.length.toLocaleString()} characters.
                         </p>
                       )}
-                      <div className="mt-4 min-h-0 flex-1 overflow-y-auto rounded-lg border border-slate-700/60 bg-slate-900/70 p-3 text-sm text-slate-300">
-                        {docExtractedText ? <p className="whitespace-pre-wrap break-words">{docExtractedText}</p> : "Extracted document preview appears here."}
-                      </div>
                     </div>
 
-                    <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
-                      <div className="border-b border-cyan-500/10 px-4 py-3">
-                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Translated Document ({targetLabel})</p>
+                    <div className="grid min-h-0 gap-3 lg:grid-cols-2">
+                      <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
+                        <div className="border-b border-cyan-500/10 px-4 py-3">
+                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Source Document</p>
+                        </div>
+                        <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-sm leading-relaxed text-slate-300">
+                          {docExtractedText ? <p className="whitespace-pre-wrap break-words">{docExtractedText}</p> : "Extracted document appears here."}
+                        </div>
                       </div>
-                      <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-base leading-relaxed text-slate-100">
-                        {translatedText ? <p className="whitespace-pre-wrap break-words">{translatedText}</p> : <p className="text-slate-500">Document translation output appears here.</p>}
+
+                      <div className="min-h-[35dvh] overflow-hidden rounded-xl border border-cyan-500/15 bg-slate-950/70 lg:min-h-0">
+                        <div className="border-b border-cyan-500/10 px-4 py-3">
+                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Translated Document ({targetLabel})</p>
+                        </div>
+                        <div className="h-[calc(100%-49px)] min-h-[calc(35dvh-49px)] overflow-y-auto p-4 text-base leading-relaxed text-slate-100">
+                          {translatedText ? <p className="whitespace-pre-wrap break-words">{translatedText}</p> : <p className="text-slate-500">Document translation output appears here.</p>}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -763,21 +771,21 @@ export default function TranslatePage() {
 
                 {mode === "live" && (
                   <div className="grid min-h-0 gap-3">
-                    <div className="grid items-center gap-2 rounded-xl border border-cyan-500/20 bg-slate-950/70 p-2 sm:grid-cols-[190px_160px_140px_auto_auto]">
+                    <div className="grid grid-cols-2 items-center gap-2 rounded-xl border border-cyan-500/20 bg-slate-950/70 p-2 sm:grid-cols-[190px_160px_140px_auto_auto]">
                       <select
                         value={speechLanguage}
                         onChange={(event) => setSpeechLanguage(event.target.value as SpeechLanguage)}
                         className="focus-ring h-9 rounded-xl border border-slate-600/50 bg-slate-900 px-3 text-base font-semibold text-slate-200"
                       >
-                        <option value="auto">Speech: Auto</option>
-                        <option value="english">Speech: English</option>
-                        <option value="spanish">Speech: Spanish</option>
-                        <option value="french">Speech: French</option>
-                        <option value="portuguese">Speech: Portuguese</option>
-                        <option value="german">Speech: German</option>
-                        <option value="swahili">Speech: Swahili</option>
-                        <option value="twi">Speech: Twi</option>
-                        <option value="kikuyu">Speech: Kikuyu</option>
+                        <option value="auto">Auto</option>
+                        <option value="english">English</option>
+                        <option value="spanish">Spanish</option>
+                        <option value="french">French</option>
+                        <option value="portuguese">Portuguese</option>
+                        <option value="german">German</option>
+                        <option value="swahili">Swahili</option>
+                        <option value="twi">Twi</option>
+                        <option value="kikuyu">Kikuyu</option>
                       </select>
 
                       <select
@@ -821,7 +829,7 @@ export default function TranslatePage() {
                         {controlMode === "hold" ? (isListening ? "Release to Stop" : "Hold to Talk") : (isListening ? "Stop Live" : "Start Live")}
                       </button>
 
-                      <label className="flex min-h-10 items-center gap-2 rounded-xl border border-slate-700/80 px-3 text-sm text-slate-300">
+                      <label className="col-span-2 flex min-h-10 items-center gap-2 rounded-xl border border-slate-700/80 px-3 text-sm text-slate-300 sm:col-span-1">
                         <input
                           type="checkbox"
                           checked={cleanupEnabled}
